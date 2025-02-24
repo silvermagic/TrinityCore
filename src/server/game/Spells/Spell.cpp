@@ -129,11 +129,13 @@ SpellCastTargets::~SpellCastTargets() { }
 
 void SpellCastTargets::Read(ByteBuffer& data, Unit* caster)
 {
+    // 寒冰箭 - TARGET_FLAG_UNIT
     data >> m_targetMask;
 
     if (m_targetMask == TARGET_FLAG_NONE)
         return;
 
+    // 获取玩家鼠标选中的目标
     if (m_targetMask & (TARGET_FLAG_UNIT | TARGET_FLAG_UNIT_MINIPET | TARGET_FLAG_GAMEOBJECT | TARGET_FLAG_CORPSE_ENEMY | TARGET_FLAG_CORPSE_ALLY))
         data >> m_objectTargetGUID.ReadAsPacked();
 
@@ -642,6 +644,7 @@ void Spell::InitExplicitTargets(SpellCastTargets const& targets)
     // this function tries to correct spell explicit targets for spell
     // client doesn't send explicit targets correctly sometimes - we need to fix such spells serverside
     // this also makes sure that we correctly send explicit targets to client (removes redundant data)
+    // 寒冰箭 - TARGET_FLAG_UNIT_ENEMY
     uint32 neededTargets = m_spellInfo->GetExplicitTargetMask();
 
     if (WorldObject* target = m_targets.GetObjectTarget())
@@ -737,6 +740,7 @@ void Spell::SelectExplicitTargets()
 void Spell::SelectSpellTargets()
 {
     // select targets for cast phase
+    // 选择施法阶段的目标列表，并处理技能重定向情况
     SelectExplicitTargets();
 
     uint32 processedEffectsMaskForSpell = 0;
@@ -748,12 +752,15 @@ void Spell::SelectSpellTargets()
             continue;
 
         // set expected type of implicit targets to be sent to client
+        // 根据法术效果目标计算隐式目标掩码
+        // 寒冰箭 - TARGET_FLAG_UNIT
         uint32 implicitTargetMask = GetTargetFlagMask(spellEffectInfo.TargetA.GetObjectType()) | GetTargetFlagMask(spellEffectInfo.TargetB.GetObjectType());
         if (implicitTargetMask & TARGET_FLAG_UNIT)
             m_targets.SetTargetFlag(TARGET_FLAG_UNIT);
         if (implicitTargetMask & (TARGET_FLAG_GAMEOBJECT | TARGET_FLAG_GAMEOBJECT_ITEM))
             m_targets.SetTargetFlag(TARGET_FLAG_GAMEOBJECT);
 
+        // 判断后面的法术效果是否能与当前法术效果共享目标
         uint32 implicitTargetEffectMaskToSelect = [&]
         {
             uint32 effectMask = 1u << spellEffectInfo.EffectIndex;
@@ -794,9 +801,11 @@ void Spell::SelectSpellTargets()
             return effectMask;
         }();
 
+        // 寒冰箭 - 0 - 0x0111
         implicitTargetEffectMaskToSelect &= ~processedEffectsMaskForSpell;
         if (implicitTargetEffectMaskToSelect)
         {
+            // 选择法术效果的目标
             SelectEffectImplicitTargets(spellEffectInfo, spellEffectInfo.TargetA, implicitTargetEffectMaskToSelect);
             SelectEffectImplicitTargets(spellEffectInfo, spellEffectInfo.TargetB, implicitTargetEffectMaskToSelect);
             processedEffectsMaskForSpell |= implicitTargetEffectMaskToSelect;
@@ -807,6 +816,7 @@ void Spell::SelectSpellTargets()
         // some spell effects use explicit target as a default target added to target map (like SPELL_EFFECT_LEARN_SPELL)
         // some spell effects add target to target map only when target type specified (like SPELL_EFFECT_WEAPON)
         // some spell effects don't add anything to target map (confirmed with sniffs) (like SPELL_EFFECT_DESTROY_ALL_TOTEMS)
+        // 根据法术效果类型来选择隐式目标
         SelectEffectTypeImplicitTargets(spellEffectInfo);
 
         if (m_targets.HasDst())
@@ -870,6 +880,7 @@ void Spell::SelectSpellTargets()
         }
         else if (m_auraScaleMask)
         {
+            // 光环效果缩放处理，确保只有达到一定等级要求的目标才会受到光环效果的影响，防止低等级目标误触或不合理地受到增强效果
             bool checkLvl = !m_UniqueTargetInfo.empty();
             m_UniqueTargetInfo.erase(std::remove_if(std::begin(m_UniqueTargetInfo), std::end(m_UniqueTargetInfo), [&](TargetInfo const& targetInfo) -> bool
             {
@@ -892,6 +903,7 @@ void Spell::SelectSpellTargets()
         }
     }
 
+    // 计算飞弹类法术的飞行时间
     if (uint64 dstDelay = CalculateDelayMomentForDst())
         m_delayMoment = dstDelay;
 }
@@ -925,6 +937,7 @@ void Spell::RecalculateDelayMomentForDst()
 
 void Spell::SelectEffectImplicitTargets(SpellEffectInfo const& spellEffectInfo, SpellImplicitTargetInfo const& targetType, uint32 effectMask)
 {
+    // 寒冰箭 - {TARGET_OBJECT_TYPE_UNIT, TARGET_REFERENCE_TYPE_TARGET, TARGET_SELECT_CATEGORY_DEFAULT, TARGET_CHECK_ENEMY,    TARGET_DIR_NONE},        // 6 TARGET_UNIT_TARGET_ENEMY
     if (!targetType.GetTarget())
         return;
 
@@ -1583,13 +1596,16 @@ void Spell::SelectImplicitTargetObjectTargets(SpellEffectInfo const& spellEffect
 {
     ASSERT((m_targets.GetObjectTarget() || m_targets.GetItemTarget()) && "Spell::SelectImplicitTargetObjectTargets - no explicit object or item target available!");
 
+    // 获取玩家选中的目标对象
     WorldObject* target = m_targets.GetObjectTarget();
 
+    // 执行技能脚本
     CallScriptObjectTargetSelectHandlers(target, spellEffectInfo.EffectIndex, targetType);
 
     if (target)
     {
         if (Unit* unit = target->ToUnit())
+            // 将目标添加技能的目标列表中
             AddUnitTarget(unit, effMask, true, false);
         else if (GameObject* gobj = target->ToGameObject())
             AddGOTarget(gobj, effMask);
@@ -2128,6 +2144,7 @@ void Spell::AddUnitTarget(Unit* target, uint32 effectMask, bool checkIfValid /*=
             return;
 
     // Check for effect immune skip if immuned
+    // 检查目标是否免疫法术效果
     for (SpellEffectInfo const& spellEffectInfo : m_spellInfo->GetEffects())
         if (target->IsImmunedToSpellEffect(m_spellInfo, spellEffectInfo, m_caster))
             effectMask &= ~(1 << spellEffectInfo.EffectIndex);
@@ -2135,6 +2152,7 @@ void Spell::AddUnitTarget(Unit* target, uint32 effectMask, bool checkIfValid /*=
     ObjectGuid targetGUID = target->GetGUID();
 
     // Lookup target in already in list
+    // 查找目标是否已经在目标列表中
     auto ihit = std::find_if(std::begin(m_UniqueTargetInfo), std::end(m_UniqueTargetInfo), [targetGUID](TargetInfo const& target) { return target.TargetGUID == targetGUID; });
     if (ihit != std::end(m_UniqueTargetInfo)) // Found in list
     {
@@ -2153,6 +2171,7 @@ void Spell::AddUnitTarget(Unit* target, uint32 effectMask, bool checkIfValid /*=
     // This is new target calculate data for him
 
     // Get spell hit result on target
+    // 创建施法目标信息
     TargetInfo targetInfo;
     targetInfo.TargetGUID = targetGUID;                         // Store target GUID
     targetInfo.EffectMask = effectMask;                         // Store all effects not immune
@@ -2169,11 +2188,13 @@ void Spell::AddUnitTarget(Unit* target, uint32 effectMask, bool checkIfValid /*=
     }
 
     // Calculate hit result
+    // 计算法术命中目标结果
     WorldObject* caster = m_originalCaster ? m_originalCaster : m_caster;
     targetInfo.MissCondition = caster->SpellHitResult(target, m_spellInfo, m_canReflect && !(IsPositive() && m_caster->IsFriendlyTo(target)));
 
     // Spell have speed - need calculate incoming time
     // Incoming time is zero for self casts. At least I think so.
+    // 计算飞弹类法术的飞行时间
     if (m_spellInfo->Speed > 0.0f && m_caster != target)
     {
         // calculate spell incoming interval
@@ -2192,6 +2213,7 @@ void Spell::AddUnitTarget(Unit* target, uint32 effectMask, bool checkIfValid /*=
         targetInfo.TimeDelay = 0ULL;
 
     // If target reflect spell back to caster
+    // 反射法术需要更新飞行时间
     if (targetInfo.MissCondition == SPELL_MISS_REFLECT)
     {
         // Shouldn't be able to reflect gameobject spells
@@ -2204,6 +2226,7 @@ void Spell::AddUnitTarget(Unit* target, uint32 effectMask, bool checkIfValid /*=
             targetInfo.ReflectResult = SPELL_MISS_IMMUNE;
 
         // Proc spell reflect aura when missile hits the original target
+        // 创建一个定时器，用于在命中原始目标时，触发法术反射效果处理
         target->m_Events.AddEvent(new ProcReflectDelayed(target, m_originalCasterGUID), target->m_Events.CalculateTime(Milliseconds(targetInfo.TimeDelay)));
 
         // Increase time interval for reflected spells by 1.5
@@ -2213,6 +2236,7 @@ void Spell::AddUnitTarget(Unit* target, uint32 effectMask, bool checkIfValid /*=
         targetInfo.ReflectResult = SPELL_MISS_NONE;
 
     // Add target to list
+    // 将目标添加到目标列表中
     m_UniqueTargetInfo.emplace_back(std::move(targetInfo));
 }
 
@@ -2357,14 +2381,17 @@ void Spell::AddDestTarget(SpellDestination const& dest, uint32 effIndex)
 
 void Spell::TargetInfo::PreprocessTarget(Spell* spell)
 {
+    // 根据目标 GUID 判断目标单位：若目标 GUID 与施法者相同，则目标为施法者，否则通过 ObjectAccessor 获取目标
     Unit* unit = spell->m_caster->GetGUID() == TargetGUID ? spell->m_caster->ToUnit() : ObjectAccessor::GetUnit(*spell->m_caster, TargetGUID);
     if (!unit)
         return;
 
     // Need init unitTarget by default unit (can changed in code on reflect)
+    // 将获取到的目标单位设置为默认目标，后续可能在反射等情况下被修改
     spell->unitTarget = unit;
 
     // Reset damage/healing counter
+    // 使用 TargetInfo 中保存的数值重置法术的伤害和治疗计数
     spell->m_damage = Damage;
     spell->m_healing = Healing;
 
@@ -2377,8 +2404,10 @@ void Spell::TargetInfo::PreprocessTarget(Spell* spell)
     if (spell->m_originalCaster && MissCondition != SPELL_MISS_EVADE && !spell->m_originalCaster->IsFriendlyTo(unit) && (!spell->m_spellInfo->IsPositive() || spell->m_spellInfo->HasEffect(SPELL_EFFECT_DISPEL)) && (spell->m_spellInfo->HasInitialAggro() || unit->IsEngaged()))
         unit->SetInCombatWith(spell->m_originalCaster);
 
+    // 执行技能脚本
     spell->CallScriptBeforeHitHandlers(MissCondition);
 
+    // 初始化 PvP 标记，后续将根据目标状态决定是否开启 PvP 相关标记
     _enablePVP = false; // need to check PvP state before spell effects, but act on it afterwards
     if (_spellHitTarget)
     {
@@ -2387,6 +2416,7 @@ void Spell::TargetInfo::PreprocessTarget(Spell* spell)
         if (unit->IsPvP() && (unit->IsInCombat() || unit->IsCharmedOwnedByPlayerOrPlayer()) && spell->m_caster->GetTypeId() == TYPEID_PLAYER)
             _enablePVP = true; // Decide on PvP flagging now, but act on it later.
 
+        // 目标命中预处理（如免疫检测、递减收益处理等）
         SpellMissInfo missInfo = spell->PreprocessSpellHit(_spellHitTarget, ScaleAura, *this);
         if (missInfo != SPELL_MISS_NONE)
         {
@@ -2398,9 +2428,11 @@ void Spell::TargetInfo::PreprocessTarget(Spell* spell)
         }
     }
 
+    // 执行技能脚本
     spell->CallScriptOnHitHandlers();
 
     // scripts can modify damage/healing for current target, save them
+    // 将可能被脚本修改后的伤害和治疗值保存回 TargetInfo 中
     Damage = spell->m_damage;
     Healing = spell->m_healing;
 }
@@ -2426,6 +2458,7 @@ void Spell::TargetInfo::DoTargetSpellHit(Spell* spell, SpellEffectInfo const& sp
     if (spell->getState() == SPELL_STATE_DELAYED && !spell->IsPositive() && (GameTime::GetGameTimeMS() - TimeDelay) <= unit->m_lastSanctuaryTime)
         return;                                             // No missinfo in that case
 
+    // 执行法术命中效果
     if (_spellHitTarget)
         spell->DoSpellEffectHit(_spellHitTarget, spellEffectInfo, *this);
 
@@ -2728,18 +2761,22 @@ void Spell::CorpseTargetInfo::DoTargetSpellHit(Spell* spell, SpellEffectInfo con
 
 SpellMissInfo Spell::PreprocessSpellHit(Unit* unit, bool scaleAura, TargetInfo& hitInfo)
 {
+    // 1. 检查目标单位是否存在
     if (!unit)
         return SPELL_MISS_EVADE;
 
     // Target may have begun evading between launch and hit phases - re-check now
+    // 2. 目标可能在发射和命中期间开始躲闪，若为生物且正在躲避攻击则返回躲闪结果
     if (Creature* creatureTarget = unit->ToCreature())
         if (creatureTarget->IsEvadingAttacks())
             return SPELL_MISS_EVADE;
 
     // For delayed spells immunity may be applied between missile launch and hit - check immunity for that case
+    // 3. 对于延迟类法术，在法术飞行期间目标可能获得免疫，此处进行免疫检测
     if (m_spellInfo->Speed && unit->IsImmunedToSpell(m_spellInfo, m_caster))
         return SPELL_MISS_IMMUNE;
 
+    // 4. 若目标为玩家，则更新相关成就计时与条件
     if (Player* player = unit->ToPlayer())
     {
         player->StartTimedAchievement(ACHIEVEMENT_TIMED_TYPE_SPELL_TARGET, m_spellInfo->Id);
@@ -2747,27 +2784,33 @@ SpellMissInfo Spell::PreprocessSpellHit(Unit* unit, bool scaleAura, TargetInfo& 
         player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_BE_SPELL_TARGET2, m_spellInfo->Id);
     }
 
+    // 5. 若施法者为玩家，则更新施法相关成就
     if (Player* player = m_caster->ToPlayer())
     {
         player->StartTimedAchievement(ACHIEVEMENT_TIMED_TYPE_SPELL_CASTER, m_spellInfo->Id);
         player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_CAST_SPELL2, m_spellInfo->Id, 0, unit);
     }
 
+    // 6. 如果施法者与目标不同，则需要进行额外的检查
     if (m_caster != unit)
     {
         // Recheck  UNIT_FLAG_NON_ATTACKABLE for delayed spells
+        // 6.1. 对于延迟类法术，重新检查目标的不可攻击标志，若目标处于非攻击状态且施法者不是其控制者，则视为躲闪
         if (m_spellInfo->Speed > 0.0f && unit->HasUnitFlag(UNIT_FLAG_NON_ATTACKABLE) && unit->GetCharmerOrOwnerGUID() != m_caster->GetGUID())
             return SPELL_MISS_EVADE;
 
+        // 6.2. 如果施法者为有效攻击目标，则移除目标身上因被法术命中而可能中断的光环
         if (m_caster->IsValidAttackTarget(unit, m_spellInfo))
             unit->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_HITBYSPELL);
         else if (m_caster->IsFriendlyTo(unit))
         {
             // for delayed spells ignore negative spells (after duel end) for friendly targets
+            // 6.3. 对于延迟类法术，若目标为玩家、法术为负面且目标非合法援助对象，则忽略该负面效果
             if (m_spellInfo->Speed > 0.0f && unit->GetTypeId() == TYPEID_PLAYER && !IsPositive() && !m_caster->IsValidAssistTarget(unit, m_spellInfo))
                 return SPELL_MISS_EVADE;
 
             // assisting case, healing and resurrection
+            // 6.4. 辅助情况：当目标正在攻击玩家时（例如决斗结束后仍保留仇恨状态），更新 PvP 状态（治疗或复活时）
             if (unit->HasUnitState(UNIT_STATE_ATTACK_PLAYER))
             {
                 if (Player* playerOwner = m_caster->GetCharmerOrOwnerPlayerOrPlayerItself())
@@ -2777,6 +2820,7 @@ SpellMissInfo Spell::PreprocessSpellHit(Unit* unit, bool scaleAura, TargetInfo& 
                 }
             }
 
+            // 6.5. 如果存在原始施法者，且目标处于战斗状态且法术具有初始仇恨，则将战斗状态转移给原始施法者
             if (m_originalCaster && unit->IsInCombat() && m_spellInfo->HasInitialAggro())
             {
                 if (m_originalCaster->HasUnitFlag(UNIT_FLAG_PLAYER_CONTROLLED)) // only do explicit combat forwarding for PvP enabled units
@@ -2787,18 +2831,23 @@ SpellMissInfo Spell::PreprocessSpellHit(Unit* unit, bool scaleAura, TargetInfo& 
     }
 
     // original caster for auras
+    // 7. 选择原始施法者，用于光环效果的计算
     WorldObject* origCaster = m_caster;
     if (m_originalCaster)
         origCaster = m_originalCaster;
 
     // check immunity due to diminishing returns
+    // 8. 检查递减收益（Diminishing Returns）相关逻辑，确保在连续施加控制或负面效果时目标能逐步获得免疫效果
+    //    8.1. 先检测目标是否能够被当前光环效果影响（构建效果掩码）
     if (Aura::BuildEffectMaskForOwner(m_spellInfo, MAX_EFFECT_MASK, unit))
     {
         // Select rank for aura with level requirements only in specific cases
         // Unit has to be target only of aura effect, both caster and target have to be players, target has to be other than unit target
+        // 8.2. 根据条件选择适合等级的光环版本，并初始化光环基础数据
         hitInfo.AuraSpellInfo = m_spellInfo;
         if (scaleAura)
         {
+            // 根据目标等级获取适合的光环版本
             if (SpellInfo const* actualSpellInfo = m_spellInfo->GetAuraRankForLevel(unitTarget->GetLevel()))
                 hitInfo.AuraSpellInfo = actualSpellInfo;
 
@@ -2814,6 +2863,7 @@ SpellMissInfo Spell::PreprocessSpellHit(Unit* unit, bool scaleAura, TargetInfo& 
         }
 
         // Get Data Needed for Diminishing Returns, some effects may have multiple auras, so this must be done on spell hit, not aura add
+        // 8.3. 获取递减收益相关数据
         bool triggered = (m_triggeredByAuraSpell != nullptr);
         hitInfo.DRGroup = m_spellInfo->GetDiminishingReturnsGroupForSpell(triggered);
 
@@ -2829,67 +2879,87 @@ SpellMissInfo Spell::PreprocessSpellHit(Unit* unit, bool scaleAura, TargetInfo& 
 
         // Now Reduce spell duration using data received at spell hit
         // check whatever effects we're going to apply, diminishing returns only apply to negative aura effects
+        // 8.4. 根据命中时收集的数据，调整法术持续时间（递减收益仅对负面光环有效）
         hitInfo.Positive = true;
         if (origCaster == unit || !origCaster->IsFriendlyTo(unit))
         {
             for (SpellEffectInfo const& auraSpellEffect : hitInfo.AuraSpellInfo->GetEffects())
             {
                 // mod duration only for effects applying aura!
+                // 仅对实际应用的、目标拥有的光环效果进行判断，并检查是否为负面效果
                 if (hitInfo.EffectMask & (1 << auraSpellEffect.EffectIndex) &&
                     auraSpellEffect.IsUnitOwnedAuraEffect() &&
                     !hitInfo.AuraSpellInfo->IsPositiveEffect(auraSpellEffect.EffectIndex))
                 {
+                    // 一旦检测到负面效果，则标记为负面
                     hitInfo.Positive = false;
                     break;
                 }
             }
         }
 
+        // 计算光环最大持续时间（不含递减收益调整）
         hitInfo.AuraDuration = Aura::CalcMaxDuration(hitInfo.AuraSpellInfo, origCaster);
 
         // unit is immune to aura if it was diminished to 0 duration
+        // 8.5. 应用递减收益：若光环为负面且经过递减收益计算后持续时间为0，则目标对该光环免疫
         if (!hitInfo.Positive && !unit->ApplyDiminishingToDuration(hitInfo.AuraSpellInfo, triggered, hitInfo.AuraDuration, origCaster, diminishLevel))
             if (std::all_of(std::begin(hitInfo.AuraSpellInfo->GetEffects()), std::end(hitInfo.AuraSpellInfo->GetEffects()), [](SpellEffectInfo const& effInfo) { return !effInfo.IsEffect() || effInfo.Effect == SPELL_EFFECT_APPLY_AURA; }))
                 return SPELL_MISS_IMMUNE;
     }
 
+    // 9. 如果所有检查均通过，则返回 SPELL_MISS_NONE 表示法术命中预处理成功
     return SPELL_MISS_NONE;
 }
 
 void Spell::DoSpellEffectHit(Unit* unit, SpellEffectInfo const& spellEffectInfo, TargetInfo& hitInfo)
 {
+    // 1. 判断目标单位（unit）是否已受到当前法术效果（spellEffectInfo）的光环影响
     if (uint8 aura_effmask = Aura::BuildEffectMaskForOwner(m_spellInfo, 1 << spellEffectInfo.EffectIndex, unit))
     {
+        // 2. 选择原始施法者，用于光环效果的计算
         WorldObject* caster = m_caster;
         if (m_originalCaster)
             caster = m_originalCaster;
 
         if (caster)
         {
+            // 3. 初始化刷新标志（refresh）
+            //    - 若该光环已经存在，则该标志用于指示当前是否在刷新已有光环
+            //    - 若该光环尚未存在，则创建新的光环
             bool refresh = false;
 
+            // 4. 处理光环效果
+            //    - 若目标当前未受到该光环的影响，则尝试创建或刷新光环
             if (!hitInfo.HitAura)
             {
+                // 4.1 判断是否需要重置周期性（Periodic）计时器
+                //     - 若该法术不允许堆叠（StackAmount < 2）且未被 `TRIGGERED_DONT_RESET_PERIODIC_TIMER` 标记，则重置周期性计时器
                 bool const resetPeriodicTimer = (m_spellInfo->StackAmount < 2) && !(_triggeredCastFlags & TRIGGERED_DONT_RESET_PERIODIC_TIMER);
+                // 4.2 计算所有光环效果的掩码
                 uint8 const allAuraEffectMask = Aura::BuildEffectMaskForOwner(hitInfo.AuraSpellInfo, MAX_EFFECT_MASK, unit);
+                // 4.3 获取光环基础数值
                 int32 const* bp = hitInfo.AuraBasePoints;
                 if (hitInfo.AuraSpellInfo == m_spellInfo)
                     bp = m_spellValue->EffectBasePoints;
 
+                // 4.4 构造光环创建信息对象（AuraCreateInfo）
                 AuraCreateInfo createInfo(hitInfo.AuraSpellInfo, allAuraEffectMask, unit);
                 createInfo
-                    .SetCasterGUID(caster->GetGUID())
-                    .SetBaseAmount(bp)
-                    .SetCastItemGUID(m_CastItem ? m_CastItem->GetGUID() : ObjectGuid::Empty)
-                    .SetPeriodicReset(resetPeriodicTimer)
-                    .SetOwnerEffectMask(aura_effmask)
-                    .IsRefresh = &refresh;
+                    .SetCasterGUID(caster->GetGUID()) // 设定施法者 GUID
+                    .SetBaseAmount(bp) // 设置基础数值
+                    .SetCastItemGUID(m_CastItem ? m_CastItem->GetGUID() : ObjectGuid::Empty) // 绑定施法物品（若有）
+                    .SetPeriodicReset(resetPeriodicTimer) // 设置是否重置周期性计时器
+                    .SetOwnerEffectMask(aura_effmask) // 设定光环作用效果掩码
+                    .IsRefresh = &refresh; // 绑定刷新标志
 
+                // 4.5 检测目标是否已有该光环，并决定是刷新堆叠还是创建新的光环
                 if (Aura* aura = Aura::TryRefreshStackOrCreate(createInfo, false))
                 {
                     hitInfo.HitAura = aura->ToUnitAura();
 
                     // Set aura stack amount to desired value
+                    // 4.6 设置光环的堆叠层数
                     if (m_spellValue->AuraStackAmount > 1)
                     {
                         if (!refresh)
@@ -2898,33 +2968,40 @@ void Spell::DoSpellEffectHit(Unit* unit, SpellEffectInfo const& spellEffectInfo,
                             hitInfo.HitAura->ModStackAmount(m_spellValue->AuraStackAmount);
                     }
 
+                    // 4.7 设定该光环的递减收益组
                     hitInfo.HitAura->SetDiminishGroup(hitInfo.DRGroup);
 
+                    // 4.8 计算并调整光环的持续时间
                     hitInfo.AuraDuration = caster->ModSpellDuration(hitInfo.AuraSpellInfo, unit, hitInfo.AuraDuration, hitInfo.Positive, hitInfo.HitAura->GetEffectMask());
 
                     // Haste modifies duration of channeled spells
+                    // 4.9 如果该法术是引导型（Channeled），则受急速影响调整持续时间
                     if (m_spellInfo->IsChanneled())
                         caster->ModSpellDurationTime(hitInfo.AuraSpellInfo, hitInfo.AuraDuration, this);
                     // and duration of auras affected by SPELL_AURA_PERIODIC_HASTE
                     else if (m_originalCaster && (m_originalCaster->HasAuraTypeWithAffectMask(SPELL_AURA_PERIODIC_HASTE, hitInfo.AuraSpellInfo) || m_spellInfo->HasAttribute(SPELL_ATTR5_HASTE_AFFECT_DURATION)))
                         hitInfo.AuraDuration = int32(hitInfo.AuraDuration * m_originalCaster->GetFloatValue(UNIT_MOD_CAST_SPEED));
 
+                    // 4.10 若光环的持续时间与当前最大持续时间不匹配，则进行调整
                     if (hitInfo.AuraDuration != hitInfo.HitAura->GetMaxDuration())
                     {
                         hitInfo.HitAura->SetMaxDuration(hitInfo.AuraDuration);
                         hitInfo.HitAura->SetDuration(hitInfo.AuraDuration);
                     }
 
+                    // 4.11 如果光环是刷新而非新建，则添加静态应用
                     if (refresh)
                         hitInfo.HitAura->AddStaticApplication(unit, aura_effmask);
                 }
             }
             else
+                // 5. 若光环已存在，则直接应用新的效果
                 hitInfo.HitAura->AddStaticApplication(unit, aura_effmask);
         }
     }
 
     _spellAura = hitInfo.HitAura;
+    // 7. 法术效果处理
     HandleEffects(unit, nullptr, nullptr, nullptr, spellEffectInfo, SPELL_EFFECT_HANDLE_HIT_TARGET);
     _spellAura = nullptr;
 }
@@ -3039,6 +3116,7 @@ bool Spell::UpdateChanneledTargetList()
 
 SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const* triggeredByAura)
 {
+    // 如果技能由物品触发，则记录物品信息
     if (m_CastItem)
     {
         m_castItemGUID = m_CastItem->GetGUID();
@@ -3050,20 +3128,24 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
         m_castItemEntry = 0;
     }
 
+    // 初始化显示目标
     InitExplicitTargets(targets);
 
     // Fill aura scaling information
     if (Unit* unitCaster = m_caster->ToUnit())
     {
+        // 玩家控制，技能不是被动，技能等级大于0，不是持续施法，不是由其他技能触发
         if (unitCaster->IsControlledByPlayer() && !m_spellInfo->IsPassive() && m_spellInfo->SpellLevel && !m_spellInfo->IsChanneled() && !(_triggeredCastFlags & TRIGGERED_IGNORE_AURA_SCALING))
         {
             for (SpellEffectInfo const& spellEffectInfo : m_spellInfo->GetEffects())
             {
+                // 技能效果是 BUFF 效果
                 if (spellEffectInfo.IsEffect(SPELL_EFFECT_APPLY_AURA))
                 {
                     // Change aura with ranks only if basepoints are taken from spellInfo and aura is positive
                     if (m_spellInfo->IsPositiveEffect(spellEffectInfo.EffectIndex))
                     {
+                        // 标记需要进行等级缩放的光环效果
                         m_auraScaleMask |= (1 << spellEffectInfo.EffectIndex);
                         if (m_spellValue->EffectBasePoints[spellEffectInfo.EffectIndex] != spellEffectInfo.BasePoints)
                         {
@@ -3076,16 +3158,21 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
         }
     }
 
+    // 标记技能状态为"准备"
     m_spellState = SPELL_STATE_PREPARING;
 
+    // 如果技能是由其他技能触发，则记录触发技能信息
     if (triggeredByAura)
         m_triggeredByAuraSpell  = triggeredByAura->GetSpellInfo();
 
     // create and add update event for this spell
+    // 创建并添加技能更新事件
     _spellEvent = new SpellEvent(this);
+    // 添加事件到施法者的事件系统中，延迟1ms执行（由于随后就是游戏单位的事件系统更新，所以会立即执行）
     m_caster->m_Events.AddEvent(_spellEvent, m_caster->m_Events.CalculateTime(1ms));
 
     // check disables
+    // 判断当前地图是否禁止使用该技能
     if (DisableMgr::IsDisabledFor(DISABLE_TYPE_SPELL, m_spellInfo->Id, m_caster))
     {
         SendCastResult(SPELL_FAILED_SPELL_UNAVAILABLE);
@@ -3094,6 +3181,7 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
     }
 
     // Prevent casting at cast another spell (ServerSide check)
+    // 服务器端检测：判断是否存在同时施放多个技能的情况
     if (!(_triggeredCastFlags & TRIGGERED_IGNORE_CAST_IN_PROGRESS) && m_caster->ToUnit() && m_caster->ToUnit()->IsNonMeleeSpellCast(false, true, true, m_spellInfo->Id == 75) && m_cast_count)
     {
         SendCastResult(SPELL_FAILED_SPELL_IN_PROGRESS);
@@ -3101,16 +3189,20 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
         return SPELL_FAILED_SPELL_IN_PROGRESS;
     }
 
+    // 加载技能脚本
     LoadScripts();
 
     // Fill cost data (do not use power for item casts)
+    // 计算施法消耗
     m_powerCost = m_CastItem ? 0 : m_spellInfo->CalcPowerCost(m_caster, m_spellSchoolMask, this);
 
     // Set combo point requirement
+    // 如果触发标志中包含忽略连击点或者当前施法是由物品触发，则不需要连击点
     if ((_triggeredCastFlags & TRIGGERED_IGNORE_COMBO_POINTS) || m_CastItem)
         m_needComboPoints = false;
 
     uint32 param1 = 0, param2 = 0;
+    // 检查是否具备施法条件
     SpellCastResult result = CheckCast(true, &param1, &param2);
     if (result != SPELL_CAST_OK && !IsAutoRepeat())          //always cast autorepeat dummy for triggering
     {
@@ -3134,8 +3226,11 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
     }
 
     // Prepare data for triggers
+    // 准备技能触发系统所需数据
     prepareDataForTriggerSystem();
 
+    // 计算施法时间（作弊模式下除外）
+    // 寒冰箭 - 1.5s
     if (Player* player = m_caster->ToPlayer())
     {
         if (!player->GetCommandStatus(CHEAT_CASTTIME))
@@ -3150,6 +3245,7 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
         m_casttime = m_spellInfo->CalcCastTime(this);
 
     SpellCastResult movementResult = SPELL_CAST_OK;
+    // 根据技能的中断标识，检查施法是否因移动被打断
     if (m_caster->IsUnit() && m_caster->ToUnit()->isMoving())
         movementResult = CheckMovement();
 
@@ -3164,6 +3260,7 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
             m_caster->ToCreature()->SetSpellFocus(this, nullptr);
     }
 
+    // 若施法因移动被打断，通知客户端
     if (movementResult != SPELL_CAST_OK)
     {
         if (m_caster->ToUnit()->IsControlledByPlayer() || !CanStopMovementForSpellCasting(m_caster->ToUnit()->GetMotionMaster()->GetCurrentMovementGeneratorType()))
@@ -3183,6 +3280,7 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
     }
 
     // set timer base at cast time
+    // 根据施法读条时间重置技能更新事件的计时器，这个将决定何时进入"施法阶段"
     ReSetTimer();
 
     TC_LOG_DEBUG("spells", "Spell::prepare: spell id {} source {} caster {} customCastFlags {} mask {}", m_spellInfo->Id, m_caster->GetEntry(), m_originalCaster ? m_originalCaster->GetEntry() : -1, _triggeredCastFlags, m_targets.GetTargetMask());
@@ -3194,6 +3292,7 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
         cast(true);
     else
     {
+        // 施法开始时移除潜行状态（显示施法条时）
         if (Unit* unitCaster = m_caster->ToUnit())
         {
             // stealth must be removed at cast starting (at show channel bar)
@@ -3211,14 +3310,18 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
                 }
             }
 
+            // 设置当前正在施放的法术
             unitCaster->SetCurrentCastSpell(this);
         }
+        // 通知客户端开始播放读条动画
         SendSpellStart();
 
+        // 触发全局技能 CD
         if (!(_triggeredCastFlags & TRIGGERED_IGNORE_GCD))
             TriggerGlobalCooldown();
 
         // Call CreatureAI hook OnSpellStart
+        // 生物 AI 响应 OnSpellStart 事件
         if (Creature* caster = m_caster->ToCreature())
             if (caster->IsAIEnabled())
                 caster->AI()->OnSpellStart(GetSpellInfo());
@@ -3227,6 +3330,7 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
         // as a result a spell that passed CheckCast and should be processed instantly may suffer from this delayed process
         // the easiest bug to observe is LoS check in AddUnitTarget, even if spell passed the CheckCast LoS check the situation can change in spell::update
         // because target could be relocated in the meantime, making the spell fly to the air (no targets can be registered, so no effects processed, nothing in combat log)
+        // 瞬发法术处理
         if (!m_casttime && /*!m_spellInfo->StartRecoveryTime && */ GetCurrentContainer() == CURRENT_GENERIC_SPELL)
             cast(true);
     }
@@ -3297,6 +3401,7 @@ void Spell::cast(bool skipCheck)
             modOwner->SetSpellModTakingSpell(lastSpellMod, false);
     }
 
+    // 寒冰箭 - skipCheck == false
     _cast(skipCheck);
 
     if (lastSpellMod)
@@ -3306,6 +3411,7 @@ void Spell::cast(bool skipCheck)
 void Spell::_cast(bool skipCheck)
 {
     // update pointers base at GUIDs to prevent access to non-existed already object
+    // 确保目标仍然有效（未脱离视野等）
     if (!UpdatePointers())
     {
         // cancel the spell if UpdatePointers() returned false, something wrong happened there
@@ -3314,6 +3420,7 @@ void Spell::_cast(bool skipCheck)
     }
 
     // cancel at lost explicit target during cast
+    // 如果目标已消失，则取消施法
     if (m_targets.GetObjectTargetGUID() && !m_targets.GetObjectTarget())
     {
         cancel();
@@ -3324,11 +3431,13 @@ void Spell::_cast(bool skipCheck)
     {
         // now that we've done the basic check, now run the scripts
         // should be done before the spell is actually executed
+        // 执行技能脚本
         sScriptMgr->OnPlayerSpellCast(playerCaster, this, skipCheck);
 
         // As of 3.0.2 pets begin attacking their owner's target immediately
         // Let any pets know we've attacked something. Check DmgClass for harmful spells only
         // This prevents spells such as Hunter's Mark from triggering pet attack
+        // 当玩家施放伤害类法术时，宠物可发起攻击，避免类似猎人印记（Hunter's Mark）这样的非伤害技能触发宠物攻击
         if (GetSpellInfo()->DmgClass != SPELL_DAMAGE_CLASS_NONE)
             if (Unit* target = m_targets.GetUnitTarget())
                 for (Unit* controlled : playerCaster->m_Controlled)
@@ -3337,6 +3446,7 @@ void Spell::_cast(bool skipCheck)
                                 controlledAI->OwnerAttacked(target);
     }
 
+    // 标记当前技能正在执行
     SetExecutedCurrently(true);
 
     // Should this be done for original caster?
@@ -3348,6 +3458,7 @@ void Spell::_cast(bool skipCheck)
         modOwner->SetSpellModTakingSpell(this, true);
     }
 
+    // 执行技能脚本
     CallScriptBeforeCastHandlers();
 
     // skip check if done already (for instant cast spells for example)
@@ -3366,6 +3477,7 @@ void Spell::_cast(bool skipCheck)
         };
 
         uint32 param1 = 0, param2 = 0;
+        // 检查是否具备施法条件
         SpellCastResult castResult = CheckCast(false, &param1, &param2);
         if (castResult != SPELL_CAST_OK)
         {
@@ -3393,9 +3505,11 @@ void Spell::_cast(bool skipCheck)
         }
 
         // check diminishing returns (again, only after finish cast bar, tested on retail)
+        // 避免等级高的法术效果被等级低的法术效果覆盖
         if (Unit* target = m_targets.GetUnitTarget())
         {
             uint8 aura_effmask = 0;
+            // 遍历技能的所有效果，检查是否包含单位拥有的光环效果
             for (SpellEffectInfo const& spellEffectInfo : m_spellInfo->GetEffects())
                 if (spellEffectInfo.IsUnitOwnedAuraEffect())
                     aura_effmask |= 1 << spellEffectInfo.EffectIndex;
@@ -3410,6 +3524,7 @@ void Spell::_cast(bool skipCheck)
                     {
                         if (Unit* caster = m_originalCaster ? m_originalCaster : m_caster->ToUnit())
                         {
+                            // 检查目标是否已有更强的相同光环效果
                             if (target->HasStrongerAuraWithDR(m_spellInfo, caster, triggered))
                             {
                                 cleanupSpell(SPELL_FAILED_AURA_BOUNCED);
@@ -3427,6 +3542,7 @@ void Spell::_cast(bool skipCheck)
             if (WorldObject const* target = ObjectAccessor::GetUnit(*creatureCaster, creatureCaster->GetTarget()))
                 creatureCaster->SetInFront(target);
 
+    // 选择技能施法目标列表
     SelectSpellTargets();
 
     // Spell may be finished after target map check
@@ -3442,19 +3558,24 @@ void Spell::_cast(bool skipCheck)
         return;
     }
 
+    // 判断施法时是否需要解散宠物
     if (Unit* unitCaster = m_caster->ToUnit())
         if (m_spellInfo->HasAttribute(SPELL_ATTR1_DISMISS_PET))
             if (Creature* pet = ObjectAccessor::GetCreature(*m_caster, unitCaster->GetPetGUID()))
                 pet->DespawnOrUnsummon();
 
+    // 准备命中时的触发器执行
     PrepareTriggersExecutedOnHit();
 
+    // 执行技能脚本
     CallScriptOnCastHandlers();
 
     // traded items have trade slot instead of guid in m_itemTargetGUID
     // set to real guid to be sent later to the client
+    // 确保交易中的物品在交易完成后，能够以正确的 GUID 发送到客户端，因为在交易过程中，被交易的物品不会直接存储真实的 GUID，而是临时用"交易槽号"来存储
     m_targets.UpdateTradeSlotItem();
 
+    // 更新玩家成就
     if (Player* player = m_caster->ToPlayer())
     {
         if (!(_triggeredCastFlags & TRIGGERED_IGNORE_CAST_ITEM) && m_CastItem)
@@ -3466,6 +3587,7 @@ void Spell::_cast(bool skipCheck)
         player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_CAST_SPELL, m_spellInfo->Id);
     }
 
+    // 扣除法术消耗
     if (!(_triggeredCastFlags & TRIGGERED_IGNORE_POWER_AND_REAGENT_COST))
     {
         // Powers have to be taken before SendSpellGo
@@ -3480,11 +3602,14 @@ void Spell::_cast(bool skipCheck)
     }
 
     // CAST SPELL
+    // 进入法术 CD
     SendSpellCooldown();
 
+    // 施法阶段的法术效果处理
     HandleLaunchPhase();
 
     // we must send smsg_spell_go packet before m_castItem delete in TakeCastItem()...
+    // 通知客户端播放法术飞行动画
     SendSpellGo();
 
     if (!m_spellInfo->IsChanneled())
@@ -3492,15 +3617,19 @@ void Spell::_cast(bool skipCheck)
             creatureCaster->ReleaseSpellFocus(this);
 
     // Okay, everything is prepared. Now we need to distinguish between immediate and evented delayed spells
+    // 需要区分即时生效和延迟生效的法术
     if (m_spellInfo->Speed > 0.0f && !m_spellInfo->IsChanneled())
     {
         // Remove used for cast item if need (it can be already NULL after TakeReagents call
         // in case delayed spell remove item at cast delay start
+        // 移除施法物品
         TakeCastItem();
 
         // Okay, maps created, now prepare flags
+        // 标记技能状态为"延迟"
         m_immediateHandled = false;
         m_spellState = SPELL_STATE_DELAYED;
+        // 设置延迟开始时间（在SpellEvent::Execute中会被修正为当前时间）
         SetDelayStart(0);
 
         if (Unit* unitCaster = m_caster->ToUnit())
@@ -3510,11 +3639,14 @@ void Spell::_cast(bool skipCheck)
     else
     {
         // Immediate spell, no big deal
+        // "命中阶段"处理
         handle_immediate();
     }
 
+    // 执行技能脚本
     CallScriptAfterCastHandlers();
 
+    // 处理技能链，跟多米诺骨牌一样，一个技能触发另一个技能
     if (std::vector<int32> const* spell_triggered = sSpellMgr->GetSpellLinked(m_spellInfo->Id))
     {
         for (int32 id : *spell_triggered)
@@ -3538,12 +3670,14 @@ void Spell::_cast(bool skipCheck)
             m_originalCaster->GetSpellHistory()->ResetCooldown(m_spellInfo->Id, true);
     }
 
+    // 解除技能执行标记
     SetExecutedCurrently(false);
 
     if (!m_originalCaster)
         return;
 
     // Handle procs on cast
+    // 处理施法时的触发效果
     uint32 procAttacker = m_procAttacker;
     if (!procAttacker)
     {
@@ -3560,6 +3694,7 @@ void Spell::_cast(bool skipCheck)
     Unit::ProcSkillsAndAuras(m_originalCaster, nullptr, procAttacker, PROC_FLAG_NONE, PROC_SPELL_TYPE_MASK_ALL, PROC_SPELL_PHASE_CAST, hitMask, this, nullptr, nullptr);
 
     // Call CreatureAI hook OnSpellCast
+    // 怪物 AI 处理
     if (Creature* caster = m_originalCaster->ToCreature())
         if (caster->IsAIEnabled())
             caster->AI()->OnSpellCast(GetSpellInfo());
@@ -3643,6 +3778,7 @@ void Spell::handle_immediate()
 
 uint64 Spell::handle_delayed(uint64 t_offset)
 {
+    // 确保目标仍然有效（未脱离视野等）
     if (!UpdatePointers())
     {
         // finish the spell if UpdatePointers() returned false, something wrong happened there
@@ -3658,6 +3794,7 @@ uint64 Spell::handle_delayed(uint64 t_offset)
 
     PrepareTargetProcessing();
 
+    // 法术命中效果处理
     if (!m_immediateHandled)
     {
         _handle_immediate_phase();
@@ -3683,6 +3820,7 @@ uint64 Spell::handle_delayed(uint64 t_offset)
             return false;
         }), m_UniqueTargetInfo.end());
 
+        // 效果命中处理（单位类目标）
         DoProcessTargetContainer(delayedTargets);
     }
 
@@ -3712,11 +3850,14 @@ uint64 Spell::handle_delayed(uint64 t_offset)
         modOwner->SetSpellModTakingSpell(this, false);
 
     // All targets passed - need finish phase
+    // 所有目标都处理完毕，进入"结束阶段"
     if (next_time == 0)
     {
         // spell is finished, perform some last features of the spell here
+        // 最终阶段处理：执行连击点数结算、触发后续技能等收尾逻辑
         _handle_finish_phase();
 
+        // 成功结束施法，标记技能状态为"结束"，等待异步清理（随着技能事件被一起删除）
         finish(true);                                       // successfully finish spell cast
 
         // return zero, spell is finished now
@@ -3732,6 +3873,7 @@ uint64 Spell::handle_delayed(uint64 t_offset)
 void Spell::_handle_immediate_phase()
 {
     // handle some immediate features of the spell here
+    // 统计法术造成的仇恨值
     HandleThreatSpells();
 
     // handle effects with SPELL_EFFECT_HANDLE_HIT mode
@@ -3742,10 +3884,12 @@ void Spell::_handle_immediate_phase()
             continue;
 
         // call effect handlers to handle destination hit
+        // 在法术即将命中目标前，触发相关效果处理
         HandleEffects(nullptr, nullptr, nullptr, nullptr, spellEffectInfo, SPELL_EFFECT_HANDLE_HIT);
     }
 
     // process items
+    // 效果命中处理（道具类目标）
     DoProcessTargetContainer(m_UniqueItemInfo);
 }
 
@@ -3798,6 +3942,7 @@ void Spell::SendSpellCooldown()
 void Spell::update(uint32 difftime)
 {
     // update pointers based at it's GUIDs
+    // 确保目标仍然有效（未脱离视野等）
     if (!UpdatePointers())
     {
         // cancel the spell if UpdatePointers() returned false, something wrong happened there
@@ -3805,6 +3950,7 @@ void Spell::update(uint32 difftime)
         return;
     }
 
+    // 如果目标已消失，则取消施法
     if (m_targets.GetUnitTargetGUID() && !m_targets.GetUnitTarget())
     {
         TC_LOG_DEBUG("spells", "Spell {} is cancelled due to removal of target.", m_spellInfo->Id);
@@ -3813,6 +3959,7 @@ void Spell::update(uint32 difftime)
     }
 
     // check if the unit caster has moved before the spell finished
+    // 施法读条过程中不可移动，否则会打断施法
     if (m_timer != 0 && m_caster->IsUnit() && m_caster->ToUnit()->isMoving() && CheckMovement() != SPELL_CAST_OK)
         cancel();
 
@@ -3828,6 +3975,7 @@ void Spell::update(uint32 difftime)
                     m_timer -= difftime;
             }
 
+            // 读条结束，进入"施法阶段"
             if (m_timer == 0 && !m_spellInfo->IsNextMeleeSwingSpell() && !IsAutoRepeat())
                 // don't CheckCast for instant spells - done in spell::prepare, skip duplicate checks, needed for range checks for example
                 cast(!m_casttime);
@@ -3879,6 +4027,8 @@ void Spell::finish(bool ok)
 {
     if (m_spellState == SPELL_STATE_FINISHED)
         return;
+
+    // 标记技能状态为"结束"
     m_spellState = SPELL_STATE_FINISHED;
 
     if (!m_caster)
@@ -5133,6 +5283,7 @@ void Spell::HandleEffects(Unit* pUnitTarget, Item* pItemTarget, GameObject* pGoT
     bool preventDefault = CallScriptEffectHandlers(spellEffectInfo.EffectIndex, mode);
 
     if (!preventDefault)
+        // 寒冰箭 - Spell::EffectApplyAura
         (this->*SpellEffectHandlers[spellEffectInfo.Effect])();
 }
 
@@ -7580,8 +7731,10 @@ bool SpellEvent::Execute(uint64 e_time, uint32 p_time)
             else
             {
                 // delaying had just started, record the moment
+                // 将延迟开始时间修正为当前时间（Spell::update 中设置成了 0）
                 m_Spell->SetDelayStart(e_time);
                 // re-plan the event for the delay moment
+                // 设置技能事件下一次触发时间
                 m_Spell->GetCaster()->m_Events.AddEvent(this, Milliseconds(e_time + m_Spell->GetDelayMoment()), false);
                 return false;                               // event not complete
             }
@@ -7627,15 +7780,18 @@ void Spell::HandleLaunchPhase()
     for (SpellEffectInfo const& spellEffectInfo : m_spellInfo->GetEffects())
     {
         // don't do anything for empty effect
+        // 跳过无效的法术效果
         if (!spellEffectInfo.IsEffect())
             continue;
 
+        // 技能还未脱手时的法术效果处理（无目标）
         HandleEffects(nullptr, nullptr, nullptr, nullptr, spellEffectInfo, SPELL_EFFECT_HANDLE_LAUNCH);
     }
 
     PrepareTargetProcessing();
 
     // Take ammunition if the ranged attack requires ammunition
+    // 处理远程攻击的弹药消耗
     if (Player* player = m_caster->ToPlayer())
     {
         bool usesAmmo = m_spellInfo->HasAttribute(SPELL_ATTR0_REQ_AMMO);
@@ -7643,13 +7799,16 @@ void Spell::HandleLaunchPhase()
             usesAmmo = false;
 
         // Do not consume ammo for the triggered AoE ticks of Volley (Hunter spell)
+        // 触发类范围技能（如猎人的多重射击）不消耗弹药
         if (IsTriggered() && m_spellInfo->SpellFamilyName == SPELLFAMILY_HUNTER && m_spellInfo->IsTargetingArea())
             usesAmmo = false;
 
+        // 扣除法术消耗的弹药
         if (usesAmmo)
             TakeAmmo();
     }
 
+    // 计算目标的暴击概率等数据
     for (TargetInfo& target : m_UniqueTargetInfo)
         PreprocessSpellLaunch(target);
 
@@ -7665,10 +7824,13 @@ void Spell::HandleLaunchPhase()
             if (!(mask & (1 << spellEffectInfo.EffectIndex)))
                 continue;
 
+            // 技能脱手飞向目标时的法术效果处理（有目标）
+            // 寒冰箭 - Spell::EffectSchoolDMG
             DoEffectOnLaunchTarget(target, multiplier, spellEffectInfo);
         }
     }
 
+    // 发送法术执行日志
     FinishTargetProcessing();
 }
 

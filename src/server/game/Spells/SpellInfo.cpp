@@ -34,6 +34,7 @@
 
 uint32 GetTargetFlagMask(SpellTargetObjectTypes objType)
 {
+    // 寒冰箭 - {TARGET_OBJECT_TYPE_UNIT, TARGET_REFERENCE_TYPE_TARGET, TARGET_SELECT_CATEGORY_DEFAULT, TARGET_CHECK_ENEMY,    TARGET_DIR_NONE},        // 6 TARGET_UNIT_TARGET_ENEMY
     switch (objType)
     {
         case TARGET_OBJECT_TYPE_DEST:
@@ -130,6 +131,7 @@ Targets SpellImplicitTargetInfo::GetTarget() const
 
 uint32 SpellImplicitTargetInfo::GetExplicitTargetMask(bool& srcSet, bool& dstSet) const
 {
+    // 寒冰箭 - {TARGET_OBJECT_TYPE_UNIT, TARGET_REFERENCE_TYPE_TARGET, TARGET_SELECT_CATEGORY_DEFAULT, TARGET_CHECK_ENEMY,    TARGET_DIR_NONE},        // 6 TARGET_UNIT_TARGET_ENEMY
     uint32 targetMask = 0;
     if (GetTarget() == TARGET_DEST_TRAJ)
     {

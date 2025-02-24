@@ -1077,10 +1077,14 @@ void Spell::EffectApplyAura()
         return;
 
     // register target/effect on aura
+    // 绑定目标与光环效果
+    // 检查目标是否已存在该光环效果
     AuraApplication* aurApp = _spellAura->GetApplicationOfTarget(unitTarget->GetGUID());
     if (!aurApp)
+        // 若不存在，则创建目标与光环效果的绑定关系
         aurApp = unitTarget->_CreateAuraApplication(_spellAura, 1 << effectInfo->EffectIndex);
     else
+        // 若已存在，则更新光环效果的应用掩码
         aurApp->UpdateApplyEffectMask(aurApp->GetEffectsToApply() | 1 << effectInfo->EffectIndex, false);
 }
 

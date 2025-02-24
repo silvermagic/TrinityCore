@@ -800,6 +800,7 @@ void Aura::UpdateOwner(uint32 diff, WorldObject* owner)
         }
     }
 
+    // 更新光环效果剩余时间
     Update(diff, caster);
 
     if (m_updateTargetMapInterval <= int32(diff))
@@ -810,6 +811,7 @@ void Aura::UpdateOwner(uint32 diff, WorldObject* owner)
     // update aura effects
     for (uint8 i = 0; i < MAX_SPELL_EFFECTS; ++i)
         if (m_effects[i])
+            // 周期性法术效果处理
             m_effects[i]->Update(diff, caster);
 
     // remove spellmods after effects update

@@ -2838,6 +2838,7 @@ void Unit::_DeleteRemovedAuras()
 
 void Unit::_UpdateSpells(uint32 time)
 {
+    // 更新自动重复释放的技能
     if (m_currentSpells[CURRENT_AUTOREPEAT_SPELL])
         _UpdateAutoRepeatSpell();
 
@@ -2856,6 +2857,8 @@ void Unit::_UpdateSpells(uint32 time)
     {
         Aura* i_aura = m_auraUpdateIterator->second;
         ++m_auraUpdateIterator;                            // need shift to next for allow update if need into aura update
+        // 光环效果更新
+        // 寒冰箭 - 更新减速光环效果剩余时间
         i_aura->UpdateOwner(time, this);
     }
 
@@ -2863,6 +2866,7 @@ void Unit::_UpdateSpells(uint32 time)
     for (AuraMap::iterator i = m_ownedAuras.begin(); i != m_ownedAuras.end();)
     {
         if (i->second->IsExpired())
+            // 寒冰箭 - 移除减速光环
             RemoveOwnedAura(i, AURA_REMOVE_BY_EXPIRE);
         else if (i->second->GetSpellInfo()->IsChanneled() && i->second->GetCasterGUID() != GetGUID() && !ObjectAccessor::GetWorldObject(*this, i->second->GetCasterGUID()))
             RemoveOwnedAura(i, AURA_REMOVE_BY_CANCEL); // remove channeled auras when caster is not on the same map
@@ -2874,6 +2878,7 @@ void Unit::_UpdateSpells(uint32 time)
         if (itr->second->IsNeedClientUpdate())
             itr->second->ClientUpdate();
 
+    // 统一清理待移除的光环
     _DeleteRemovedAuras();
 
     if (!m_gameObj.empty())
@@ -3334,7 +3339,10 @@ AuraApplication* Unit::_CreateAuraApplication(Aura* aura, uint8 effMask)
 
     Unit* caster = aura->GetCaster();
 
+    // 创建一个光环应用实例，建立目标与光环效果的绑定关系
+    // 寒冰箭 - 在狗头人身上添加一个减速光环
     AuraApplication * aurApp = new AuraApplication(this, caster, aura, effMask);
+    // 将光环应用实例添加到目标的光环应用列表中
     m_appliedAuras.insert(AuraApplicationMap::value_type(aurId, aurApp));
 
     if (aurSpellInfo->AuraInterruptFlags)
@@ -3346,6 +3354,7 @@ AuraApplication* Unit::_CreateAuraApplication(Aura* aura, uint8 effMask)
     if (AuraStateType aState = aura->GetSpellInfo()->GetAuraState())
         m_auraStateAuras.insert(AuraStateAurasMap::value_type(aState, aurApp));
 
+    // 更新光环效果的目标列表（对光环应用的弱引用）
     aura->_ApplyForTarget(this, caster, aurApp);
     return aurApp;
 }

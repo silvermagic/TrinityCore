@@ -327,11 +327,13 @@ void WorldSession::HandleCastSpellOpcode(WorldPacket& recvPacket)
 {
     uint32 spellId;
     uint8  castCount, castFlags;
+    // 从报文中读取施法次数（避免技能相互触发，变成死循环）、施法ID、施法标志
     recvPacket >> castCount >> spellId >> castFlags;
     TriggerCastFlags triggerFlag = TRIGGERED_NONE;
 
     TC_LOG_DEBUG("network", "WORLD: got cast spell packet, castCount: {}, spellId: {}, castFlags: {}, data length = {}", castCount, spellId, castFlags, (uint32)recvPacket.size());
 
+    // 获取技能信息（静态数据）
     SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
     if (!spellInfo)
     {
@@ -340,6 +342,7 @@ void WorldSession::HandleCastSpellOpcode(WorldPacket& recvPacket)
         return;
     }
 
+    // 被动技能不能被主动施放
     if (spellInfo->IsPassive())
     {
         recvPacket.rfinish(); // prevent spam at ignore packet
@@ -348,10 +351,12 @@ void WorldSession::HandleCastSpellOpcode(WorldPacket& recvPacket)
 
     // client provided targets
     SpellCastTargets targets;
+    // 从报文中读取目标信息
     targets.Read(recvPacket, _player);
     HandleClientCastFlags(recvPacket, castFlags, targets);
 
     // not have spell in spellbook
+    // 检查玩家是否已经学习了该技能（防作弊）
     if (!_player->HasActiveSpell(spellId))
     {
         bool allow = false;
@@ -375,10 +380,13 @@ void WorldSession::HandleCastSpellOpcode(WorldPacket& recvPacket)
     // Client is resending autoshot cast opcode when other spell is cast during shoot rotation
     // Skip it to prevent "interrupt" message
     // Also check targets! target may have changed and we need to interrupt current spell
+    // 自动射击特殊处理
     if (spellInfo->IsAutoRepeatRangedSpell())
     {
+        // 获取当前自动重复施放的法术
         if (Spell* spell = _player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL))
         {
+            // 检查是否是同一个技能，并且目标相同
             if (spell->m_spellInfo == spellInfo && spell->m_targets.GetUnitTargetGUID() == targets.GetUnitTargetGUID())
             {
                 recvPacket.rfinish();
@@ -389,6 +397,7 @@ void WorldSession::HandleCastSpellOpcode(WorldPacket& recvPacket)
 
     // auto-selection buff level base at target level (in spellInfo)
     // TODO: is this even necessary? client already seems to send correct rank for "standard" buffs
+    // 增益技能自动选择目标等级对应的技能等级
     if (spellInfo->IsPositive())
         if (Unit* target = targets.GetUnitTarget())
         {
@@ -399,6 +408,7 @@ void WorldSession::HandleCastSpellOpcode(WorldPacket& recvPacket)
                 spellInfo = actualSpellInfo;
         }
 
+    // 创建技能实例（动态数据）
     Spell* spell = new Spell(_player, spellInfo, triggerFlag);
     spell->m_fromClient = true;
     spell->m_cast_count = castCount;                       // set count of casts
