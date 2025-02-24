@@ -1,4 +1,4 @@
-/*
+﻿/*
  * This file is part of the TrinityCore Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -320,6 +320,10 @@ void Spell::EffectSchoolDMG()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_LAUNCH_TARGET)
         return;
+
+    if (debugSpellId == m_spellInfo->Id) {
+        TC_LOG_DEBUG("spells", "[{}] Spell::EffectSchoolDMG", debugSpellSeqId++);
+    }
 
     if (unitTarget && unitTarget->IsAlive())
     {
@@ -1072,6 +1076,10 @@ void Spell::EffectApplyAura()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
         return;
+
+    if (debugSpellId == m_spellInfo->Id) {
+        TC_LOG_DEBUG("spells", "[{}] Spell::EffectApplyAura", debugSpellSeqId++);
+    }
 
     if (!_spellAura || !unitTarget)
         return;

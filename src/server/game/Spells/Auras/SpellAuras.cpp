@@ -1,4 +1,4 @@
-/*
+﻿/*
  * This file is part of the TrinityCore Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -522,6 +522,10 @@ void Aura::SaveCasterInfo(Unit* caster)
 
 Aura::~Aura()
 {
+    if (debugSpellId == m_spellInfo->Id) {
+        TC_LOG_DEBUG("spells", "[{}] Aura::~Aura", debugSpellSeqId++);
+    }
+
     // unload scripts
     for (auto itr = m_loadedScripts.begin(); itr != m_loadedScripts.end(); ++itr)
     {
@@ -557,6 +561,10 @@ void Aura::_ApplyForTarget(Unit* target, Unit* caster, AuraApplication* auraApp)
     // aura mustn't be already applied on target
     ASSERT (!IsAppliedOnTarget(target->GetGUID()) && "Aura::_ApplyForTarget: aura musn't be already applied on target");
 
+    if (debugSpellId == m_spellInfo->Id) {
+        TC_LOG_DEBUG("spells", "[{}] Aura::_ApplyForTarget - CastGUID: {} TargetGUID: {}", debugSpellSeqId++, caster->GetGUID().ToString(), target->GetGUID().ToString());
+    }
+
     m_applications[target->GetGUID()] = auraApp;
 
     // set infinity cooldown state for spells
@@ -575,6 +583,10 @@ void Aura::_UnapplyForTarget(Unit* target, Unit* caster, AuraApplication* auraAp
     ASSERT(target);
     ASSERT(auraApp->GetRemoveMode());
     ASSERT(auraApp);
+
+    if (debugSpellId == m_spellInfo->Id) {
+        TC_LOG_DEBUG("spells", "[{}] Aura::_UnapplyForTarget - CastGUID: {} TargetGUID: {}", debugSpellSeqId++, caster->GetGUID().ToString(), target->GetGUID().ToString());
+    }
 
     ApplicationMap::iterator itr = m_applications.find(target->GetGUID());
 
@@ -800,6 +812,10 @@ void Aura::UpdateOwner(uint32 diff, WorldObject* owner)
         }
     }
 
+    if (debugSpellId == GetSpellInfo()->Id) {
+        TC_LOG_DEBUG("spells", "[{}] Aura::UpdateOwner - CasterGUID: {} OwnerGUID: {}", debugSpellSeqId++, caster != nullptr ? caster->GetGUID().ToString() : "", owner->GetGUID().ToString());
+    }
+
     // 更新光环效果剩余时间
     Update(diff, caster);
 
@@ -825,6 +841,10 @@ void Aura::Update(uint32 diff, Unit* caster)
 {
     if (m_duration > 0)
     {
+        if (debugSpellId == GetSpellInfo()->Id) {
+            TC_LOG_DEBUG("spells", "[{}] Aura::Update - m_duration: {} diff: {}", debugSpellSeqId++, m_duration, diff);
+        }
+
         m_duration -= diff;
         if (m_duration < 0)
             m_duration = 0;
@@ -2564,6 +2584,10 @@ std::string Aura::GetDebugInfo() const
 UnitAura::UnitAura(AuraCreateInfo const& createInfo)
     : Aura(createInfo)
 {
+    if (debugSpellId == m_spellInfo->Id) {
+        TC_LOG_DEBUG("spells", "[{}] UnitAura::UnitAura - CasterGUID: {} OwnerEffectMask: {}", debugSpellSeqId++, createInfo.CasterGUID.ToString(), createInfo.GetAuraEffectMask());
+    }
+
     m_AuraDRGroup = DIMINISHING_NONE;
     LoadScripts();
     _InitEffects(createInfo._auraEffectMask, createInfo.Caster, createInfo.BaseAmount);
@@ -2590,6 +2614,10 @@ void UnitAura::_UnapplyForTarget(Unit* target, Unit* caster, AuraApplication* au
 
 void UnitAura::Remove(AuraRemoveMode removeMode)
 {
+    if (debugSpellId == m_spellInfo->Id) {
+        TC_LOG_DEBUG("spells", "[{}] UnitAura::Remove", debugSpellSeqId++);
+    }
+
     if (IsRemoved())
         return;
     GetUnitOwner()->RemoveOwnedAura(this, removeMode);
@@ -2700,6 +2728,10 @@ void UnitAura::AddStaticApplication(Unit* target, uint8 effMask)
 DynObjAura::DynObjAura(AuraCreateInfo const& createInfo)
     : Aura(createInfo)
 {
+    if (debugSpellId == m_spellInfo->Id) {
+        TC_LOG_DEBUG("spells", "[{}] DynObjAura::DynObjAura - CasterGUID: {} OwnerEffectMask: {}", debugSpellSeqId++, createInfo.CasterGUID.ToString(), createInfo.GetAuraEffectMask());
+    }
+
     LoadScripts();
     ASSERT(GetDynobjOwner());
     ASSERT(GetDynobjOwner()->IsInWorld());
@@ -2711,6 +2743,10 @@ DynObjAura::DynObjAura(AuraCreateInfo const& createInfo)
 
 void DynObjAura::Remove(AuraRemoveMode removeMode)
 {
+    if (debugSpellId == m_spellInfo->Id) {
+        TC_LOG_DEBUG("spells", "[{}] DynObjAura::Remove", debugSpellSeqId++);
+    }
+
     if (IsRemoved())
         return;
     _Remove(removeMode);

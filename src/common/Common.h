@@ -78,4 +78,7 @@ TC_COMMON_API LocaleConstant GetLocaleByName(std::string const& name);
 
 #define MAX_QUERY_LEN 32*1024
 
+TC_COMMON_API extern uint32 debugSpellId;
+TC_COMMON_API extern uint32 debugSpellSeqId;
+
 #endif

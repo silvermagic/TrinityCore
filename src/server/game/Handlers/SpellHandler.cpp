@@ -1,4 +1,4 @@
-/*
+﻿/*
  * This file is part of the TrinityCore Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -408,6 +408,9 @@ void WorldSession::HandleCastSpellOpcode(WorldPacket& recvPacket)
                 spellInfo = actualSpellInfo;
         }
 
+    if (debugSpellId == spellInfo->Id) {
+        TC_LOG_DEBUG("spells", "[{}] WorldSession::HandleCastSpellOpcode - TargetMask: {} TargetGUID: {}", debugSpellSeqId++, targets.GetTargetMask(), targets.GetObjectTargetGUID().ToString());
+    }
     // 创建技能实例（动态数据）
     Spell* spell = new Spell(_player, spellInfo, triggerFlag);
     spell->m_fromClient = true;

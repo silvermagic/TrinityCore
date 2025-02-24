@@ -19,11 +19,11 @@
 #define _DURATION_H_
 
 // HACKS TERRITORY
-#if __has_include(<__msvc_chrono.hpp>)
-#include <__msvc_chrono.hpp> // skip all the formatting/istream/locale/mutex bloat
-#else
+//#if __has_include(<__msvc_chrono.hpp>)
+//#include <__msvc_chrono.hpp> // skip all the formatting/istream/locale/mutex bloat
+//#else
 #include <chrono>
-#endif
+//#endif
 
 /// Milliseconds shorthand typedef.
 typedef std::chrono::milliseconds Milliseconds;
