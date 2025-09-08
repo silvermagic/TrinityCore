@@ -1,4 +1,4 @@
-﻿/*
+/*
  * This file is part of the TrinityCore Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -322,7 +322,7 @@ void Spell::EffectSchoolDMG()
         return;
 
     if (debugSpellId == m_spellInfo->Id) {
-        TC_LOG_DEBUG("spells", "[{}] Spell::EffectSchoolDMG", debugSpellSeqId++);
+        TC_LOG_DEBUG("spells", "[XX-{}] Spell::EffectSchoolDMG", debugSpellSeqId++);
     }
 
     if (unitTarget && unitTarget->IsAlive())
@@ -1078,7 +1078,7 @@ void Spell::EffectApplyAura()
         return;
 
     if (debugSpellId == m_spellInfo->Id) {
-        TC_LOG_DEBUG("spells", "[{}] Spell::EffectApplyAura", debugSpellSeqId++);
+        TC_LOG_DEBUG("spells", "[XX-{}] Spell::EffectApplyAura", debugSpellSeqId++);
     }
 
     if (!_spellAura || !unitTarget)
@@ -1088,6 +1088,9 @@ void Spell::EffectApplyAura()
     // 绑定目标与光环效果
     // 检查目标是否已存在该光环效果
     AuraApplication* aurApp = _spellAura->GetApplicationOfTarget(unitTarget->GetGUID());
+    if (debugSpellId == m_spellInfo->Id) {
+        TC_LOG_DEBUG("spells", "[XX-{}] Spell::EffectApplyAura - unitTarget: {} aurApp: {} effMask: {}", debugSpellSeqId++, unitTarget->GetGUID().ToString(), aurApp ? "true" : "false", 1 << effectInfo->EffectIndex);
+    }
     if (!aurApp)
         // 若不存在，则创建目标与光环效果的绑定关系
         aurApp = unitTarget->_CreateAuraApplication(_spellAura, 1 << effectInfo->EffectIndex);
@@ -1577,6 +1580,10 @@ void Spell::EffectPersistentAA()
     Unit* unitCaster = GetUnitCasterForEffectHandlers();
     if (!unitCaster)
         return;
+
+    if (debugSpellId == m_spellInfo->Id) {
+        TC_LOG_DEBUG("spells", "[XX-{}] Spell::EffectPersistentAA - Caster: {}", debugSpellSeqId++, unitCaster->GetGUID().ToString());
+    }
 
     // only handle at last effect
     for (size_t i = effectInfo->EffectIndex + 1; i < m_spellInfo->GetEffects().size(); ++i)

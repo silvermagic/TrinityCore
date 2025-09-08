@@ -513,7 +513,7 @@ m_caster((info->HasAttribute(SPELL_ATTR6_CAST_BY_CHARMER) && caster->GetCharmerO
 , m_spellValue(new SpellValue(m_spellInfo)), _spellEvent(nullptr)
 {
     if (debugSpellId == m_spellInfo->Id) {
-        TC_LOG_DEBUG("spells", "[{}] Spell::Spell", debugSpellSeqId++);
+        TC_LOG_DEBUG("spells", "[XX-{}] Spell::Spell", debugSpellSeqId++);
     }
 
     m_customError = SPELL_CUSTOM_ERROR_NONE;
@@ -618,7 +618,7 @@ m_caster((info->HasAttribute(SPELL_ATTR6_CAST_BY_CHARMER) && caster->GetCharmerO
 Spell::~Spell()
 {
     if (debugSpellId == m_spellInfo->Id) {
-        TC_LOG_DEBUG("spells", "[{}] Spell::~Spell", debugSpellSeqId++);
+        TC_LOG_DEBUG("spells", "[XX-{}] Spell::~Spell", debugSpellSeqId++);
     }
 
     // unload scripts
@@ -656,7 +656,7 @@ void Spell::InitExplicitTargets(SpellCastTargets const& targets)
     uint32 neededTargets = m_spellInfo->GetExplicitTargetMask();
 
     if (debugSpellId == m_spellInfo->Id) {
-        TC_LOG_DEBUG("spells", "[{}] Spell::InitExplicitTargets - ExplicitTargetMask: {}", debugSpellSeqId++, neededTargets);
+        TC_LOG_DEBUG("spells", "[XX-{}] Spell::InitExplicitTargets - ExplicitTargetMask: {}", debugSpellSeqId++, neededTargets);
     }
 
     if (WorldObject* target = m_targets.GetObjectTarget())
@@ -723,7 +723,7 @@ void Spell::InitExplicitTargets(SpellCastTargets const& targets)
 void Spell::SelectExplicitTargets()
 {
     if (debugSpellId == m_spellInfo->Id) {
-        TC_LOG_DEBUG("spells", "[{}] Spell::SelectExplicitTargets - ExplicitTargetMask: {}", debugSpellSeqId++, m_spellInfo->GetExplicitTargetMask());
+        TC_LOG_DEBUG("spells", "[XX-{}] Spell::SelectExplicitTargets - ExplicitTargetMask: {}", debugSpellSeqId++, m_spellInfo->GetExplicitTargetMask());
     }
 
     // here go all explicit target changes made to explicit targets after spell prepare phase is finished
@@ -819,7 +819,7 @@ void Spell::SelectSpellTargets()
 
         // 寒冰箭 - 0 - 0x0111
         if (debugSpellId == m_spellInfo->Id) {
-            TC_LOG_DEBUG("spells", "[{}] Spell::SelectSpellTargets - EffectIndex: {} implicitTargetEffectMaskToSelect: {}", debugSpellSeqId++, spellEffectInfo.EffectIndex, implicitTargetEffectMaskToSelect);
+            TC_LOG_DEBUG("spells", "[XX-{}] Spell::SelectSpellTargets - EffectIndex: {} implicitTargetEffectMaskToSelect: {}", debugSpellSeqId++, spellEffectInfo.EffectIndex, implicitTargetEffectMaskToSelect);
         }
         implicitTargetEffectMaskToSelect &= ~processedEffectsMaskForSpell;
         if (implicitTargetEffectMaskToSelect)
@@ -1616,7 +1616,7 @@ void Spell::SelectImplicitTargetObjectTargets(SpellEffectInfo const& spellEffect
     ASSERT((m_targets.GetObjectTarget() || m_targets.GetItemTarget()) && "Spell::SelectImplicitTargetObjectTargets - no explicit object or item target available!");
 
     if (debugSpellId == m_spellInfo->Id) {
-        TC_LOG_DEBUG("spells", "[{}] Spell::SelectImplicitTargetObjectTargets - EffectIndex: {} effMask: {}", debugSpellSeqId++, spellEffectInfo.EffectIndex, effMask);
+        TC_LOG_DEBUG("spells", "[XX-{}] Spell::SelectImplicitTargetObjectTargets - EffectIndex: {} effMask: {}", debugSpellSeqId++, spellEffectInfo.EffectIndex, effMask);
     }
 
     // 获取玩家选中的目标对象
@@ -2259,7 +2259,7 @@ void Spell::AddUnitTarget(Unit* target, uint32 effectMask, bool checkIfValid /*=
         targetInfo.ReflectResult = SPELL_MISS_NONE;
 
     if (debugSpellId == m_spellInfo->Id) {
-        TC_LOG_DEBUG("spells", "[{}] Spell::AddUnitTarget - TargetGUID: {} EffectMask: {} ScaleAura: {} TimeDelay: {}", debugSpellSeqId++, targetInfo.TargetGUID, targetInfo.EffectMask, targetInfo.ScaleAura, targetInfo.TimeDelay);
+        TC_LOG_DEBUG("spells", "[XX-{}] Spell::AddUnitTarget - TargetGUID: {} EffectMask: {} ScaleAura: {} TimeDelay: {}", debugSpellSeqId++, targetInfo.TargetGUID.ToString(), targetInfo.EffectMask, targetInfo.ScaleAura, targetInfo.TimeDelay);
     }
     // Add target to list
     // 将目标添加到目标列表中
@@ -2463,7 +2463,7 @@ void Spell::TargetInfo::PreprocessTarget(Spell* spell)
     Healing = spell->m_healing;
 
     if (debugSpellId == spell->GetSpellInfo()->Id) {
-        TC_LOG_DEBUG("spells", "[{}] Spell::TargetInfo::PreprocessTarget - TargetGUID: {}", debugSpellSeqId++, _spellHitTarget != nullptr ? _spellHitTarget->GetGUID().ToString() : "");
+        TC_LOG_DEBUG("spells", "[XX-{}] Spell::TargetInfo::PreprocessTarget - TargetGUID: {}", debugSpellSeqId++, _spellHitTarget != nullptr ? _spellHitTarget->GetGUID().ToString() : "");
     }
 }
 
@@ -2474,7 +2474,7 @@ void Spell::TargetInfo::DoTargetSpellHit(Spell* spell, SpellEffectInfo const& sp
         return;
 
     if (debugSpellId == spell->GetSpellInfo()->Id) {
-        TC_LOG_DEBUG("spells", "[{}] Spell::TargetInfo::DoTargetSpellHit - TargetGUID: {} EffectIndex: {}", debugSpellSeqId++, unit->GetGUID(), spellEffectInfo.EffectIndex);
+        TC_LOG_DEBUG("spells", "[XX-{}] Spell::TargetInfo::DoTargetSpellHit - TargetGUID: {} EffectIndex: {}", debugSpellSeqId++, unit->GetGUID(), spellEffectInfo.EffectIndex);
     }
 
     // Need init unitTarget by default unit (can changed in code on reflect)
@@ -2988,7 +2988,7 @@ void Spell::DoSpellEffectHit(Unit* unit, SpellEffectInfo const& spellEffectInfo,
                     .IsRefresh = &refresh; // 绑定刷新标志
 
                 if (debugSpellId == m_spellInfo->Id) {
-                    TC_LOG_DEBUG("spells", "[{}] Spell::DoSpellEffectHit - CasterGUID: {} TargetGUID: {} EffectIndex: {} OwnerEffectMask: {}", debugSpellSeqId++, caster->GetGUID().ToString(), unit->GetGUID().ToString(), spellEffectInfo.EffectIndex, aura_effmask);
+                    TC_LOG_DEBUG("spells", "[XX-{}] Spell::DoSpellEffectHit - CasterGUID: {} TargetGUID: {} EffectIndex: {} OwnerEffectMask: {}", debugSpellSeqId++, caster->GetGUID().ToString(), unit->GetGUID().ToString(), spellEffectInfo.EffectIndex, aura_effmask);
                 }
 
                 // 4.5 检测目标是否已有该光环，并决定是刷新堆叠还是创建新的光环
@@ -3283,7 +3283,7 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
         m_casttime = m_spellInfo->CalcCastTime(this);
 
     if (debugSpellId == m_spellInfo->Id) {
-        TC_LOG_DEBUG("spells", "[{}] Spell::prepare - CastTime: {}", debugSpellSeqId++, m_casttime);
+        TC_LOG_DEBUG("spells", "[XX-{}] Spell::prepare - CastTime: {}", debugSpellSeqId++, m_casttime);
     }
 
     SpellCastResult movementResult = SPELL_CAST_OK;
@@ -3453,7 +3453,7 @@ void Spell::cast(bool skipCheck)
 void Spell::_cast(bool skipCheck)
 {
     if (debugSpellId == m_spellInfo->Id) {
-        TC_LOG_DEBUG("spells", "[{}] Spell::_cast - skipCheck: {}", debugSpellSeqId++, skipCheck);
+        TC_LOG_DEBUG("spells", "[XX-{}] Spell::_cast - skipCheck: {}", debugSpellSeqId++, skipCheck);
     }
 
     // update pointers base at GUIDs to prevent access to non-existed already object
@@ -3825,7 +3825,7 @@ void Spell::handle_immediate()
 uint64 Spell::handle_delayed(uint64 t_offset)
 {
     if (debugSpellId == m_spellInfo->Id) {
-        TC_LOG_DEBUG("spells", "[{}] Spell::handle_delayed - t_offset: {}", debugSpellSeqId++, t_offset);
+        TC_LOG_DEBUG("spells", "[XX-{}] Spell::handle_delayed - t_offset: {}", debugSpellSeqId++, t_offset);
     }
 
     // 确保目标仍然有效（未脱离视野等）
@@ -3923,7 +3923,7 @@ uint64 Spell::handle_delayed(uint64 t_offset)
 void Spell::_handle_immediate_phase()
 {
     if (debugSpellId == m_spellInfo->Id) {
-        TC_LOG_DEBUG("spells", "[{}] Spell::_handle_immediate_phase", debugSpellSeqId++);
+        TC_LOG_DEBUG("spells", "[XX-{}] Spell::_handle_immediate_phase", debugSpellSeqId++);
     }
 
     // handle some immediate features of the spell here
@@ -4030,7 +4030,7 @@ void Spell::update(uint32 difftime)
             }
 
             if (debugSpellId == m_spellInfo->Id) {
-                TC_LOG_DEBUG("spells", "[{}] Spell::update - m_timer: {}", debugSpellSeqId++, m_timer);
+                TC_LOG_DEBUG("spells", "[XX-{}] Spell::update - m_timer: {}", debugSpellSeqId++, m_timer);
             }
 
             // 读条结束，进入"施法阶段"
@@ -5322,7 +5322,9 @@ void Spell::HandleThreatSpells()
             target->GetThreatManager().AddThreat(unitCaster, threatToAdd, m_spellInfo, true);
         }
     }
-    TC_LOG_DEBUG("spells", "Spell {}, added an additional {} threat for {} {} target(s)", m_spellInfo->Id, threat, IsPositive() ? "assisting" : "harming", uint32(m_UniqueTargetInfo.size()));
+    if (debugSpellId == m_spellInfo->Id) {
+        TC_LOG_DEBUG("spells", "[XX-{}] Spell::HandleThreatSpells - {} threat: {}, target(s): [{}]()", debugSpellSeqId++, IsPositive() ? "assisting" : "harming", threat, m_UniqueTargetInfo.empty() ? "none" : m_UniqueTargetInfo[0].TargetGUID.ToString(), uint32(m_UniqueTargetInfo.size()));
+    }
 }
 
 void Spell::HandleEffects(Unit* pUnitTarget, Item* pItemTarget, GameObject* pGoTarget, Corpse* pCorpseTarget, SpellEffectInfo const& spellEffectInfo, SpellEffectHandleMode mode)
@@ -7724,7 +7726,7 @@ SpellEvent::~SpellEvent()
 bool SpellEvent::Execute(uint64 e_time, uint32 p_time)
 {
     if (debugSpellId == m_Spell->GetSpellInfo()->Id) {
-        TC_LOG_DEBUG("spells", "[{}] SpellEvent::Execute - e_time: {} p_time: {}", debugSpellSeqId++, e_time, p_time);
+        TC_LOG_DEBUG("spells", "[XX-{}] SpellEvent::Execute - e_time: {} p_time: {}", debugSpellSeqId++, e_time, p_time);
     }
 
     // update spell if it is not finished
@@ -7793,7 +7795,7 @@ bool SpellEvent::Execute(uint64 e_time, uint32 p_time)
             else
             {
                 if (debugSpellId == m_Spell->GetSpellInfo()->Id) {
-                    TC_LOG_DEBUG("spells", "[{}] SpellEvent::Execute - DelayStart: {} DelayMoment: {}", debugSpellSeqId++, e_time, m_Spell->GetDelayMoment());
+                    TC_LOG_DEBUG("spells", "[XX-{}] SpellEvent::Execute - DelayStart: {} DelayMoment: {}", debugSpellSeqId++, e_time, m_Spell->GetDelayMoment());
                 }
                 // delaying had just started, record the moment
                 // 将延迟开始时间修正为当前时间（Spell::update 中设置成了 0）
@@ -7842,7 +7844,7 @@ bool Spell::IsValidDeadOrAliveTarget(Unit const* target) const
 void Spell::HandleLaunchPhase()
 {
     if (debugSpellId == m_spellInfo->Id) {
-        TC_LOG_DEBUG("spells", "[{}] Spell::HandleLaunchPhase", debugSpellSeqId++);
+        TC_LOG_DEBUG("spells", "[XX-{}] Spell::HandleLaunchPhase", debugSpellSeqId++);
     }
 
     // handle effects with SPELL_EFFECT_HANDLE_LAUNCH mode

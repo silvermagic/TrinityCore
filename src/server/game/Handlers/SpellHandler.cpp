@@ -409,7 +409,7 @@ void WorldSession::HandleCastSpellOpcode(WorldPacket& recvPacket)
         }
 
     if (debugSpellId == spellInfo->Id) {
-        TC_LOG_DEBUG("spells", "[{}] WorldSession::HandleCastSpellOpcode - TargetMask: {} TargetGUID: {}", debugSpellSeqId++, targets.GetTargetMask(), targets.GetObjectTargetGUID().ToString());
+        TC_LOG_DEBUG("spells", "[XX-{}] WorldSession::HandleCastSpellOpcode - TargetMask: {} TargetGUID: {}", debugSpellSeqId++, targets.GetTargetMask(), targets.GetObjectTargetGUID().ToString());
     }
     // 创建技能实例（动态数据）
     Spell* spell = new Spell(_player, spellInfo, triggerFlag);

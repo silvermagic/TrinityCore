@@ -3331,6 +3331,9 @@ AuraApplication* Unit::_CreateAuraApplication(Aura* aura, uint8 effMask)
 
     SpellInfo const* aurSpellInfo = aura->GetSpellInfo();
     uint32 aurId = aurSpellInfo->Id;
+    if (debugSpellId == aurId) {
+        TC_LOG_DEBUG("spells", "[XX-{}] Unit::_CreateAuraApplication - unit: {} effMask: {}", debugSpellSeqId++, this->GetGUID().ToString(), effMask);
+    }
 
     // ghost spell check, allow apply any auras at player loading in ghost mode (will be cleanup after load)
     if (!IsAlive() && !aurSpellInfo->IsDeathPersistent() &&
