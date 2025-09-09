@@ -21,6 +21,7 @@
 #include "Define.h"
 #include <array>
 #include <string>
+#include <vector>
 
 #define STRINGIZE(a) #a
 
@@ -78,7 +79,7 @@ TC_COMMON_API LocaleConstant GetLocaleByName(std::string const& name);
 
 #define MAX_QUERY_LEN 32*1024
 
-TC_COMMON_API extern uint32 debugSpellId;
+TC_COMMON_API extern std::vector<uint32> debugSpellIds;
 TC_COMMON_API extern uint32 debugSpellSeqId;
 
 #endif

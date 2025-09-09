@@ -830,6 +830,9 @@ void AuraEffect::Update(uint32 diff, Unit* caster)
 
         std::vector<AuraApplication*> effectApplications;
         GetApplicationList(effectApplications);
+        if (std::find(debugSpellIds.begin(), debugSpellIds.end(), GetSpellInfo()->Id) != debugSpellIds.end()) {
+            TC_LOG_DEBUG("spells", "[XX-{}][{}] AuraEffect::Update - this: {} aurApps: {}", debugSpellSeqId++, GetSpellInfo()->Id, (const void*)GetBase(), effectApplications.size());
+        }
 
         // tick on targets of effects
         for (AuraApplication* aurApp : effectApplications)
@@ -5023,6 +5026,10 @@ void AuraEffect::HandlePreventResurrection(AuraApplication const* aurApp, uint8 
 
 void AuraEffect::HandlePeriodicTriggerSpellAuraTick(Unit* target, Unit* caster) const
 {
+    if (std::find(debugSpellIds.begin(), debugSpellIds.end(), GetSpellInfo()->Id) != debugSpellIds.end()) {
+        TC_LOG_DEBUG("spells", "[XX-{}][{}] AuraEffect::HandlePeriodicTriggerSpellAuraTick - aura: {} target: {} caster: {}", debugSpellSeqId++, GetSpellInfo()->Id, (const void*)GetBase(), target->GetGUID().ToString(), caster->GetGUID().ToString());
+    }
+
     uint32 triggerSpellId = GetSpellEffectInfo().TriggerSpell;
     if (triggerSpellId == 0)
     {

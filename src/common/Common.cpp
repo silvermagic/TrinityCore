@@ -39,5 +39,5 @@ LocaleConstant GetLocaleByName(const std::string& name)
     return LOCALE_enUS;                                     // including enGB case
 }
 
-uint32 debugSpellId = 0;
+std::vector<uint32> debugSpellIds = {};
 uint32 debugSpellSeqId = 0;

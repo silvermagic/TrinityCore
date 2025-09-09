@@ -408,8 +408,8 @@ void WorldSession::HandleCastSpellOpcode(WorldPacket& recvPacket)
                 spellInfo = actualSpellInfo;
         }
 
-    if (debugSpellId == spellInfo->Id) {
-        TC_LOG_DEBUG("spells", "[XX-{}] WorldSession::HandleCastSpellOpcode - TargetMask: {} TargetGUID: {}", debugSpellSeqId++, targets.GetTargetMask(), targets.GetObjectTargetGUID().ToString());
+    if (std::find(debugSpellIds.begin(), debugSpellIds.end(), spellInfo->Id) != debugSpellIds.end()) {
+        TC_LOG_DEBUG("spells", "[XX-{}][{}] WorldSession::HandleCastSpellOpcode - TargetMask: {} TargetGUID: {}", debugSpellSeqId++, spellInfo->Id, targets.GetTargetMask(), targets.GetObjectTargetGUID().ToString());
     }
     // 创建技能实例（动态数据）
     Spell* spell = new Spell(_player, spellInfo, triggerFlag);

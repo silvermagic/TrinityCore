@@ -91,8 +91,8 @@ _flags(AFLAG_NONE), _effectsToApply(effMask), _needClientUpdate(false)
             TC_LOG_ERROR("spells", "Aura: {} Effect: {} could not find empty unit visible slot", GetBase()->GetId(), GetEffectMask());
     }
 
-    if (debugSpellId == GetBase()->GetId()) {
-        TC_LOG_DEBUG("spells", "[XX-{}] AuraApplication::AuraApplication - target: {} caster: {} effMask: {}", debugSpellSeqId++, GetTarget()->GetGUID().ToString(), caster->GetGUID().ToString(), GetEffectMask());
+    if (std::find(debugSpellIds.begin(), debugSpellIds.end(), GetBase()->GetId()) != debugSpellIds.end()) {
+        TC_LOG_DEBUG("spells", "[XX-{}][{}] AuraApplication::AuraApplication - this: {} target: {} caster: {} effMask: {}", debugSpellSeqId++, GetBase()->GetId(), (const void*)this, GetTarget()->GetGUID().ToString(), caster->GetGUID().ToString(), GetEffectMask());
     }
 
     _InitFlags(caster, effMask);
@@ -171,8 +171,8 @@ void AuraApplication::_HandleEffect(uint8 effIndex, bool apply)
     ASSERT(aurEff);
     ASSERT(HasEffect(effIndex) == (!apply));
     ASSERT((1<<effIndex) & _effectsToApply);
-    if (debugSpellId == aurEff->GetId()) {
-        TC_LOG_DEBUG("spells", "[XX-{}] AuraApplication::_HandleEffect: {}, target: {}, apply: {}: effIndex: {}, amount: {}", debugSpellSeqId++, aurEff->GetAuraType(), GetTarget()->GetGUID().ToString(), apply, effIndex, aurEff->GetAmount());
+    if (std::find(debugSpellIds.begin(), debugSpellIds.end(), aurEff->GetId()) != debugSpellIds.end()) {
+        TC_LOG_DEBUG("spells", "[XX-{}][{}] AuraApplication::_HandleEffect: {} this: {}, target: {}, apply: {}: effIndex: {}, amount: {}", debugSpellSeqId++, aurEff->GetId(), aurEff->GetAuraType(), (const void*)this, GetTarget()->GetGUID().ToString(), apply, effIndex, aurEff->GetAmount());
     }
 
     if (apply)
@@ -345,10 +345,6 @@ Aura* Aura::TryRefreshStackOrCreate(AuraCreateInfo& createInfo, bool updateEffec
 
 Aura* Aura::TryCreate(AuraCreateInfo& createInfo)
 {
-    if (debugSpellId == createInfo._spellInfo->Id) {
-        TC_LOG_DEBUG("spells", "[XX-{}] Aura::TryCreate", debugSpellSeqId++);
-    }
-
     uint8 effMask = createInfo._auraEffectMask;
     if (createInfo._targetEffectMask)
         effMask = createInfo._targetEffectMask;
@@ -362,10 +358,6 @@ Aura* Aura::TryCreate(AuraCreateInfo& createInfo)
 
 Aura* Aura::Create(AuraCreateInfo& createInfo)
 {
-    if (debugSpellId == createInfo._spellInfo->Id) {
-        TC_LOG_DEBUG("spells", "[XX-{}] Aura::Create", debugSpellSeqId++);
-    }
-
     // try to get caster of aura
     if (createInfo.CasterGUID)
     {
@@ -400,10 +392,6 @@ Aura* Aura::Create(AuraCreateInfo& createInfo)
         case TYPEID_UNIT:
         case TYPEID_PLAYER:
         {
-            if (debugSpellId == createInfo._spellInfo->Id) {
-                TC_LOG_DEBUG("spells", "[XX-{}] Aura::Create - UnitAura", debugSpellSeqId++);
-            }
-
             aura = new UnitAura(createInfo);
 
             // aura can be removed in Unit::_AddAura call
@@ -425,10 +413,6 @@ Aura* Aura::Create(AuraCreateInfo& createInfo)
         case TYPEID_DYNAMICOBJECT:
             createInfo._auraEffectMask = Aura::BuildEffectMaskForOwner(createInfo._spellInfo, createInfo._auraEffectMask, createInfo._owner);
             ASSERT_NODEBUGINFO(createInfo._auraEffectMask);
-
-            if (debugSpellId == createInfo._spellInfo->Id) {
-                TC_LOG_DEBUG("spells", "[XX-{}] Aura::Create - DynObjAura", debugSpellSeqId++);
-            }
 
             aura = new DynObjAura(createInfo);
             break;
@@ -544,8 +528,8 @@ void Aura::SaveCasterInfo(Unit* caster)
 
 Aura::~Aura()
 {
-    if (debugSpellId == m_spellInfo->Id) {
-        TC_LOG_DEBUG("spells", "[XX-{}] Aura::~Aura", debugSpellSeqId++);
+    if (std::find(debugSpellIds.begin(), debugSpellIds.end(), m_spellInfo->Id) != debugSpellIds.end()) {
+        TC_LOG_DEBUG("spells", "[XX-{}][{}] Aura::~Aura - this: {}", debugSpellSeqId++, m_spellInfo->Id, (const void*)this);
     }
 
     // unload scripts
@@ -583,8 +567,8 @@ void Aura::_ApplyForTarget(Unit* target, Unit* caster, AuraApplication* auraApp)
     // aura mustn't be already applied on target
     ASSERT (!IsAppliedOnTarget(target->GetGUID()) && "Aura::_ApplyForTarget: aura musn't be already applied on target");
 
-    if (debugSpellId == m_spellInfo->Id) {
-        TC_LOG_DEBUG("spells", "[XX-{}] Aura::_ApplyForTarget - CastGUID: {} TargetGUID: {}", debugSpellSeqId++, caster->GetGUID().ToString(), target->GetGUID().ToString());
+    if (std::find(debugSpellIds.begin(), debugSpellIds.end(), m_spellInfo->Id) != debugSpellIds.end()) {
+        TC_LOG_DEBUG("spells", "[XX-{}][{}] Aura::_ApplyForTarget - this: {} CastGUID: {} TargetGUID: {}", debugSpellSeqId++, m_spellInfo->Id, (const void*)this, caster->GetGUID().ToString(), target->GetGUID().ToString());
     }
 
     m_applications[target->GetGUID()] = auraApp;
@@ -606,8 +590,8 @@ void Aura::_UnapplyForTarget(Unit* target, Unit* caster, AuraApplication* auraAp
     ASSERT(auraApp->GetRemoveMode());
     ASSERT(auraApp);
 
-    if (debugSpellId == m_spellInfo->Id) {
-        TC_LOG_DEBUG("spells", "[XX-{}] Aura::_UnapplyForTarget - CastGUID: {} TargetGUID: {}", debugSpellSeqId++, caster->GetGUID().ToString(), target->GetGUID().ToString());
+    if (std::find(debugSpellIds.begin(), debugSpellIds.end(), m_spellInfo->Id) != debugSpellIds.end()) {
+        TC_LOG_DEBUG("spells", "[XX-{}][{}] Aura::_UnapplyForTarget - this: {} CastGUID: {} TargetGUID: {}", debugSpellSeqId++, m_spellInfo->Id, (const void*)this, caster->GetGUID().ToString(), target->GetGUID().ToString());
     }
 
     ApplicationMap::iterator itr = m_applications.find(target->GetGUID());
@@ -661,8 +645,8 @@ void Aura::UpdateTargetMap(Unit* caster, bool apply)
     if (IsRemoved())
         return;
 
-    if (debugSpellId == GetId()) {
-        TC_LOG_DEBUG("spells", "[XX-{}] Aura::UpdateTargetMap - owner: {}, caster: {}, apply: {}", debugSpellSeqId++, GetOwner()->GetGUID().ToString(), caster->GetGUID().ToString(), apply);
+    if (std::find(debugSpellIds.begin(), debugSpellIds.end(), GetId()) != debugSpellIds.end()) {
+        TC_LOG_DEBUG("spells", "[XX-{}][{}] Aura::UpdateTargetMap - this: {} owner: {}, caster: {}, apply: {}", debugSpellSeqId++, m_spellInfo->Id, (const void*)this, GetOwner()->GetGUID().ToString(), caster->GetGUID().ToString(), apply);
     }
 
     m_updateTargetMapInterval = UPDATE_TARGET_MAP_INTERVAL;
@@ -728,6 +712,10 @@ void Aura::UpdateTargetMap(Unit* caster, bool apply)
         // Dynobj auras don't hit flying targets
         if (GetType() == DYNOBJ_AURA_TYPE && itr->first->IsInFlight())
             addUnit = false;
+
+        if (std::find(debugSpellIds.begin(), debugSpellIds.end(), GetSpellInfo()->Id) != debugSpellIds.end()) {
+            TC_LOG_DEBUG("spells", "[XX-{}][{}] Aura::UpdateTargetMap - this: {} owner: {}, target: {}, addUnit: {}", debugSpellSeqId++, m_spellInfo->Id, (const void*)this, GetOwner()->GetGUID().ToString(), itr->first->GetGUID().ToString(), addUnit);
+        }
 
         // Do not apply aura if it cannot stack with existing auras
         if (addUnit)
@@ -838,8 +826,8 @@ void Aura::UpdateOwner(uint32 diff, WorldObject* owner)
         }
     }
 
-    if (debugSpellId == GetSpellInfo()->Id) {
-        TC_LOG_DEBUG("spells", "[XX-{}] Aura::UpdateOwner - CasterGUID: {} OwnerGUID: {}", debugSpellSeqId++, caster != nullptr ? caster->GetGUID().ToString() : "", owner->GetGUID().ToString());
+    if (std::find(debugSpellIds.begin(), debugSpellIds.end(), GetSpellInfo()->Id) != debugSpellIds.end()) {
+        TC_LOG_DEBUG("spells", "[XX-{}][{}] Aura::UpdateOwner - this: {} owner: {}", debugSpellSeqId++, m_spellInfo->Id, (const void*)this, owner->GetGUID().ToString());
     }
 
     // 更新光环效果剩余时间
@@ -867,8 +855,8 @@ void Aura::Update(uint32 diff, Unit* caster)
 {
     if (m_duration > 0)
     {
-        if (debugSpellId == GetSpellInfo()->Id) {
-            TC_LOG_DEBUG("spells", "[XX-{}] Aura::Update - m_duration: {} diff: {}", debugSpellSeqId++, m_duration, diff);
+        if (std::find(debugSpellIds.begin(), debugSpellIds.end(), GetSpellInfo()->Id) != debugSpellIds.end()) {
+            TC_LOG_DEBUG("spells", "[XX-{}][{}] Aura::Update -  this: {} owner: {} m_duration: {} diff: {}", debugSpellSeqId++, m_spellInfo->Id, (const void*)this, GetOwner()->GetGUID().ToString(), m_duration, diff);
         }
 
         m_duration -= diff;
@@ -2610,8 +2598,8 @@ std::string Aura::GetDebugInfo() const
 UnitAura::UnitAura(AuraCreateInfo const& createInfo)
     : Aura(createInfo)
 {
-    if (debugSpellId == m_spellInfo->Id) {
-        TC_LOG_DEBUG("spells", "[XX-{}] UnitAura::UnitAura - owner: {}, caster: {} OwnerEffectMask: {}", debugSpellSeqId++, GetUnitOwner()->GetGUID().ToString(), createInfo.CasterGUID.ToString(), createInfo.GetAuraEffectMask());
+    if (std::find(debugSpellIds.begin(), debugSpellIds.end(), m_spellInfo->Id) != debugSpellIds.end()) {
+        TC_LOG_DEBUG("spells", "[XX-{}][{}] UnitAura::UnitAura - this: {} owner: {}, caster: {} OwnerEffectMask: {}", debugSpellSeqId++, m_spellInfo->Id, (const void*)this, GetUnitOwner()->GetGUID().ToString(), createInfo.CasterGUID.ToString(), createInfo.GetAuraEffectMask());
     }
 
     m_AuraDRGroup = DIMINISHING_NONE;
@@ -2640,8 +2628,8 @@ void UnitAura::_UnapplyForTarget(Unit* target, Unit* caster, AuraApplication* au
 
 void UnitAura::Remove(AuraRemoveMode removeMode)
 {
-    if (debugSpellId == m_spellInfo->Id) {
-        TC_LOG_DEBUG("spells", "[XX-{}] UnitAura::Remove", debugSpellSeqId++);
+    if (std::find(debugSpellIds.begin(), debugSpellIds.end(), m_spellInfo->Id) != debugSpellIds.end()) {
+        TC_LOG_DEBUG("spells", "[XX-{}][{}] UnitAura::Remove - this: {}", debugSpellSeqId++, m_spellInfo->Id, (const void*)this);
     }
 
     if (IsRemoved())
@@ -2654,8 +2642,8 @@ void UnitAura::FillTargetMap(std::unordered_map<Unit*, uint8>& targets, Unit* ca
     if (GetSpellInfo()->HasAttribute(SPELL_ATTR7_DISABLE_AURA_WHILE_DEAD) && !GetUnitOwner()->IsAlive())
         return;
 
-    if (debugSpellId == GetSpellInfo()->Id) {
-        TC_LOG_DEBUG("spells", "[XX-{}] UnitAura::FillTargetMap - owner: {}, caster: {}", debugSpellSeqId++, GetUnitOwner()->GetGUID().ToString(), caster->GetGUID().ToString());
+    if (std::find(debugSpellIds.begin(), debugSpellIds.end(), GetSpellInfo()->Id) != debugSpellIds.end()) {
+        TC_LOG_DEBUG("spells", "[XX-{}][{}] UnitAura::FillTargetMap - this: {} owner: {}, caster: {}", debugSpellSeqId++, m_spellInfo->Id, (const void*)this, GetUnitOwner()->GetGUID().ToString(), caster->GetGUID().ToString());
     }
 
     Unit* ref = caster;
@@ -2735,8 +2723,12 @@ void UnitAura::FillTargetMap(std::unordered_map<Unit*, uint8>& targets, Unit* ca
             Cell::VisitAllObjects(GetUnitOwner(), searcher, radius + extraSearchRadius);
         }
 
-        for (Unit* unit : units)
+        for (Unit* unit : units) {
             targets[unit] |= 1 << spellEffectInfo.EffectIndex;
+            if (std::find(debugSpellIds.begin(), debugSpellIds.end(), GetSpellInfo()->Id) != debugSpellIds.end()) {
+                TC_LOG_DEBUG("spells", "[XX-{}][{}] UnitAura::FillTargetMap - this: {} owner: {}, target: {}", debugSpellSeqId++, m_spellInfo->Id, (const void*)this, GetUnitOwner()->GetGUID().ToString(), unit->GetGUID().ToString());
+            }
+        }
     }
 }
 
@@ -2758,8 +2750,8 @@ void UnitAura::AddStaticApplication(Unit* target, uint8 effMask)
 DynObjAura::DynObjAura(AuraCreateInfo const& createInfo)
     : Aura(createInfo)
 {
-    if (debugSpellId == m_spellInfo->Id) {
-            TC_LOG_DEBUG("spells", "[XX-{}] DynObjAura::DynObjAura - owner: {}, caster: {} OwnerEffectMask: {}", debugSpellSeqId++, GetDynobjOwner()->GetGUID().ToString(), createInfo.CasterGUID.ToString(), createInfo.GetAuraEffectMask());
+    if (std::find(debugSpellIds.begin(), debugSpellIds.end(), m_spellInfo->Id) != debugSpellIds.end()) {
+        TC_LOG_DEBUG("spells", "[XX-{}][{}] DynObjAura::DynObjAura - this: {} owner: {}, caster: {} OwnerEffectMask: {}", debugSpellSeqId++, m_spellInfo->Id, (const void*)this, GetDynobjOwner()->GetGUID().ToString(), createInfo.CasterGUID.ToString(), createInfo.GetAuraEffectMask());
     }
 
     LoadScripts();
@@ -2773,8 +2765,8 @@ DynObjAura::DynObjAura(AuraCreateInfo const& createInfo)
 
 void DynObjAura::Remove(AuraRemoveMode removeMode)
 {
-    if (debugSpellId == m_spellInfo->Id) {
-        TC_LOG_DEBUG("spells", "[XX-{}] DynObjAura::Remove", debugSpellSeqId++);
+    if (std::find(debugSpellIds.begin(), debugSpellIds.end(), m_spellInfo->Id) != debugSpellIds.end()) {
+        TC_LOG_DEBUG("spells", "[XX-{}][{}] DynObjAura::Remove - this: {}", debugSpellSeqId++, m_spellInfo->Id, (const void*)this);
     }
 
     if (IsRemoved())
@@ -2787,8 +2779,8 @@ void DynObjAura::FillTargetMap(std::unordered_map<Unit*, uint8>& targets, Unit* 
     Unit* dynObjOwnerCaster = GetDynobjOwner()->GetCaster();
     float radius = GetDynobjOwner()->GetRadius();
 
-    if (debugSpellId == GetSpellInfo()->Id) {
-        TC_LOG_DEBUG("spells", "[XX-{}] DynObjAura::FillTargetMap - owner: {}, caster: {}", debugSpellSeqId++, GetDynobjOwner()->GetGUID().ToString(), dynObjOwnerCaster->GetGUID().ToString());
+    if (std::find(debugSpellIds.begin(), debugSpellIds.end(), GetSpellInfo()->Id) != debugSpellIds.end()) {
+        TC_LOG_DEBUG("spells", "[XX-{}][{}] DynObjAura::FillTargetMap - this: {} owner: {}, caster: {}", debugSpellSeqId++, m_spellInfo->Id, (const void*)this, GetDynobjOwner()->GetGUID().ToString(), dynObjOwnerCaster->GetGUID().ToString());
     }
 
     for (SpellEffectInfo const& spellEffectInfo : GetSpellInfo()->GetEffects())
@@ -2808,8 +2800,12 @@ void DynObjAura::FillTargetMap(std::unordered_map<Unit*, uint8>& targets, Unit* 
         Trinity::UnitListSearcher<Trinity::WorldObjectSpellAreaTargetCheck> searcher(GetDynobjOwner(), units, check);
         Cell::VisitAllObjects(GetDynobjOwner(), searcher, radius);
 
-        for (Unit* unit : units)
+        for (Unit* unit : units) {
             targets[unit] |= 1 << spellEffectInfo.EffectIndex;
+            if (std::find(debugSpellIds.begin(), debugSpellIds.end(), GetSpellInfo()->Id) != debugSpellIds.end()) {
+                TC_LOG_DEBUG("spells", "[XX-{}][{}] DynObjAura::FillTargetMap - this: {} owner: {}, target: {}", debugSpellSeqId++, m_spellInfo->Id, (const void*)this, GetDynobjOwner()->GetGUID().ToString(), unit->GetGUID().ToString());
+            }
+        }
     }
 }
 

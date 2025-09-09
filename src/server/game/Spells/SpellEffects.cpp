@@ -321,8 +321,8 @@ void Spell::EffectSchoolDMG()
     if (effectHandleMode != SPELL_EFFECT_HANDLE_LAUNCH_TARGET)
         return;
 
-    if (debugSpellId == m_spellInfo->Id) {
-        TC_LOG_DEBUG("spells", "[XX-{}] Spell::EffectSchoolDMG", debugSpellSeqId++);
+    if (std::find(debugSpellIds.begin(), debugSpellIds.end(), m_spellInfo->Id) != debugSpellIds.end()) {
+        TC_LOG_DEBUG("spells", "[XX-{}][{}] Spell::EffectSchoolDMG", debugSpellSeqId++, m_spellInfo->Id);
     }
 
     if (unitTarget && unitTarget->IsAlive())
@@ -1077,8 +1077,8 @@ void Spell::EffectApplyAura()
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
         return;
 
-    if (debugSpellId == m_spellInfo->Id) {
-        TC_LOG_DEBUG("spells", "[XX-{}] Spell::EffectApplyAura", debugSpellSeqId++);
+    if (std::find(debugSpellIds.begin(), debugSpellIds.end(), m_spellInfo->Id) != debugSpellIds.end()) {
+        TC_LOG_DEBUG("spells", "[XX-{}][{}] Spell::EffectApplyAura", debugSpellSeqId++, m_spellInfo->Id);
     }
 
     if (!_spellAura || !unitTarget)
@@ -1088,8 +1088,8 @@ void Spell::EffectApplyAura()
     // 绑定目标与光环效果
     // 检查目标是否已存在该光环效果
     AuraApplication* aurApp = _spellAura->GetApplicationOfTarget(unitTarget->GetGUID());
-    if (debugSpellId == m_spellInfo->Id) {
-        TC_LOG_DEBUG("spells", "[XX-{}] Spell::EffectApplyAura - unitTarget: {} aurApp: {} effMask: {}", debugSpellSeqId++, unitTarget->GetGUID().ToString(), aurApp ? "true" : "false", 1 << effectInfo->EffectIndex);
+    if (std::find(debugSpellIds.begin(), debugSpellIds.end(), m_spellInfo->Id) != debugSpellIds.end()) {
+        TC_LOG_DEBUG("spells", "[XX-{}][{}] Spell::EffectApplyAura - unitTarget: {} aurApp: {} effMask: {}", debugSpellSeqId++, m_spellInfo->Id, unitTarget->GetGUID().ToString(), aurApp ? "true" : "false", 1 << effectInfo->EffectIndex);
     }
     if (!aurApp)
         // 若不存在，则创建目标与光环效果的绑定关系
@@ -1581,8 +1581,8 @@ void Spell::EffectPersistentAA()
     if (!unitCaster)
         return;
 
-    if (debugSpellId == m_spellInfo->Id) {
-        TC_LOG_DEBUG("spells", "[XX-{}] Spell::EffectPersistentAA - Caster: {}", debugSpellSeqId++, unitCaster->GetGUID().ToString());
+    if (std::find(debugSpellIds.begin(), debugSpellIds.end(), m_spellInfo->Id) != debugSpellIds.end()) {
+        TC_LOG_DEBUG("spells", "[XX-{}][{}] Spell::EffectPersistentAA - Caster: {}", debugSpellSeqId++, m_spellInfo->Id, unitCaster->GetGUID().ToString());
     }
 
     // only handle at last effect

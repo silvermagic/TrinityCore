@@ -90,6 +90,7 @@
 #include "WorldSession.h"
 
 #include <boost/asio/ip/address.hpp>
+#include <boost/algorithm/string.hpp>
 
 TC_GAME_API std::atomic<bool> World::m_stopEvent(false);
 TC_GAME_API uint8 World::m_ExitCode = SHUTDOWN_EXIT_CODE;
@@ -1545,7 +1546,26 @@ void World::LoadConfigSettings(bool reload)
     // Specifies if IP addresses can be logged to the database
     m_bool_configs[CONFIG_ALLOW_LOGGING_IP_ADDRESSES_IN_DATABASE] = sConfigMgr->GetBoolDefault("AllowLoggingIPAddressesInDatabase", true, true);
 
-    debugSpellId = sConfigMgr->GetIntDefault("Debug.spell.id", 0);
+    std::string debugSpellIdsStr = sConfigMgr->GetStringDefault("Debug.spell.ids", "");
+    debugSpellIds.clear();
+    std::vector<std::string> tokens;
+    boost::split(tokens, debugSpellIdsStr, boost::is_any_of(","), boost::token_compress_off);
+    for (auto& token : tokens)
+    {
+        boost::algorithm::trim(token); // 去掉首尾空格
+        if (!token.empty())
+        {
+            try
+            {
+                uint32 id = static_cast<uint32>(std::stoul(token));
+                debugSpellIds.push_back(id);
+            }
+            catch (...)
+            {
+                TC_LOG_ERROR("spells", "Invalid spell id in Debug.spell.ids: '{}'", token);
+            }
+        }
+    }
 
     // call ScriptMgr if we're reloading the configuration
     if (reload)
