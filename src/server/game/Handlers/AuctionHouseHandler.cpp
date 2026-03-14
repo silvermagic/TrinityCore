@@ -1,5 +1,29 @@
-/*
- * This file is part of the TrinityCore Project. See AUTHORS file for Copyright information
+/**
+ * @file AuctionHouseHandler.cpp
+ * @brief 拍卖行系统网络包处理器实现
+ *
+ * 本文件实现了拍卖行系统的所有网络消息处理功能，包括：
+ * - 拍卖行交互初始化（打开拍卖行窗口）
+ * - 创建拍卖（上架物品）
+ * - 竞价和一口价购买
+ * - 取消拍卖
+ * - 搜索拍卖物品
+ * - 查看竞拍列表和我的拍卖列表
+ *
+ * 拍卖行系统允许玩家在游戏中买卖物品，支持：
+ * - 单物品和多物品堆叠拍卖
+ * - 设置起拍价和一口价
+ * - 多种搜索筛选条件
+ * - 邮件通知系统
+ * - 拍卖行手续费和押金机制
+ *
+ * 主要相关类：
+ * - WorldSession: 处理网络消息的会话类
+ * - AuctionHouseMgr: 拍卖行管理器
+ * - AuctionHouseObject: 拍卖行对象，存储拍卖条目
+ * - AuctionEntry: 单个拍卖条目数据结构
+ *
+ * @copyright This file is part of the TrinityCore Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -35,7 +59,25 @@
 #include "World.h"
 #include "WorldPacket.h"
 
-//void called when player click on auctioneer npc
+/**
+ * @brief 处理玩家与拍卖师NPC交互的网络包
+ *
+ * 职责：
+ *   当玩家点击拍卖师NPC时调用此函数,处理拍卖行窗口的打开请求。
+ *   验证玩家是否可以与拍卖师交互,并发送拍卖行欢迎消息。
+ *
+ * 参数：
+ *   @param recvData [in] 接收到的网络包数据,包含拍卖师的GUID
+ *
+ * 返回值：
+ *   无
+ *
+ * 主要流程：
+ *   1. 从网络包中读取拍卖师NPC的GUID
+ *   2. 验证玩家是否可以与该NPC交互(距离、NPC标志等)
+ *   3. 如果玩家处于假死状态,移除假死光环
+ *   4. 发送拍卖行欢迎消息,打开拍卖行窗口
+ */
 void WorldSession::HandleAuctionHelloOpcode(WorldPacket& recvData)
 {
     ObjectGuid guid;                                            //NPC guid
@@ -48,14 +90,33 @@ void WorldSession::HandleAuctionHelloOpcode(WorldPacket& recvData)
         return;
     }
 
-    // remove fake death
+    // 移除假死状态
     if (GetPlayer()->HasUnitState(UNIT_STATE_DIED))
         GetPlayer()->RemoveAurasByType(SPELL_AURA_FEIGN_DEATH);
 
     SendAuctionHello(guid, unit);
 }
 
-//this void causes that auction window is opened
+/**
+ * @brief 发送拍卖行欢迎消息,打开拍卖行窗口
+ *
+ * 职责：
+ *   向客户端发送拍卖行初始化数据,包括拍卖师GUID和拍卖行ID。
+ *   验证玩家等级是否满足使用拍卖行的要求。
+ *
+ * 参数：
+ *   @param guid [in] 拍卖师NPC的GUID
+ *   @param unit [in] 拍卖师NPC对象指针
+ *
+ * 返回值：
+ *   无
+ *
+ * 主要流程：
+ *   1. 检查玩家等级是否满足拍卖行使用要求
+ *   2. 根据拍卖师的阵营获取对应的拍卖行配置
+ *   3. 构建并发送MSG_AUCTION_HELLO消息包
+ *   4. 消息包含拍卖师GUID、拍卖行ID和启用状态标志
+ */
 void WorldSession::SendAuctionHello(ObjectGuid guid, Creature* unit)
 {
     if (GetPlayer()->GetLevel() < sWorld->getIntConfig(CONFIG_AUCTION_LEVEL_REQ))
@@ -75,7 +136,28 @@ void WorldSession::SendAuctionHello(ObjectGuid guid, Creature* unit)
     SendPacket(&data);
 }
 
-//call this method when player bids, creates, or deletes auction
+/**
+ * @brief 发送拍卖行命令执行结果
+ *
+ * 职责：
+ *   向客户端发送拍卖操作的执行结果,包括出价、创建或删除拍卖的结果。
+ *   用于通知客户端拍卖操作是否成功及失败原因。
+ *
+ * 参数：
+ *   @param auctionItemId [in] 拍卖项ID
+ *   @param command       [in] 执行的拍卖命令类型(创建、出价、取消等)
+ *   @param errorCode     [in] 操作结果错误码
+ *   @param bagResult     [in] 背包相关错误码(仅在ERR_AUCTION_INVENTORY错误时发送)
+ *
+ * 返回值：
+ *   无
+ *
+ * 主要流程：
+ *   1. 构建SMSG_AUCTION_COMMAND_RESULT消息包
+ *   2. 写入拍卖项ID、命令类型和错误码
+ *   3. 如果是背包错误,额外写入背包错误码
+ *   4. 发送消息包给客户端
+ */
 void WorldSession::SendAuctionCommandResult(uint32 auctionItemId, AuctionAction command, AuctionError errorCode, InventoryResult bagResult)
 {
     WorldPacket data(SMSG_AUCTION_COMMAND_RESULT, 16);
@@ -87,7 +169,29 @@ void WorldSession::SendAuctionCommandResult(uint32 auctionItemId, AuctionAction 
     SendPacket(&data);
 }
 
-//this function sends notification, if bidder is online
+/**
+ * @brief 发送竞价者通知消息
+ *
+ * 职责：
+ *   当拍卖被其他人出价时,向在线的竞价者发送通知。
+ *   通知内容包括拍卖位置、拍卖ID、出价者、出价金额等信息。
+ *
+ * 参数：
+ *   @param location  [in] 拍卖行位置ID
+ *   @param auctionId [in] 拍卖ID
+ *   @param bidder    [in] 出价者GUID
+ *   @param bidSum    [in] 出价总金额
+ *   @param diff      [in] 出价差额
+ *   @param itemEntry [in] 物品模板ID
+ *
+ * 返回值：
+ *   无
+ *
+ * 主要流程：
+ *   1. 构建SMSG_AUCTION_BIDDER_NOTIFICATION消息包
+ *   2. 写入拍卖位置、拍卖ID、出价者GUID等信息
+ *   3. 发送消息包通知竞价者
+ */
 void WorldSession::SendAuctionBidderNotification(uint32 location, uint32 auctionId, ObjectGuid bidder, uint32 bidSum, uint32 diff, uint32 itemEntry)
 {
     WorldPacket data(SMSG_AUCTION_BIDDER_NOTIFICATION, (8*4));
@@ -101,7 +205,24 @@ void WorldSession::SendAuctionBidderNotification(uint32 location, uint32 auction
     SendPacket(&data);
 }
 
-//this void causes on client to display: "Your auction sold"
+/**
+ * @brief 发送拍卖所有者通知消息
+ *
+ * 职责：
+ *   当拍卖售出时,向拍卖所有者发送通知消息。
+ *   在客户端显示"你的拍卖已售出"提示。
+ *
+ * 参数：
+ *   @param auction [in] 拍卖条目指针,包含拍卖的详细信息
+ *
+ * 返回值：
+ *   无
+ *
+ * 主要流程：
+ *   1. 构建SMSG_AUCTION_OWNER_NOTIFICATION消息包
+ *   2. 写入拍卖ID、出价金额、物品模板ID等信息
+ *   3. 发送消息包通知拍卖所有者
+ */
 void WorldSession::SendAuctionOwnerNotification(AuctionEntry* auction)
 {
     WorldPacket data(SMSG_AUCTION_OWNER_NOTIFICATION, (8*4));
@@ -115,7 +236,39 @@ void WorldSession::SendAuctionOwnerNotification(AuctionEntry* auction)
     SendPacket(&data);
 }
 
-//this void creates new auction and adds auction to some auctionhouse
+/**
+ * @brief 处理玩家创建拍卖的网络包
+ *
+ * 职责：
+ *   处理玩家在拍卖行创建新拍卖的请求。支持单个或多个物品堆叠拍卖,
+ *   验证物品的合法性、扣除押金、创建拍卖条目并保存到数据库。
+ *
+ * 参数：
+ *   @param recvData [in] 接收到的网络包数据,包含:
+ *                       - auctioneer: 拍卖师GUID
+ *                       - itemsCount: 物品数量
+ *                       - itemGUIDs[]: 物品GUID数组
+ *                       - count[]: 各物品的数量数组
+ *                       - bid: 起拍价
+ *                       - buyout: 一口价
+ *                       - etime: 拍卖时长(分钟)
+ *
+ * 返回值：
+ *   无
+ *
+ * 主要流程：
+ *   1. 读取并验证网络包数据的有效性
+ *   2. 验证拍卖师NPC是否可交互
+ *   3. 验证物品是否存在、可交易、未被拍卖等条件
+ *   4. 检查物品堆叠数量和重复GUID
+ *   5. 计算并扣除拍卖押金
+ *   6. 创建拍卖条目并设置相关属性
+ *   7. 处理物品转移:
+ *      - 如果物品数量匹配,直接转移到拍卖行
+ *      - 如果需要拆分,克隆物品并更新原物品堆叠数
+ *   8. 保存拍卖和物品数据到数据库
+ *   9. 发送创建成功消息并更新成就进度
+ */
 void WorldSession::HandleAuctionSellItem(WorldPacket& recvData)
 {
     ObjectGuid auctioneer;
@@ -225,7 +378,7 @@ void WorldSession::HandleAuctionSellItem(WorldPacket& recvData)
         return;
     }
 
-    // check if there are 2 identical guids, in this case user is most likely cheating
+    // 检查是否存在重复的GUID,如果存在则可能是作弊行为
     for (uint32 i = 0; i < itemsCount - 1; ++i)
     {
         for (uint32 j = i + 1; j < itemsCount; ++j)
@@ -289,7 +442,7 @@ void WorldSession::HandleAuctionSellItem(WorldPacket& recvData)
         AH->houseId = AHEntry->ID;
     }
 
-    // Required stack size of auction matches to current item stack size, just move item to auctionhouse
+    // 要求的堆叠数量与当前物品堆叠数量匹配,直接将物品转移到拍卖行
     if (itemsCount == 1 && item->GetCount() == count[0])
     {
         if (HasPermission(rbac::RBAC_PERM_LOG_GM_TRADE))
@@ -316,7 +469,7 @@ void WorldSession::HandleAuctionSellItem(WorldPacket& recvData)
         TC_LOG_INFO("network", "CMSG_AUCTION_SELL_ITEM: Player {} {} is selling item {} entry {} {} with count {} with initial bid {} with buyout {} and with time {} (in sec) in auctionhouse {}",
             _player->GetName(), _player->GetGUID().ToString(), item->GetTemplate()->Name1, item->GetEntry(), item->GetGUID().ToString(), item->GetCount(), bid, buyout, auctionTime, AH->GetHouseId());
 
-        // Add to pending auctions, or fail with insufficient funds error
+        // 添加到待处理拍卖列表,如果资金不足则失败
         if (!sAuctionMgr->PendingAuctionAdd(_player, AH))
         {
             SendAuctionCommandResult(AH->Id, AUCTION_SELL_ITEM, ERR_AUCTION_NOT_ENOUGHT_MONEY);
@@ -339,7 +492,7 @@ void WorldSession::HandleAuctionSellItem(WorldPacket& recvData)
 
         GetPlayer()->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_CREATE_AUCTION, 1);
     }
-    else // Required stack size of auction does not match to current item stack size, clone item and set correct stack size
+    else // 要求的堆叠数量与当前物品堆叠数量不匹配,克隆物品并设置正确的堆叠数量
     {
         Item* newItem = item->CloneItem(finalCount, _player);
         if (!newItem)
@@ -374,7 +527,7 @@ void WorldSession::HandleAuctionSellItem(WorldPacket& recvData)
         TC_LOG_INFO("network", "CMSG_AUCTION_SELL_ITEM: Player {} {} is selling item {} entry {} {} with count {} with initial bid {} with buyout {} and with time {} (in sec) in auctionhouse {}",
             _player->GetName(), _player->GetGUID().ToString(), newItem->GetTemplate()->Name1, newItem->GetEntry(), newItem->GetGUID().ToString(), newItem->GetCount(), bid, buyout, auctionTime, AH->GetHouseId());
 
-        // Add to pending auctions, or fail with insufficient funds error
+        // 添加到待处理拍卖列表,如果资金不足则失败
         if (!sAuctionMgr->PendingAuctionAdd(_player, AH))
         {
             SendAuctionCommandResult(AH->Id, AUCTION_SELL_ITEM, ERR_AUCTION_NOT_ENOUGHT_MONEY);
@@ -387,7 +540,7 @@ void WorldSession::HandleAuctionSellItem(WorldPacket& recvData)
         {
             Item* item2 = items[j];
 
-            // Item stack count equals required count, ready to delete item - cloned item will be used for auction
+            // 物品堆叠数量等于所需数量,准备删除物品 - 克隆的物品将用于拍卖
             if (item2->GetCount() == count[j])
             {
                 _player->MoveItemFromInventory(item2->GetBagSlot(), item2->GetSlot(), true);
@@ -398,7 +551,7 @@ void WorldSession::HandleAuctionSellItem(WorldPacket& recvData)
                 CharacterDatabase.CommitTransaction(trans);
                 delete item2;
             }
-            else // Item stack count is bigger than required count, update item stack count and save to database - cloned item will be used for auction
+            else // 物品堆叠数量大于所需数量,更新物品堆叠数量并保存到数据库 - 克隆的物品将用于拍卖
             {
                 item2->SetCount(item2->GetCount() - count[j]);
                 item2->SetState(ITEM_CHANGED, _player);
@@ -423,7 +576,43 @@ void WorldSession::HandleAuctionSellItem(WorldPacket& recvData)
     }
 }
 
-//this function is called when client bids or buys out auction
+/**
+ * @brief 处理玩家对拍卖出价或一口价购买的网络包
+ *
+ * 职责：
+ *   处理玩家对拍卖物品的出价请求,包括普通出价和一口价购买。
+ *   验证出价的有效性,处理资金转移,发送通知邮件,更新数据库。
+ *
+ * 参数：
+ *   @param recvData [in] 接收到的网络包数据,包含:
+ *                       - auctioneer: 拍卖师GUID
+ *                       - auctionId: 拍卖ID
+ *                       - price: 出价金额
+ *
+ * 返回值：
+ *   无
+ *
+ * 主要流程：
+ *   1. 读取并验证网络包数据
+ *   2. 验证拍卖师NPC是否可交互
+ *   3. 获取拍卖条目并验证:
+ *      - 玩家不能竞拍自己的拍卖
+ *      - 玩家不能竞拍同一账号下其他角色的拍卖
+ *      - 出价必须高于当前出价和起拍价
+ *      - 玩家必须有足够的金币
+ *   4. 处理出价逻辑:
+ *      a) 普通出价(price < buyout):
+ *         - 退还之前竞价者的金币
+ *         - 扣除玩家金币
+ *         - 更新拍卖条目
+ *         - 发送出价成功消息
+ *      b) 一口价购买(price >= buyout):
+ *         - 扣除玩家金币
+ *         - 发送通知邮件给卖方和买方
+ *         - 从拍卖行移除物品
+ *         - 发送购买成功消息
+ *   5. 保存数据到数据库
+ */
 void WorldSession::HandleAuctionPlaceBid(WorldPacket& recvData)
 {
     TC_LOG_DEBUG("network", "WORLD: Received CMSG_AUCTION_PLACE_BID");
@@ -435,7 +624,7 @@ void WorldSession::HandleAuctionPlaceBid(WorldPacket& recvData)
     recvData >> auctionId >> price;
 
     if (!auctionId || !price)
-        return;                                             //check for cheaters
+        return;                                             // 检查作弊者
 
     Creature* creature = GetPlayer()->GetNPCIfCanInteractWith(auctioneer, UNIT_NPC_FLAG_AUCTIONEER);
     if (!creature)
@@ -444,7 +633,7 @@ void WorldSession::HandleAuctionPlaceBid(WorldPacket& recvData)
         return;
     }
 
-    // remove fake death
+    // 移除假死状态
     if (GetPlayer()->HasUnitState(UNIT_STATE_DIED))
         GetPlayer()->RemoveAurasByType(SPELL_AURA_FEIGN_DEATH);
 
@@ -455,36 +644,36 @@ void WorldSession::HandleAuctionPlaceBid(WorldPacket& recvData)
 
     if (!auction || auction->owner == player->GetGUID().GetCounter())
     {
-        //you cannot bid your own auction:
+        // 你不能竞拍自己的拍卖
         SendAuctionCommandResult(0, AUCTION_PLACE_BID, ERR_AUCTION_BID_OWN);
         return;
     }
 
-    // impossible have online own another character (use this for speedup check in case online owner)
+    // 不可能同时在线拥有另一个角色(使用此方法加速检查,当所有者在线时)
     ObjectGuid ownerGuid(HighGuid::Player, auction->owner);
     Player* auction_owner = ObjectAccessor::FindPlayer(ownerGuid);
     if (!auction_owner && sCharacterCache->GetCharacterAccountIdByGuid(ownerGuid) == player->GetSession()->GetAccountId())
     {
-        //you cannot bid your another character auction:
+        // 你不能竞拍自己另一个角色的拍卖
         SendAuctionCommandResult(0, AUCTION_PLACE_BID, ERR_AUCTION_BID_OWN);
         return;
     }
 
-    // cheating
+    // 作弊检查
     if (price <= auction->bid || price < auction->startbid)
         return;
 
-    // price too low for next bid if not buyout
+    // 如果不是一口价,价格太低无法成为下一个出价
     if ((price < auction->buyout || auction->buyout == 0) &&
         price < auction->bid + auction->GetAuctionOutBid())
     {
-        //auction has already higher bid, client tests it!
+        // 拍卖已经有更高的出价,客户端会测试此情况!
         return;
     }
 
     if (!player->HasEnoughMoney(price))
     {
-        //you don't have enought money!, client tests!
+        // 你没有足够的金币!,客户端会测试此情况!
         //SendAuctionCommandResult(auction->auctionId, AUCTION_PLACE_BID, ???);
         return;
     }
@@ -493,13 +682,14 @@ void WorldSession::HandleAuctionPlaceBid(WorldPacket& recvData)
 
     if (price < auction->buyout || auction->buyout == 0)
     {
+        // 普通出价处理
         if (auction->bidder > 0)
         {
             if (auction->bidder == player->GetGUID().GetCounter())
                 player->ModifyMoney(-int32(price - auction->bid));
             else
             {
-                // mail to last bidder and return money
+                // 发送邮件给上一个竞价者并退还金币
                 sAuctionMgr->SendAuctionOutbiddedMail(auction, price, GetPlayer(), trans);
                 player->ModifyMoney(-int32(price));
             }
@@ -525,7 +715,7 @@ void WorldSession::HandleAuctionPlaceBid(WorldPacket& recvData)
 
         if (auction->bidders.find(player->GetGUID()) == auction->bidders.end())
         {
-            // save new bidder in list, and save record to db
+            // 保存新的竞价者到列表,并保存记录到数据库
             auction->bidders.insert(player->GetGUID());
             stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_AUCTION_BIDDERS);
             stmt->setUInt32(0, auction->Id);
@@ -537,13 +727,13 @@ void WorldSession::HandleAuctionPlaceBid(WorldPacket& recvData)
     }
     else
     {
-        //buyout:
+        // 一口价购买处理
         if (player->GetGUID().GetCounter() == auction->bidder)
             player->ModifyMoney(-int32(auction->buyout - auction->bid));
         else
         {
             player->ModifyMoney(-int32(auction->buyout));
-            if (auction->bidder)                          //buyout for bidded auction ..
+            if (auction->bidder)                          // 对已有出价的拍卖进行一口价购买
                 sAuctionMgr->SendAuctionOutbiddedMail(auction, auction->buyout, GetPlayer(), trans);
         }
         auction->bidder = player->GetGUID().GetCounter();
@@ -555,7 +745,7 @@ void WorldSession::HandleAuctionPlaceBid(WorldPacket& recvData)
 
         GetPlayer()->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_AUCTION_BID, auction->buyout);
 
-        //- Mails must be under transaction control too to prevent data loss
+        // 邮件必须在事务控制下,以防止数据丢失
         sAuctionMgr->SendAuctionSalePendingMail(auction, trans);
         sAuctionMgr->SendAuctionSuccessfulMail(auction, trans);
         sAuctionMgr->SendAuctionWonMail(auction, trans);
@@ -571,7 +761,32 @@ void WorldSession::HandleAuctionPlaceBid(WorldPacket& recvData)
     CharacterDatabase.CommitTransaction(trans);
 }
 
-//this void is called when auction_owner cancels his auction
+/**
+ * @brief 处理拍卖所有者取消拍卖的网络包
+ *
+ * 职责：
+ *   处理拍卖所有者取消拍卖的请求。如果已有竞价者,需要退还金币;
+ *   物品将通过邮件退还给所有者。
+ *
+ * 参数：
+ *   @param recvData [in] 接收到的网络包数据,包含:
+ *                       - auctioneer: 拍卖师GUID
+ *                       - auctionId: 要取消的拍卖ID
+ *
+ * 返回值：
+ *   无
+ *
+ * 主要流程：
+ *   1. 读取拍卖师GUID和拍卖ID
+ *   2. 验证拍卖师NPC是否可交互
+ *   3. 获取拍卖条目并验证所有权
+ *   4. 如果有竞价者:
+ *      - 计算并扣除拍卖行手续费
+ *      - 发送邮件退还金币给竞价者
+ *   5. 通过邮件将物品退还给拍卖所有者
+ *   6. 从拍卖行移除拍卖条目
+ *   7. 更新数据库并发送取消成功消息
+ */
 void WorldSession::HandleAuctionRemoveItem(WorldPacket& recvData)
 {
     TC_LOG_DEBUG("network", "WORLD: Received CMSG_AUCTION_REMOVE_ITEM");
@@ -589,7 +804,7 @@ void WorldSession::HandleAuctionRemoveItem(WorldPacket& recvData)
         return;
     }
 
-    // remove fake death
+    // 移除假死状态
     if (GetPlayer()->HasUnitState(UNIT_STATE_DIED))
         GetPlayer()->RemoveAurasByType(SPELL_AURA_FEIGN_DEATH);
 
@@ -604,17 +819,17 @@ void WorldSession::HandleAuctionRemoveItem(WorldPacket& recvData)
         Item* pItem = sAuctionMgr->GetAItem(auction->itemGUIDLow);
         if (pItem)
         {
-            if (auction->bidder > 0)                        // If we have a bidder, we have to send him the money he paid
+            if (auction->bidder > 0)                        // 如果有竞价者,必须退还他支付的金币
             {
                 uint32 auctionCut = auction->GetAuctionCut();
-                if (!player->HasEnoughMoney(auctionCut))          //player doesn't have enough money, maybe message needed
+                if (!player->HasEnoughMoney(auctionCut))          // 玩家没有足够的金币,可能需要消息提示
                     return;
-                //some auctionBidderNotification would be needed, but don't know that parts..
+                // 需要发送竞价者取消通知,但不清楚具体部分..
                 sAuctionMgr->SendAuctionCancelledToBidderMail(auction, trans);
                 player->ModifyMoney(-int32(auctionCut));
             }
 
-            // item will deleted or added to received mail list
+            // 物品将被删除或添加到接收邮件列表
             MailDraft(auction->BuildAuctionMailSubject(AUCTION_CANCELED), "")
                 .AddItem(pItem)
                 .SendMailTo(trans, player, auction, MAIL_CHECK_MASK_COPIED);
@@ -629,15 +844,15 @@ void WorldSession::HandleAuctionRemoveItem(WorldPacket& recvData)
     else
     {
         SendAuctionCommandResult(0, AUCTION_CANCEL, ERR_AUCTION_DATABASE_ERROR);
-        //this code isn't possible ... maybe there should be assert
+        // 此代码不应该发生...可能应该添加断言
         TC_LOG_ERROR("entities.player.cheat", "CHEATER : {} tried to cancel auction (id: {}) of another player, or auction is NULL", player->GetGUID().ToString(), auctionId);
         return;
     }
 
-    //inform player, that auction is removed
+    // 通知玩家拍卖已移除
     SendAuctionCommandResult(auction->Id, AUCTION_CANCEL, ERR_AUCTION_OK);
 
-    // Now remove the auction
+    // 现在移除拍卖
 
     player->SaveInventoryAndGoldToDB(trans);
     auction->DeleteFromDB(trans);
@@ -647,7 +862,31 @@ void WorldSession::HandleAuctionRemoveItem(WorldPacket& recvData)
     auctionHouse->RemoveAuction(auction);
 }
 
-//called when player lists his bids
+/**
+ * @brief 处理列出玩家竞价物品的网络包
+ *
+ * 职责：
+ *   处理玩家查看自己参与竞价的拍卖列表请求。
+ *   返回玩家当前竞价的所有拍卖信息。
+ *
+ * 参数：
+ *   @param recvData [in] 接收到的网络包数据,包含:
+ *                       - guid: 拍卖师GUID
+ *                       - listfrom: 列表起始位置(未实际使用)
+ *                       - outbiddedCount: 被超价的拍卖数量
+ *                       - outbiddedAuctionId[]: 被超价的拍卖ID数组
+ *
+ * 返回值：
+ *   无
+ *
+ * 主要流程：
+ *   1. 读取拍卖师GUID和列表参数
+ *   2. 验证拍卖师NPC是否可交互
+ *   3. 构建竞价列表结果消息包:
+ *      - 首先添加所有被超价的拍卖信息
+ *      - 然后添加玩家当前竞价的拍卖信息
+ *   4. 发送拍卖列表给客户端
+ */
 void WorldSession::HandleAuctionListBidderItems(WorldPacket& recvData)
 {
     TC_LOG_DEBUG("network", "WORLD: Received CMSG_AUCTION_LIST_BIDDER_ITEMS");
@@ -673,7 +912,7 @@ void WorldSession::HandleAuctionListBidderItems(WorldPacket& recvData)
         return;
     }
 
-    // remove fake death
+    // 移除假死状态
     if (GetPlayer()->HasUnitState(UNIT_STATE_DIED))
         GetPlayer()->RemoveAurasByType(SPELL_AURA_FEIGN_DEATH);
 
@@ -704,7 +943,27 @@ void WorldSession::HandleAuctionListBidderItems(WorldPacket& recvData)
     SendPacket(&data);
 }
 
-//this void sends player info about his auctions
+/**
+ * @brief 处理列出玩家拥有的拍卖的网络包
+ *
+ * 职责：
+ *   处理玩家查看自己创建的拍卖列表请求。
+ *   返回玩家当前拥有的所有拍卖信息。
+ *
+ * 参数：
+ *   @param recvData [in] 接收到的网络包数据,包含:
+ *                       - guid: 拍卖师GUID
+ *                       - listfrom: 列表起始位置(未实际使用)
+ *
+ * 返回值：
+ *   无
+ *
+ * 主要流程：
+ *   1. 读取拍卖师GUID和列表参数
+ *   2. 验证拍卖师NPC是否可交互
+ *   3. 构建所有者拍卖列表结果消息包
+ *   4. 发送拍卖列表给客户端
+ */
 void WorldSession::HandleAuctionListOwnerItems(WorldPacket& recvData)
 {
     TC_LOG_DEBUG("network", "WORLD: Received CMSG_AUCTION_LIST_OWNER_ITEMS");
@@ -722,7 +981,7 @@ void WorldSession::HandleAuctionListOwnerItems(WorldPacket& recvData)
         return;
     }
 
-    // remove fake death
+    // 移除假死状态
     if (GetPlayer()->HasUnitState(UNIT_STATE_DIED))
         GetPlayer()->RemoveAurasByType(SPELL_AURA_FEIGN_DEATH);
 
@@ -741,7 +1000,36 @@ void WorldSession::HandleAuctionListOwnerItems(WorldPacket& recvData)
     SendPacket(&data);
 }
 
-//this void is called when player clicks on search button
+/**
+ * @brief 处理拍卖行搜索的网络包
+ *
+ * 职责：
+ *   处理玩家在拍卖行搜索物品的请求。支持多种筛选条件,
+ *   包括物品名称、等级范围、物品类型、品质等。
+ *
+ * 参数：
+ *   @param recvData [in] 接收到的网络包数据,包含:
+ *                       - guid: 拍卖师GUID
+ *                       - listfrom: 列表起始位置,用于分页(每页50个元素)
+ *                       - searchedname: 搜索的物品名称
+ *                       - levelmin/levelmax: 物品等级范围
+ *                       - auctionSlotID: 物品槽位类型
+ *                       - auctionMainCategory: 物品主类别
+ *                       - auctionSubCategory: 物品子类别
+ *                       - quality: 物品品质
+ *                       - usable: 是否只显示可用物品
+ *                       - getAll: 是否获取所有物品
+ *
+ * 返回值：
+ *   无
+ *
+ * 主要流程：
+ *   1. 读取拍卖师GUID和各种搜索条件
+ *   2. 验证拍卖师NPC是否可交互
+ *   3. 将搜索名称转换为小写宽字符串
+ *   4. 根据搜索条件构建拍卖物品列表
+ *   5. 发送搜索结果给客户端
+ */
 void WorldSession::HandleAuctionListItems(WorldPacket& recvData)
 {
     TC_LOG_DEBUG("network", "WORLD: Received CMSG_AUCTION_LIST_ITEMS");
@@ -761,7 +1049,7 @@ void WorldSession::HandleAuctionListItems(WorldPacket& recvData)
 
     recvData >> getAll;
 
-    // this block looks like it uses some lame byte packing or similar...
+    // 此数据块看起来使用了某种字节打包或类似方式...
     uint8 unkCnt;
     recvData >> unkCnt;
     for (uint8 i = 0; i < unkCnt; i++)
@@ -777,7 +1065,7 @@ void WorldSession::HandleAuctionListItems(WorldPacket& recvData)
         return;
     }
 
-    // remove fake death
+    // 移除假死状态
     if (GetPlayer()->HasUnitState(UNIT_STATE_DIED))
         GetPlayer()->RemoveAurasByType(SPELL_AURA_FEIGN_DEATH);
 
@@ -791,7 +1079,7 @@ void WorldSession::HandleAuctionListItems(WorldPacket& recvData)
     uint32 totalcount = 0;
     data << (uint32) 0;
 
-    // converting string that we try to find to lower case
+    // 将搜索字符串转换为小写
     std::wstring wsearchedname;
     if (!Utf8toWStr(searchedname, wsearchedname))
         return;
@@ -809,6 +1097,24 @@ void WorldSession::HandleAuctionListItems(WorldPacket& recvData)
     SendPacket(&data);
 }
 
+/**
+ * @brief 处理列出待处理拍卖销售的网络包
+ *
+ * 职责：
+ *   处理玩家查看待处理拍卖销售列表的请求。
+ *   目前此功能似乎未完全实现,仅返回空列表。
+ *
+ * 参数：
+ *   @param recvData [in] 接收到的网络包数据
+ *
+ * 返回值：
+ *   无
+ *
+ * 主要流程：
+ *   1. 跳过接收数据中的GUID
+ *   2. 构建并发送待处理销售列表消息包
+ *   3. 当前实现返回计数为0的空列表
+ */
 void WorldSession::HandleAuctionListPendingSales(WorldPacket& recvData)
 {
     TC_LOG_DEBUG("network", "WORLD: Received CMSG_AUCTION_LIST_PENDING_SALES");

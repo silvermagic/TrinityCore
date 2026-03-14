@@ -15,6 +15,25 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file MotionMaster.cpp
+ * @brief 移动主控制器实现模块
+ *
+ * 本模块实现了 MotionMaster 类,是单位移动系统的核心管理器实现。
+ * 负责管理单位的所有移动行为,包括移动生成器的生命周期、优先级调度和延迟操作处理。
+ *
+ * 实现要点:
+ * - 延迟操作机制:确保在更新过程中对容器结构的修改安全执行
+ * - 智能指针管理:使用自定义删除器正确管理移动生成器的生命周期
+ * - 优先级排序:按模式和优先级对移动生成器排序
+ * - 多槽位支持:默认槽位和活动槽位的分离管理
+ *
+ * 性能考虑:
+ * - 延迟操作队列在更新完成后处理,避免在迭代中修改容器
+ * - 使用 multiset 容器保持移动生成器有序,减少排序开销
+ * - 静态空闲移动生成器单例复用,减少内存分配
+ */
+
 #include "MotionMaster.h"
 #include "AbstractFollower.h"
 #include "Creature.h"
@@ -49,27 +68,55 @@
 #include "SplineChainMovementGenerator.h"
 #include "WaypointMovementGenerator.h"
 
+/**
+ * @brief 获取空闲移动生成器
+ * @return 空闲移动生成器指针
+ *
+ * 从注册表中获取空闲移动生成器,返回单例实例
+ */
 inline MovementGenerator* GetIdleMovementGenerator()
 {
     return sMovementGeneratorRegistry->GetRegistryItem(IDLE_MOTION_TYPE)->Create();
 }
 
+/**
+ * @brief 检查是否为静态移动生成器
+ * @param movement 要检查的移动生成器
+ * @return true 表示是静态(单例)移动生成器
+ *
+ * 静态移动生成器不应该被删除,而是复用单例
+ */
 inline bool IsStatic(MovementGenerator* movement)
 {
     return (movement == GetIdleMovementGenerator());
 }
 
+/**
+ * @brief 移动生成器指针删除器
+ * @param a 要删除的移动生成器
+ *
+ * 只删除非静态的移动生成器实例
+ */
 inline void MovementGeneratorPointerDeleter(MovementGenerator* a)
 {
     if (a != nullptr && !IsStatic(a))
         delete a;
 }
 
+/**
+ * @brief 移动生成器删除器调用运算符
+ */
 void MovementGeneratorDeleter::operator()(MovementGenerator* a)
 {
     MovementGeneratorPointerDeleter(a);
 }
 
+/**
+ * @brief 移动生成器比较器
+ *
+ * 先比较模式(大的优先),再比较优先级(大的优先)
+ * 确保高优先级的移动生成器排在前面
+ */
 bool MovementGeneratorComparator::operator()(MovementGenerator const* a, MovementGenerator const* b) const
 {
     if (a->Mode > b->Mode)
@@ -80,10 +127,24 @@ bool MovementGeneratorComparator::operator()(MovementGenerator const* a, Movemen
     return false;
 }
 
+/**
+ * @brief 移动生成器信息构造函数
+ */
 MovementGeneratorInformation::MovementGeneratorInformation(MovementGeneratorType type, ObjectGuid targetGUID, std::string const& targetName) : Type(type), TargetGUID(targetGUID), TargetName(targetName) { }
 
+/**
+ * @brief MotionMaster 构造函数
+ * @param unit 拥有此 MotionMaster 的单位
+ *
+ * 初始化 MotionMaster,设置初始化待处理标志
+ */
 MotionMaster::MotionMaster(Unit* unit) : _owner(unit), _defaultGenerator(nullptr), _flags(MOTIONMASTER_FLAG_INITIALIZATION_PENDING) { }
 
+/**
+ * @brief MotionMaster 析构函数
+ *
+ * 清理所有移动生成器和延迟操作
+ */
 MotionMaster::~MotionMaster()
 {
     _delayedActions.clear();
@@ -288,6 +349,16 @@ bool MotionMaster::HasMovementGenerator(std::function<bool(MovementGenerator con
     return value;
 }
 
+// ============================================================================
+// 更新移动
+// ============================================================================
+// 职责：更新当前的移动生成器，执行移动逻辑
+// 参数：
+//   diff - 距离上一帧的时间差（毫秒）
+// 返回值：无
+// 调用时机：每帧由 Unit::Update() 调用
+// 注意：按栈顺序从顶部开始执行
+// ============================================================================
 void MotionMaster::Update(uint32 diff)
 {
     if (!_owner)
@@ -428,6 +499,15 @@ void MotionMaster::Remove(MovementGeneratorType type, MovementSlot slot/* = MOTI
     }
 }
 
+// ============================================================================
+// 清除移动生成器
+// ============================================================================
+// 职责：清除所有移动生成器，停止移动
+// 参数：
+//   clean - 是否清理所有模式
+// 返回值：无
+// 调用时机：脱战、死亡、传送时
+// ============================================================================
 void MotionMaster::Clear()
 {
     if (HasFlag(MOTIONMASTER_FLAG_DELAYED))
@@ -603,6 +683,17 @@ void MotionMaster::MoveRandom(float wanderDistance)
     }
 }
 
+// ============================================================================
+// 跟随移动
+// ============================================================================
+// 职责：创建跟随移动生成器，持续跟随目标
+// 参数：
+//   target   - 跟随目标
+//   dist     - 跟随距离
+//   angle    - 跟随角度
+// 返回值：无
+// 调用时机：宠物跟随主人、NPC跟随玩家时
+// ============================================================================
 void MotionMaster::MoveFollow(Unit* target, float dist, ChaseAngle angle, MovementSlot slot/* = MOTION_SLOT_ACTIVE*/)
 {
     // Ignore movement request if target not exist
@@ -613,6 +704,17 @@ void MotionMaster::MoveFollow(Unit* target, float dist, ChaseAngle angle, Moveme
     Add(new FollowMovementGenerator(target, dist, angle), slot);
 }
 
+// ============================================================================
+// 追击移动
+// ============================================================================
+// 职责：创建追击移动生成器，追踪目标单位
+// 参数：
+//   target   - 追击目标
+//   dist     - 追击距离
+//   angle    - 追击角度
+// 返回值：无
+// 调用时机：生物进入战斗、AI 追击时
+// ============================================================================
 void MotionMaster::MoveChase(Unit* target, Optional<ChaseRange> dist, Optional<ChaseAngle> angle)
 {
     // Ignore movement request if target not exist
@@ -654,6 +756,17 @@ void MotionMaster::MoveFleeing(Unit* enemy, uint32 time)
         Add(new FleeingMovementGenerator<Player>(enemy->GetGUID()));
 }
 
+// ============================================================================
+// 移动到指定点
+// ============================================================================
+// 职责：创建点移动生成器，移动到指定坐标
+// 参数：
+//   id       - 移动ID
+//   x, y, z  - 目标坐标
+//   generatePath - 是否生成路径（寻路）
+// 返回值：无
+// 调用时机：巡逻、移动到目标位置时
+// ============================================================================
 void MotionMaster::MovePoint(uint32 id, Position const& pos, bool generatePath/* = true*/, Optional<float> finalOrient/* = {}*/)
 {
     MovePoint(id, pos.m_positionX, pos.m_positionY, pos.m_positionZ, generatePath, finalOrient);

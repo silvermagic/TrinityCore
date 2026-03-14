@@ -15,6 +15,27 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file boss_illidan.cpp
+ * @brief 伊利丹·怒风Boss战脚本
+ *
+ * 本模块实现了黑暗神殿最终Boss伊利丹·怒风的完整战斗逻辑，包括：
+ * - 多阶段战斗（阶段1-4，恶魔形态等）
+ * - 阿卡玛协助战斗机制
+ * - 玛维·影歌的出现和协助
+ * - 战争军刃投掷和阿西诺斯之焰战斗
+ * - 眼部冲击和黑暗弹幕
+ * - 恶魔形态转换和暗影恶魔
+ * - 笼子陷阱机制
+ *
+ * 战斗流程：
+ * 1. 阶段1（100%-90%）：地面战斗，使用烈焰碰撞、剪切、吸取灵魂等技能
+ * 2. 阶段小怪（90%-65%）：召唤伊利达雷精英攻击阿卡玛
+ * 3. 阶段2（65%-30%）：飞行阶段，投掷战争军刃，召唤阿西诺斯之焰
+ * 4. 阶段3（30%以下）：玛维出现，地面战斗+恶魔形态循环
+ * 5. 死亡：剧情演出，阿卡玛和玛维的对话
+ */
+
 #include "ScriptMgr.h"
 #include "black_temple.h"
 #include "Containers.h"
@@ -32,249 +53,273 @@
 #include "SpellScript.h"
 #include "TemporarySummon.h"
 
+/**
+ * @brief 伊利丹对白枚举
+ */
 enum IllidanSay
 {
     // Illidan
-    SAY_ILLIDAN_MINION                      = 0,
-    SAY_ILLIDAN_KILL                        = 1,
-    SAY_ILLIDAN_TAKEOFF                     = 2,
-    SAY_ILLIDAN_SUMMONFLAMES                = 3,
-    SAY_ILLIDAN_EYE_BLAST                   = 4,
-    SAY_ILLIDAN_MORPH                       = 5,
-    SAY_ILLIDAN_ENRAGE                      = 6,
-    SAY_ILLIDAN_TAUNT                       = 7,
-    SAY_ILLIDAN_DUPLICITY                   = 8,
-    SAY_ILLIDAN_UNCONVINCED                 = 9,
-    SAY_ILLIDAN_PREPARED                    = 10,
-    SAY_ILLIDAN_SHADOW_PRISON               = 11,
-    SAY_ILLIDAN_CONFRONT_MAIEV              = 12,
-    SAY_ILLIDAN_FRENZY                      = 13,
-    SAY_ILLIDAN_DEFEATED                    = 14,
+    SAY_ILLIDAN_MINION                      = 0,  ///< 伊利丹：你们这些家伙！
+    SAY_ILLIDAN_KILL                        = 1,  ///< 伊利丹：击杀玩家
+    SAY_ILLIDAN_TAKEOFF                     = 2,  ///< 伊利丹：起飞
+    SAY_ILLIDAN_SUMMONFLAMES                = 3,  ///< 伊利丹：召唤火焰
+    SAY_ILLIDAN_EYE_BLAST                   = 4,  ///< 伊利丹：眼部冲击
+    SAY_ILLIDAN_MORPH                       = 5,  ///< 伊利丹：变形
+    SAY_ILLIDAN_ENRAGE                      = 6,  ///< 伊利丹：狂暴
+    SAY_ILLIDAN_TAUNT                       = 7,  ///< 伊利丹：嘲讽
+    SAY_ILLIDAN_DUPLICITY                   = 8,  ///< 伊利丹：欺诈
+    SAY_ILLIDAN_UNCONVINCED                 = 9,  ///< 伊利丹：不信服
+    SAY_ILLIDAN_PREPARED                    = 10, ///< 伊利丹：准备好
+    SAY_ILLIDAN_SHADOW_PRISON               = 11, ///< 伊利丹：暗影牢笼
+    SAY_ILLIDAN_CONFRONT_MAIEV              = 12, ///< 伊利丹：对抗玛维
+    SAY_ILLIDAN_FRENZY                      = 13, ///< 伊利丹：狂乱
+    SAY_ILLIDAN_DEFEATED                    = 14, ///< 伊利丹：被击败
 
     // Maiev Shadowsong
-    SAY_MAIEV_SHADOWSONG_TAUNT              = 0,
-    SAY_MAIEV_SHADOWSONG_APPEAR             = 1,
-    SAY_MAIEV_SHADOWSONG_JUSTICE            = 2,
-    SAY_MAIEV_SHADOWSONG_TRAP               = 3,
-    SAY_MAIEV_SHADOWSONG_DOWN               = 4,
-    SAY_MAIEV_SHADOWSONG_FINISHED           = 5,
-    SAY_MAIEV_SHADOWSONG_OUTRO              = 6,
-    SAY_MAIEV_SHADOWSONG_FAREWELL           = 7,
+    SAY_MAIEV_SHADOWSONG_TAUNT              = 0,  ///< 玛维：嘲讽
+    SAY_MAIEV_SHADOWSONG_APPEAR             = 1,  ///< 玛维：出现
+    SAY_MAIEV_SHADOWSONG_JUSTICE            = 2,  ///< 玛维：正义
+    SAY_MAIEV_SHADOWSONG_TRAP               = 3,  ///< 玛维：陷阱
+    SAY_MAIEV_SHADOWSONG_DOWN               = 4,  ///< 玛维：倒下
+    SAY_MAIEV_SHADOWSONG_FINISHED           = 5,  ///< 玛维：结束
+    SAY_MAIEV_SHADOWSONG_OUTRO              = 6,  ///< 玛维：结局
+    SAY_MAIEV_SHADOWSONG_FAREWELL           = 7,  ///< 玛维：告别
 
     // Flame of Azzinoth
-    EMOTE_AZZINOTH_GAZE                     = 0,
+    EMOTE_AZZINOTH_GAZE                     = 0,  ///< 阿西诺斯之焰：凝视表情
 
     // Akama
-    SAY_AKAMA_DOOR                          = 0,
-    SAY_AKAMA_ALONE                         = 1,
-    SAY_AKAMA_SALUTE                        = 2,
-    SAY_AKAMA_BETRAYER                      = 3,
-    SAY_AKAMA_FREE                          = 4,
-    SAY_AKAMA_TIME_HAS_COME                 = 5,
-    SAY_AKAMA_MINIONS                       = 6,
-    SAY_AKAMA_LIGHT                         = 7,
-    SAY_AKAMA_FINISH                        = 8,
+    SAY_AKAMA_DOOR                          = 0,  ///< 阿卡玛：门
+    SAY_AKAMA_ALONE                         = 1,  ///< 阿卡玛：独自
+    SAY_AKAMA_SALUTE                        = 2,  ///< 阿卡玛：致敬
+    SAY_AKAMA_BETRAYER                      = 3,  ///< 阿卡玛：背叛者
+    SAY_AKAMA_FREE                          = 4,  ///< 阿卡玛：自由
+    SAY_AKAMA_TIME_HAS_COME                 = 5,  ///< 阿卡玛：时刻已到
+    SAY_AKAMA_MINIONS                       = 6,  ///< 阿卡玛：随从
+    SAY_AKAMA_LIGHT                         = 7,  ///< 阿卡玛：光
+    SAY_AKAMA_FINISH                        = 8,  ///< 阿卡玛：完成
 
     // Spirits
-    SAY_SPIRIT_ALONE                        = 0,
+    SAY_SPIRIT_ALONE                        = 0,  ///< 灵魂：独自
 
     // Direct Sounds
-    ILLIDAN_TAKEOFF_SOUND_ID                = 11479,
-    ILLIDAN_WARGLAIVE_SOUND_ID              = 11480,
-    WARGLAIVE_SPAWN_SOUND_ID                = 11689,
-    EVENT_BT_SUMMIT_WALK_SOUND_ID           = 11717,
-    EVENT_BT_SUMMIT_WALK_3_SOUND_ID         = 11725,
-    EVENT_BT_STORM_WALK_HERO_2_SOUND_ID     = 11727,
-    EVENT_BT_STORM_WALK_UNI_3_SOUND_ID      = 11729,
-    EVENT_BT_ARRIVAL_WALK_HERO_1_SOUND_ID   = 11728
+    ILLIDAN_TAKEOFF_SOUND_ID                = 11479,  ///< 伊利丹起飞音效
+    ILLIDAN_WARGLAIVE_SOUND_ID              = 11480,  ///< 战争军刃音效
+    WARGLAIVE_SPAWN_SOUND_ID                = 11689,  ///< 战争军刃生成音效
+    EVENT_BT_SUMMIT_WALK_SOUND_ID           = 11717,  ///< 黑暗神殿顶峰行走音效
+    EVENT_BT_SUMMIT_WALK_3_SOUND_ID         = 11725,  ///< 黑暗神殿顶峰行走音效3
+    EVENT_BT_STORM_WALK_HERO_2_SOUND_ID     = 11727,  ///< 风暴行走英雄音效2
+    EVENT_BT_STORM_WALK_UNI_3_SOUND_ID      = 11729,  ///< 风暴行走音效3
+    EVENT_BT_ARRIVAL_WALK_HERO_1_SOUND_ID   = 11728   ///< 到达行走英雄音效1
 };
 
+/**
+ * @brief 伊利丹技能枚举
+ */
 enum IllidanSpells
 {
     // Akama
-    SPELL_AKAMA_DOOR_CHANNEL            = 41268,
-    SPELL_AKAMA_DOOR_FAIL               = 41271,
-    SPELL_HEALING_POTION                = 40535,
-    SPELL_CHAIN_LIGHTNING               = 40536,
-    SPELL_AKAMA_TELEPORT                = 41077,
-    SPELL_AKAMA_DESPAWN                 = 41242,
+    SPELL_AKAMA_DOOR_CHANNEL            = 41268,  ///< 阿卡玛门引导
+    SPELL_AKAMA_DOOR_FAIL               = 41271,  ///< 阿卡玛门失败
+    SPELL_HEALING_POTION                = 40535,  ///< 治疗药水
+    SPELL_CHAIN_LIGHTNING               = 40536,  ///< 闪电链
+    SPELL_AKAMA_TELEPORT                = 41077,  ///< 阿卡玛传送
+    SPELL_AKAMA_DESPAWN                 = 41242,  ///< 阿卡玛消失
 
     // Spirits
-    SPELL_DEATHSWORN_DOOR_CHANNEL       = 41269,
+    SPELL_DEATHSWORN_DOOR_CHANNEL       = 41269,  ///< 死亡誓约者门引导
 
     // Door Trigger
-    SPELL_ARCANE_EXPLOSION              = 35426,
+    SPELL_ARCANE_EXPLOSION              = 35426,  ///< 奥术爆炸
 
     // Blade of Azzinoth
-    SPELL_BIRTH                         = 40031,
-    SPELL_SUMMON_TEAR_OF_AZZINOTH       = 39855,
-    SPELL_AZZINOTH_CHANNEL              = 39857,
-    SPELL_GLAIVE_RETURNS                = 39873,
+    SPELL_BIRTH                         = 40031,  ///< 生成
+    SPELL_SUMMON_TEAR_OF_AZZINOTH       = 39855,  ///< 召唤阿西诺斯之泪
+    SPELL_AZZINOTH_CHANNEL              = 39857,  ///< 阿西诺斯引导
+    SPELL_GLAIVE_RETURNS                = 39873,  ///< 军刃返回
 
     // Flame of Azzinoth
-    SPELL_FLAME_TEAR_OF_AZZINOTH        = 39856,
-    SPELL_CHARGE                        = 42003,
-    SPELL_FLAME_BLAST                   = 40631,
-    SPELL_UNCAGED_WRATH                 = 39869,
+    SPELL_FLAME_TEAR_OF_AZZINOTH        = 39856,  ///< 阿西诺斯之泪火焰
+    SPELL_CHARGE                        = 42003,  ///< 冲锋
+    SPELL_FLAME_BLAST                   = 40631,  ///< 火焰冲击
+    SPELL_UNCAGED_WRATH                 = 39869,  ///< 解脱之怒
 
     // Maiev
-    SPELL_TELEPORT_VISUAL               = 41236,
-    SPELL_CAGE_TRAP_SUMMON              = 40694,
-    SPELL_SHADOW_STRIKE                 = 40685,
-    SPELL_THROW_DAGGER                  = 41152,
-    SPELL_MAIEV_DOWN                    = 40409,
+    SPELL_TELEPORT_VISUAL               = 41236,  ///< 传送视觉效果
+    SPELL_CAGE_TRAP_SUMMON              = 40694,  ///< 笼子陷阱召唤
+    SPELL_SHADOW_STRIKE                 = 40685,  ///< 暗影打击
+    SPELL_THROW_DAGGER                  = 41152,  ///< 投掷匕首
+    SPELL_MAIEV_DOWN                    = 40409,  ///< 玛维倒下
 
     // Cage Trap Disturb Trigger
-    SPELL_CAGE_TRAP_PERIODIC            = 40761,
+    SPELL_CAGE_TRAP_PERIODIC            = 40761,  ///< 笼子陷阱周期性
 
     // Shadow Demon
-    SPELL_SHADOW_DEMON_PASSIVE          = 41079,
-    SPELL_FIND_TARGET                   = 41081,
-    SPELL_PARALYZE                      = 41083,
-    SPELL_CONSUME_SOUL                  = 41080,
+    SPELL_SHADOW_DEMON_PASSIVE          = 41079,  ///< 暗影恶魔被动
+    SPELL_FIND_TARGET                   = 41081,  ///< 寻找目标
+    SPELL_PARALYZE                      = 41083,  ///< 麻痹
+    SPELL_CONSUME_SOUL                  = 41080,  ///< 吞噬灵魂
 
     // Player
-    SPELL_SUMMON_PARASITIC_SHADOWFIENDS = 41915,
-    SPELL_BLAZE_SUMMON                  = 40637,
+    SPELL_SUMMON_PARASITIC_SHADOWFIENDS = 41915,  ///< 召唤寄生暗影魔
+    SPELL_BLAZE_SUMMON                  = 40637,  ///< 烈焰召唤
 
     // Illidan DB Target
-    SPELL_EYE_BLAST_TRIGGER             = 40017,
+    SPELL_EYE_BLAST_TRIGGER             = 40017,  ///< 眼部冲击触发
 
     // Cage Trap Summon Spells
-    SPELL_SUMMON_CAGE_TRAP_1            = 40696,
-    SPELL_SUMMON_CAGE_TRAP_2            = 40697,
-    SPELL_SUMMON_CAGE_TRAP_3            = 40698,
-    SPELL_SUMMON_CAGE_TRAP_4            = 40699,
-    SPELL_SUMMON_CAGE_TRAP_5            = 40700,
-    SPELL_SUMMON_CAGE_TRAP_6            = 40701,
-    SPELL_SUMMON_CAGE_TRAP_7            = 40702,
-    SPELL_SUMMON_CAGE_TRAP_8            = 40703,
+    SPELL_SUMMON_CAGE_TRAP_1            = 40696,  ///< 召唤笼子陷阱1
+    SPELL_SUMMON_CAGE_TRAP_2            = 40697,  ///< 召唤笼子陷阱2
+    SPELL_SUMMON_CAGE_TRAP_3            = 40698,  ///< 召唤笼子陷阱3
+    SPELL_SUMMON_CAGE_TRAP_4            = 40699,  ///< 召唤笼子陷阱4
+    SPELL_SUMMON_CAGE_TRAP_5            = 40700,  ///< 召唤笼子陷阱5
+    SPELL_SUMMON_CAGE_TRAP_6            = 40701,  ///< 召唤笼子陷阱6
+    SPELL_SUMMON_CAGE_TRAP_7            = 40702,  ///< 召唤笼子陷阱7
+    SPELL_SUMMON_CAGE_TRAP_8            = 40703,  ///< 召唤笼子陷阱8
 
     // Glaive Target
-    SPELL_RANGE_MARKER                  = 41997,
-    SPELL_SUMMON_GLAIVE                 = 41466,
+    SPELL_RANGE_MARKER                  = 41997,  ///< 范围标记
+    SPELL_SUMMON_GLAIVE                 = 41466,  ///< 召唤军刃
 
     // Illidan
-    SPELL_FLAME_CRASH                   = 40832,
-    SPELL_SHEAR                         = 41032,
-    SPELL_DRAW_SOUL                     = 40904,
-    SPELL_DRAW_SOUL_HEAL                = 40903,
-    SPELL_PARASITIC_SHADOWFIEND         = 41917,
-    SPELL_PARASITIC_SHADOWFIEND_2       = 41914,
-    SPELL_REMOVE_PARASITIC_SHADOWFIEND  = 41923,
-    SPELL_AGONIZING_FLAMES              = 40932,
-    SPELL_AGONIZING_FLAMES_SELECTOR     = 40834,
-    SPELL_FRENZY                        = 40683,
-    SPELL_THROW_GLAIVE                  = 39849,
-    SPELL_THROW_GLAIVE2                 = 39635,
-    SPELL_FIREBALL                      = 40598,
-    SPELL_DARK_BARRAGE                  = 40585,
-    SPELL_DEMON_TRANSFORM_1             = 40511,
-    SPELL_DEMON_TRANSFORM_2             = 40398,
-    SPELL_DEMON_TRANSFORM_3             = 40510,
-    SPELL_DEMON_FORM                    = 40506,
-    SPELL_AURA_OF_DREAD                 = 41142,
-    SPELL_SHADOW_BLAST                  = 41078,
-    SPELL_FLAME_BURST                   = 41126,
-    SPELL_FLAME_BURST_EFFECT            = 41131,
-    SPELL_KNEEL                         = 39656,
-    SPELL_SHADOW_PRISON                 = 40647,
-    SPELL_EMOTE_TALK_QUESTION           = 41616,
-    SPELL_BERSERK                       = 45078,
-    SPELL_SUMMON_MAIEV                  = 40403,
-    SPELL_TELEPORT_MAIEV                = 41221,
-    SPELL_CLEAR_ALL_DEBUFFS             = 34098,
-    SPELL_DEATH                         = 41218,
-    SPELL_QUIET_SUICIDE                 = 3617,
-    SPELL_SUMMON_SHADOWDEMON            = 41117,
-    SPELL_CAGED_TRAP_TELEPORT           = 40693,
-    SPELL_CAGE_TRAP                     = 40760,
-    SPELL_CAGED_DEBUFF                  = 40695,
-    SPELL_EYE_BLAST                     = 39908,
+    SPELL_FLAME_CRASH                   = 40832,  ///< 烈焰碰撞
+    SPELL_SHEAR                         = 41032,  ///< 剪切
+    SPELL_DRAW_SOUL                     = 40904,  ///< 吸取灵魂
+    SPELL_DRAW_SOUL_HEAL                = 40903,  ///< 吸取灵魂治疗
+    SPELL_PARASITIC_SHADOWFIEND         = 41917,  ///< 寄生暗影魔
+    SPELL_PARASITIC_SHADOWFIEND_2       = 41914,  ///< 寄生暗影魔2
+    SPELL_REMOVE_PARASITIC_SHADOWFIEND  = 41923,  ///< 移除寄生暗影魔
+    SPELL_AGONIZING_FLAMES              = 40932,  ///< 苦痛之焰
+    SPELL_AGONIZING_FLAMES_SELECTOR     = 40834,  ///< 苦痛之焰选择器
+    SPELL_FRENZY                        = 40683,  ///< 狂乱
+    SPELL_THROW_GLAIVE                  = 39849,  ///< 投掷军刃
+    SPELL_THROW_GLAIVE2                 = 39635,  ///< 投掷军刃2
+    SPELL_FIREBALL                      = 40598,  ///< 火球术
+    SPELL_DARK_BARRAGE                  = 40585,  ///< 黑暗弹幕
+    SPELL_DEMON_TRANSFORM_1             = 40511,  ///< 恶魔变形1
+    SPELL_DEMON_TRANSFORM_2             = 40398,  ///< 恶魔变形2
+    SPELL_DEMON_TRANSFORM_3             = 40510,  ///< 恶魔变形3
+    SPELL_DEMON_FORM                    = 40506,  ///< 恶魔形态
+    SPELL_AURA_OF_DREAD                 = 41142,  ///< 恐惧光环
+    SPELL_SHADOW_BLAST                  = 41078,  ///< 暗影冲击
+    SPELL_FLAME_BURST                   = 41126,  ///< 火焰爆发
+    SPELL_FLAME_BURST_EFFECT            = 41131,  ///< 火焰爆发效果
+    SPELL_KNEEL                         = 39656,  ///< 下跪
+    SPELL_SHADOW_PRISON                 = 40647,  ///< 暗影牢笼
+    SPELL_EMOTE_TALK_QUESTION           = 41616,  ///< 表情说话提问
+    SPELL_BERSERK                       = 45078,  ///< 狂暴
+    SPELL_SUMMON_MAIEV                  = 40403,  ///< 召唤玛维
+    SPELL_TELEPORT_MAIEV                = 41221,  ///< 传送玛维
+    SPELL_CLEAR_ALL_DEBUFFS             = 34098,  ///< 清除所有减益效果
+    SPELL_DEATH                         = 41218,  ///< 死亡
+    SPELL_QUIET_SUICIDE                 = 3617,   ///< 安静自杀
+    SPELL_SUMMON_SHADOWDEMON            = 41117,  ///< 召唤暗影恶魔
+    SPELL_CAGED_TRAP_TELEPORT           = 40693,  ///< 笼子陷阱传送
+    SPELL_CAGE_TRAP                     = 40760,  ///< 笼子陷阱
+    SPELL_CAGED_DEBUFF                  = 40695,  ///< 被困减益效果
+    SPELL_EYE_BLAST                     = 39908,  ///< 眼部冲击
 
     // Blaze
-    SPELL_BLAZE                         = 40610,
+    SPELL_BLAZE                         = 40610,  ///< 烈焰
 
     // Demon Fire
-    SPELL_DEMON_FIRE                    = 40029,
+    SPELL_DEMON_FIRE                    = 40029,  ///< 恶魔之火
 
     // Flame Crash
-     SPELL_FLAME_CRASH_GROUND           = 40836
+     SPELL_FLAME_CRASH_GROUND           = 40836   ///< 烈焰碰撞地面
 };
 
+/**
+ * @brief 伊利丹杂项枚举
+ */
 enum IllidanMisc
 {
-    GOSSIP_START_INTRO           = 0,
-    GOSSIP_START_FIGHT           = 1,
-    SUMMON_GROUP                 = 1,
-    DATA_AKAMA_TELEPORT_POSITION = 0,
-    MAX_MINIONS_NUMBER           = 10,
-    SPELL_GLAIVE_VISUAL_KIT      = 7668
+    GOSSIP_START_INTRO           = 0,   ///< Gossip开始介绍
+    GOSSIP_START_FIGHT           = 1,   ///< Gossip开始战斗
+    SUMMON_GROUP                 = 1,   ///< 召唤组
+    DATA_AKAMA_TELEPORT_POSITION = 0,   ///< 阿卡玛传送位置数据
+    MAX_MINIONS_NUMBER           = 10,  ///< 最大随从数量
+    SPELL_GLAIVE_VISUAL_KIT      = 7668 ///< 军刃视觉效果包
 };
 
+/**
+ * @brief 伊利丹动作枚举
+ */
 enum IllidanActions
 {
-    ACTION_START_ENCOUNTER = 5,
-    ACTION_FREE,
-    ACTION_INTRO_DONE,
-    ACTION_START_MINIONS,
-    ACTION_START_MINIONS_WEAVE,
-    ACTION_START_PHASE_2,
-    ACTION_FLAME_DEAD,
-    ACTION_FINALIZE_AIR_PHASE,
-    ACTION_START_PHASE_4,
-    ACTION_RESUME_COMBAT,
-    ACTION_ILLIDAN_CAGED,
-    ACTION_START_OUTRO,
-    ACTION_MAIEV_DOWN_FADE
+    ACTION_START_ENCOUNTER = 5,     ///< 开始遭遇战
+    ACTION_FREE,                    ///< 自由
+    ACTION_INTRO_DONE,              ///< 介绍完成
+    ACTION_START_MINIONS,           ///< 开始随从
+    ACTION_START_MINIONS_WEAVE,     ///< 开始随从编织
+    ACTION_START_PHASE_2,           ///< 开始阶段2
+    ACTION_FLAME_DEAD,              ///< 火焰死亡
+    ACTION_FINALIZE_AIR_PHASE,      ///< 结束空中阶段
+    ACTION_START_PHASE_4,           ///< 开始阶段4
+    ACTION_RESUME_COMBAT,           ///< 恢复战斗
+    ACTION_ILLIDAN_CAGED,           ///< 伊利丹被困
+    ACTION_START_OUTRO,             ///< 开始结局
+    ACTION_MAIEV_DOWN_FADE          ///< 玛维倒下淡出
 };
 
+/**
+ * @brief 伊利丹阶段枚举
+ */
 enum IllidanPhases
 {
-    PHASE_INTRO = 1,
-    PHASE_1,
-    PHASE_MINIONS,
-    PHASE_2,
-    PHASE_3,
-    PHASE_4,
-    PHASE_OUTRO
+    PHASE_INTRO = 1,   ///< 介绍阶段
+    PHASE_1,           ///< 阶段1（地面战斗）
+    PHASE_MINIONS,     ///< 随从阶段
+    PHASE_2,           ///< 阶段2（空中战斗）
+    PHASE_3,           ///< 阶段3（地面+恶魔形态循环）
+    PHASE_4,           ///< 阶段4（玛维出现）
+    PHASE_OUTRO        ///< 结局阶段
 };
 
+/**
+ * @brief 伊利丹样条移动枚举
+ */
 enum IllidanSplineMovement
 {
-    SPLINE_ILLIDARI_COUNCIL = 1,
-    SPLINE_STAIRS           = 2,
-    SPLINE_ILLIDAN_ROOM     = 3,
-    SPLINE_FACE_ILLIDAN     = 4,
-    SPLINE_TELEPORT         = 5,
-    SPLINE_MINIONS          = 6,
-    SPLINE_MOVE_BACK        = 7
+    SPLINE_ILLIDARI_COUNCIL = 1,  ///< 伊利达雷议会在样条
+    SPLINE_STAIRS           = 2,  ///< 楼梯样条
+    SPLINE_ILLIDAN_ROOM     = 3,  ///< 伊利丹房间样条
+    SPLINE_FACE_ILLIDAN     = 4,  ///< 面向伊利丹样条
+    SPLINE_TELEPORT         = 5,  ///< 传送样条
+    SPLINE_MINIONS          = 6,  ///< 随从样条
+    SPLINE_MOVE_BACK        = 7   ///< 返回移动样条
 };
 
+/**
+ * @brief 伊利丹路径点枚举
+ */
 enum IllidanPoints
 {
-    POINT_ILLIDARI_COUNCIL = 1,
-    POINT_STAIRS,
-    POINT_ILLIDAN_ROOM,
-    POINT_FACE_ILLIDAN,
-    POINT_TELEPORT,
-    POINT_MINIONS,
-    POINT_THROW_GLAIVE,
-    POINT_RANDOM_PILLAR,
-    POINT_DB_TARGET,
-    POINT_ILLIDAN_MIDDLE,
-    POINT_MOVE_BACK,
-    POINT_ILLIDAN
+    POINT_ILLIDARI_COUNCIL = 1,  ///< 伊利达雷议会路径点
+    POINT_STAIRS,                ///< 楼梯路径点
+    POINT_ILLIDAN_ROOM,          ///< 伊利丹房间路径点
+    POINT_FACE_ILLIDAN,          ///< 面向伊利丹路径点
+    POINT_TELEPORT,              ///< 传送路径点
+    POINT_MINIONS,               ///< 随从路径点
+    POINT_THROW_GLAIVE,          ///< 投掷军刃路径点
+    POINT_RANDOM_PILLAR,         ///< 随机柱子路径点
+    POINT_DB_TARGET,             ///< DB目标路径点
+    POINT_ILLIDAN_MIDDLE,        ///< 伊利丹中间路径点
+    POINT_MOVE_BACK,             ///< 返回移动路径点
+    POINT_ILLIDAN                ///< 伊利丹路径点
 };
 
+/**
+ * @brief 伊利丹事件组枚举
+ */
 enum IllidanEventGroup
 {
-    GROUP_PHASE_ALL = 0,
-    GROUP_PHASE_1,
-    GROUP_PHASE_2,
-    GROUP_PHASE_3,
-    GROUP_PHASE_DEMON,
-    GROUP_PHASE_4
+    GROUP_PHASE_ALL = 0,     ///< 所有阶段
+    GROUP_PHASE_1,           ///< 阶段1事件组
+    GROUP_PHASE_2,           ///< 阶段2事件组
+    GROUP_PHASE_3,           ///< 阶段3事件组
+    GROUP_PHASE_DEMON,       ///< 恶魔形态事件组
+    GROUP_PHASE_4            ///< 阶段4事件组
 };
 
 enum IllidanEvents
@@ -465,11 +510,38 @@ public:
     }
 };
 
+/**
+ * @struct boss_illidan_stormrage
+ * @brief 伊利丹·怒风AI结构体
+ *
+ * 继承自BossAI，实现伊利丹的完整战斗逻辑
+ *
+ * 战斗阶段：
+ * - 阶段1（100%-90%）：地面战斗，使用烈焰碰撞、剪切、吸取灵魂等技能
+ * - 随从阶段（90%-65%）：召唤伊利达雷精英攻击阿卡玛
+ * - 阶段2（65%-30%）：飞行阶段，投掷战争军刃，召唤阿西诺斯之焰
+ * - 阶段3（30%-）：地面战斗+恶魔形态循环
+ * - 阶段4（30%-）：玛维出现，地面战斗+恶魔形态循环+狂乱
+ * - 结局：死亡剧情
+ */
 struct boss_illidan_stormrage : public BossAI
 {
+    /**
+     * @brief 构造函数
+     * @param creature 生物指针
+     */
     boss_illidan_stormrage(Creature* creature) : BossAI(creature, DATA_ILLIDAN_STORMRAGE),
         _minionsCount(0), _flameCount(0), _orientation(0.0f), _pillarIndex(0), _phase(0), _dead(false), _isDemon(false) { }
 
+    /**
+     * @brief 重置战斗
+     *
+     * 重置Boss状态：
+     * - 召唤初始生物组
+     * - 装备武器
+     * - 重置所有状态变量
+     * - 如果伊利达雷议会已死，激活阿卡玛介绍事件
+     */
     void Reset() override
     {
         _Reset();
@@ -489,6 +561,16 @@ struct boss_illidan_stormrage : public BossAI
                 akama->AI()->DoAction(ACTION_ACTIVE_AKAMA_INTRO);
     }
 
+    /**
+     * @brief 进入战斗
+     * @param who 仇恨目标
+     *
+     * 触发战斗开始：
+     * - 启用双持
+     * - 播放战斗音乐
+     * - 安排脱战检查和狂暴计时器
+     * - 安排阶段1事件和嘲讽事件
+     */
     void JustEngagedWith(Unit* who) override
     {
         BossAI::JustEngagedWith(who);

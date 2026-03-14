@@ -15,6 +15,37 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file SmartScriptMgr.cpp
+ * @brief SmartAI脚本管理器实现
+ *
+ * 本文件实现了SmartAI系统的管理器类，包括：
+ * - SmartWaypointMgr: 路径数据加载和管理
+ * - SmartAIMgr: SmartAI脚本加载、验证和管理
+ *
+ * 主要功能：
+ * 1. 从数据库加载SmartAI配置（smart_scripts表）
+ * 2. 从数据库加载路径数据（waypoints表）
+ * 3. 验证脚本配置的正确性
+ * 4. 提供脚本查询接口
+ * 5. 维护辅助缓存数据结构
+ *
+ * 加载流程：
+ * 1. SmartWaypointMgr::LoadFromDB() 加载路径数据
+ * 2. SmartAIMgr::LoadSmartAIFromDB() 加载SmartAI脚本
+ *    a. 加载辅助存储（法术效果缓存）
+ *    b. 遍历所有脚本记录
+ *    c. 验证每条脚本记录
+ *    d. 存储到内存映射表
+ *    e. 处理链接事件
+ *
+ * 验证机制：
+ * - 检查参数范围和有效性
+ * - 验证引用的对象是否存在（生物、物品、法术等）
+ * - 检查未使用的参数并警告
+ * - 记录错误日志供调试
+ */
+
 #include "SmartScriptMgr.h"
 #include "CreatureTextMgr.h"
 #include "DatabaseEnv.h"
@@ -32,6 +63,14 @@
 #include "Unit.h"
 #include "WaypointDefines.h"
 
+/**
+ * @def TC_SAI_IS_BOOLEAN_VALID
+ * @brief 验证布尔参数是否有效（必须为0或1）
+ * @param e SmartAI事件配置
+ * @param value 要验证的值
+ *
+ * 如果值不是0或1，记录错误日志并返回false
+ */
 #define TC_SAI_IS_BOOLEAN_VALID(e, value) \
 { \
     if (value > 1) \
@@ -42,18 +81,46 @@
     } \
 }
 
+/**
+ * @brief 获取SmartWaypointMgr单例实例
+ *
+ * 使用静态局部变量实现单例模式，线程安全（C++11）
+ *
+ * @return SmartWaypointMgr实例指针
+ */
 SmartWaypointMgr* SmartWaypointMgr::instance()
 {
     static SmartWaypointMgr instance;
     return &instance;
 }
 
+/**
+ * @brief 从数据库加载路径数据
+ *
+ * 从waypoints表加载所有SmartAI使用的移动路径。
+ * 路径数据按entry分组存储在内存映射表中。
+ *
+ * 数据库表结构：
+ * - entry: 路径ID
+ * - pointid: 路径点ID（必须从1开始连续递增）
+ * - position_x/y/z: 路径点坐标
+ * - orientation: 可选的朝向
+ * - delay: 在该点的停留时间（毫秒）
+ *
+ * 调用时机：
+ * - 服务器启动时
+ *
+ * 性能：
+ * - 一次性加载所有路径到内存
+ * - 使用hash_map存储，O(1)查询复杂度
+ */
 void SmartWaypointMgr::LoadFromDB()
 {
     uint32 oldMSTime = getMSTime();
 
     _waypointStore.clear();
 
+    // 查询waypoints表
     WorldDatabasePreparedStatement* stmt = WorldDatabase.GetPreparedStatement(WORLD_SEL_SMARTAI_WP);
     PreparedQueryResult result = WorldDatabase.Query(stmt);
 
@@ -64,35 +131,38 @@ void SmartWaypointMgr::LoadFromDB()
         return;
     }
 
-    uint32 count = 0;
-    uint32 total = 0;
-    uint32 lastEntry = 0;
-    uint32 lastId = 1;
+    uint32 count = 0;        // 路径数量
+    uint32 total = 0;        // 路径点总数
+    uint32 lastEntry = 0;    // 上一个entry（用于检测新路径）
+    uint32 lastId = 1;       // 上一个pointid（用于验证连续性）
 
     do
     {
         Field* fields = result->Fetch();
-        uint32 entry = fields[0].GetUInt32();
-        uint32 id = fields[1].GetUInt32();
-        float x = fields[2].GetFloat();
-        float y = fields[3].GetFloat();
-        float z = fields[4].GetFloat();
-        Optional<float> o;
+        uint32 entry = fields[0].GetUInt32();    // 路径ID
+        uint32 id = fields[1].GetUInt32();       // 路径点ID
+        float x = fields[2].GetFloat();          // X坐标
+        float y = fields[3].GetFloat();          // Y坐标
+        float z = fields[4].GetFloat();          // Z坐标
+        Optional<float> o;                       // 朝向（可选）
         if (!fields[5].IsNull())
             o = fields[5].GetFloat();
-        uint32 delay = fields[6].GetUInt32();
+        uint32 delay = fields[6].GetUInt32();    // 停留时间（毫秒）
 
+        // 检测是否是新的路径
         if (lastEntry != entry)
         {
             lastId = 1;
             ++count;
         }
 
+        // 验证路径点ID是否连续
         if (lastId != id)
             TC_LOG_ERROR("sql.sql", "SmartWaypointMgr::LoadFromDB: Path entry {}, unexpected point id {}, expected {}.", entry, id, lastId);
 
         ++lastId;
 
+        // 将路径点添加到路径中
         WaypointPath& path = _waypointStore[entry];
         path.id = entry;
         path.nodes.emplace_back(id, x, y, z, o, delay);
@@ -105,6 +175,16 @@ void SmartWaypointMgr::LoadFromDB()
     TC_LOG_INFO("server.loading", ">> Loaded {} SmartAI waypoint paths (total {} waypoints) in {} ms", count, total, GetMSTimeDiffToNow(oldMSTime));
 }
 
+/**
+ * @brief 获取路径配置
+ *
+ * 根据路径ID从内存中获取路径配置
+ *
+ * @param id 路径ID
+ * @return 路径配置指针，不存在返回nullptr
+ *
+ * 性能：O(1)复杂度
+ */
 WaypointPath const* SmartWaypointMgr::GetPath(uint32 id)
 {
     auto itr = _waypointStore.find(id);
@@ -113,12 +193,50 @@ WaypointPath const* SmartWaypointMgr::GetPath(uint32 id)
     return nullptr;
 }
 
+/**
+ * @brief 获取SmartAIMgr单例实例
+ *
+ * @return SmartAIMgr实例指针
+ */
 SmartAIMgr* SmartAIMgr::instance()
 {
     static SmartAIMgr instance;
     return &instance;
 }
 
+/**
+ * @brief 从数据库加载SmartAI脚本
+ *
+ * 从smart_scripts表加载所有SmartAI脚本配置，进行验证和索引。
+ * 这是SmartAI系统的核心加载函数。
+ *
+ * 加载流程：
+ * 1. 加载辅助存储（法术效果缓存）
+ * 2. 清空现有脚本数据
+ * 3. 查询smart_scripts表
+ * 4. 遍历每条记录：
+ *    a. 解析脚本配置
+ *    b. 验证配置正确性
+ *    c. 存储到对应的映射表
+ * 5. 处理链接事件（link字段）
+ * 6. 记录加载统计信息
+ *
+ * 验证内容：
+ * - entryOrGuid有效性（entry > 0，guid < 0）
+ * - source_type有效性（枚举范围）
+ * - event_type有效性
+ * - action_type有效性
+ * - target_type有效性
+ * - 参数范围和引用对象存在性
+ *
+ * 调用时机：
+ * - 服务器启动时
+ *
+ * 性能注意：
+ * - 加载时会验证所有脚本，可能耗时
+ * - 错误脚本会被跳过并记录日志
+ * - 加载后运行时只读，无需同步
+ */
 void SmartAIMgr::LoadSmartAIFromDB()
 {
     LoadHelperStores();

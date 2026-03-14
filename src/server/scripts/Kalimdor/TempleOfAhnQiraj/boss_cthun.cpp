@@ -15,6 +15,33 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file boss_cthun.cpp
+ * @brief 克苏恩首领AI脚本
+ *
+ * 本模块实现了安其拉神殿最终首领克苏恩的AI逻辑，包括：
+ * - 两阶段战斗流程（眼球阶段、克苏恩本体阶段）
+ * - 眼球阶段：绿色光束（随机目标）和红色光束（旋转扫射）
+ * - 本体阶段：吞噬玩家、触手召唤、虚弱状态
+ * - 多种触手AI：眼球触手、利爪触手、巨眼触手、巨爪触手、血肉触手
+ *
+ * 已知问题：
+ * - Darkglare（黑暗凝视）追踪问题
+ *
+ * 战斗阶段详解：
+ * 第一阶段（EYE）：
+ *   - PHASE_EYE_GREEN_BEAM：50秒，每3秒施放绿色光束
+ *   - PHASE_EYE_RED_BEAM：35秒，每秒旋转施放红色光束
+ *
+ * 第二阶段（CTHUN）：
+ *   - PHASE_CTHUN_TRANSITION：转换阶段，10秒
+ *   - PHASE_CTHUN_STOMACH：胃部阶段，召唤血肉触手，吞噬玩家
+ *   - PHASE_CTHUN_WEAK：虚弱阶段，45秒，正常承受伤害
+ *
+ * @author TrinityCore Team
+ * @date 2024
+ */
+
 /* ScriptData
 SDName: Boss_Cthun
 SD%Complete: 95
@@ -61,172 +88,232 @@ EndScriptData */
  * - the current phase is stored in the instance data to be easily shared between the eye and cthun.
  */
 
+/**
+ * @brief 克苏恩战斗阶段枚举
+ *
+ * 定义了克苏恩战斗的所有阶段状态
+ */
 enum Phases
 {
-    PHASE_NOT_STARTED                           = 0,
+    PHASE_NOT_STARTED                           = 0,  // 战斗未开始
 
-    // Main Phase 1 - EYE
-    PHASE_EYE_GREEN_BEAM                        = 1,
-    PHASE_EYE_RED_BEAM                          = 2,
+    // Main Phase 1 - EYE - 第一阶段：眼球阶段
+    PHASE_EYE_GREEN_BEAM                        = 1,  // 绿色光束阶段（50秒）
+    PHASE_EYE_RED_BEAM                          = 2,  // 红色光束阶段（35秒）
 
-    // Main Phase 2 - CTHUN
-    PHASE_CTHUN_TRANSITION                      = 3,
-    PHASE_CTHUN_STOMACH                         = 4,
-    PHASE_CTHUN_WEAK                            = 5,
+    // Main Phase 2 - CTHUN - 第二阶段：克苏恩本体阶段
+    PHASE_CTHUN_TRANSITION                      = 3,  // 转换阶段（10秒）
+    PHASE_CTHUN_STOMACH                         = 4,  // 胃部阶段（召唤触手，吞噬玩家）
+    PHASE_CTHUN_WEAK                            = 5,  // 虚弱阶段（45秒，正常受伤）
 
-    PHASE_CTHUN_DONE                            = 6,
+    PHASE_CTHUN_DONE                            = 6,  // 战斗结束
 };
 
+/**
+ * @brief 克苏恩使用的法术ID枚举
+ */
 enum Spells
 {
-    // ***** Main Phase 1 ********
-    //Eye Spells
-    SPELL_FREEZE_ANIM                           = 16245,
-    SPELL_GREEN_BEAM                            = 26134,
-    SPELL_DARK_GLARE                            = 26029,
-    SPELL_RED_COLORATION                        = 22518,        //Probably not the right spell but looks similar
+    // ***** Main Phase 1 ******** - 第一阶段法术
+    //Eye Spells - 眼球法术
+    SPELL_FREEZE_ANIM                           = 16245,  // 冻结动画，用于红光阶段
+    SPELL_GREEN_BEAM                            = 26134,  // 绿色光束，随机目标伤害
+    SPELL_DARK_GLARE                            = 26029,  // 黑暗凝视，红光扫射
+    SPELL_RED_COLORATION                        = 22518,  // 红色着色效果（可能不是正确的法术，但视觉效果相似）
 
-    //Eye Tentacles Spells
-    SPELL_MIND_FLAY                             = 26143,
+    //Eye Tentacles Spells - 眼球触手法术
+    SPELL_MIND_FLAY                             = 26143,  // 精神鞭笞，持续伤害
 
-    //Claw Tentacles Spells
-    SPELL_GROUND_RUPTURE                        = 26139,
-    SPELL_HAMSTRING                             = 26141,
+    //Claw Tentacles Spells - 利爪触手法术
+    SPELL_GROUND_RUPTURE                        = 26139,  // 地面破裂，范围伤害
+    SPELL_HAMSTRING                             = 26141,  // 断筋，减速效果
 
-    // ***** Main Phase 2 ******
-    //Body spells
-    //SPELL_CARAPACE_CTHUN                        = 26156   //Was removed from client dbcs
-    SPELL_TRANSFORM                             = 26232,
-    SPELL_PURPLE_COLORATION                     = 22581,     //Probably not the right spell but looks similar
+    // ***** Main Phase 2 ****** - 第二阶段法术
+    //Body spells - 本体法术
+    //SPELL_CARAPACE_CTHUN                        = 26156   // 已从客户端DBC中移除
+    SPELL_TRANSFORM                             = 26232,  // 转换法术，眼球变成本体
+    SPELL_PURPLE_COLORATION                     = 22581,  // 紫色着色效果（可能不是正确的法术，但视觉效果相似）
 
-    //Eye Tentacles Spells
-    //SAME AS PHASE1
+    //Eye Tentacles Spells - 眼球触手法术
+    //SAME AS PHASE1 - 与第一阶段相同
 
-    //Giant Claw Tentacles
-    SPELL_MASSIVE_GROUND_RUPTURE                = 26100,
+    //Giant Claw Tentacles - 巨爪触手法术
+    SPELL_MASSIVE_GROUND_RUPTURE                = 26100,  // 大型地面破裂
 
-    //Also casts Hamstring
-    SPELL_THRASH                                = 3391,
+    //Also casts Hamstring - 同时施放断筋
+    SPELL_THRASH                                = 3391,   // 痛击，额外攻击
 
-    //Giant Eye Tentacles
-    //CHAIN CASTS "SPELL_GREEN_BEAM"
+    //Giant Eye Tentacles - 巨眼触手法术
+    //CHAIN CASTS "SPELL_GREEN_BEAM" - 连续施放绿色光束
 
-    //Stomach Spells
-    SPELL_MOUTH_TENTACLE                        = 26332,
-    SPELL_EXIT_STOMACH_KNOCKBACK                = 25383,
-    SPELL_DIGESTIVE_ACID                        = 26476,
+    //Stomach Spells - 胃部法术
+    SPELL_MOUTH_TENTACLE                        = 26332,  // 口腔触手，吞噬玩家的视觉效果
+    SPELL_EXIT_STOMACH_KNOCKBACK                = 25383,  // 离开胃部击退
+    SPELL_DIGESTIVE_ACID                        = 26476,  // 消化酸，胃部持续伤害
 };
 
+/**
+ * @brief 动作类型枚举
+ */
 enum Actions
 {
-    ACTION_FLESH_TENTACLE_KILLED                = 1,
+    ACTION_FLESH_TENTACLE_KILLED                = 1,  // 血肉触手被击杀
 };
 
+/**
+ * @brief 克苏恩喊话和表情枚举
+ */
 enum Yells
 {
-    //Text emote
-    EMOTE_WEAKENED                              = 0,
+    //Text emote - 文本表情
+    EMOTE_WEAKENED                              = 0,  // 虚弱表情
 
-    // ****** Out of Combat ******
-    // Random Wispers - No txt only sound
-    // The random sound is chosen by the client.
-    RANDOM_SOUND_WHISPER                        = 8663,
+    // ****** Out of Combat ****** - 非战斗状态
+    // Random Wispers - No txt only sound - 随机耳语（无文本，仅声音）
+    // The random sound is chosen by the client. - 随机声音由客户端选择
+    RANDOM_SOUND_WHISPER                        = 8663,  // 随机耳语音效
 };
 
-//Stomach Teleport positions
-#define STOMACH_X                           -8562.0f
-#define STOMACH_Y                           2037.0f
-#define STOMACH_Z                           -70.0f
-#define STOMACH_O                           5.05f
+//Stomach Teleport positions - 胃部传送坐标
+#define STOMACH_X                           -8562.0f  // 胃部X坐标
+#define STOMACH_Y                           2037.0f   // 胃部Y坐标
+#define STOMACH_Z                           -70.0f    // 胃部Z坐标
+#define STOMACH_O                           5.05f     // 胃部朝向
 
-//Flesh tentacle positions
+//Flesh tentacle positions - 血肉触手位置
 const Position FleshTentaclePos[2] =
 {
-    { -8571.0f, 1990.0f, -98.0f, 1.22f},
-    { -8525.0f, 1994.0f, -98.0f, 2.12f},
+    { -8571.0f, 1990.0f, -98.0f, 1.22f},  // 第一个血肉触手位置
+    { -8525.0f, 1994.0f, -98.0f, 2.12f},  // 第二个血肉触手位置
 };
 
-//Kick out position
+//Kick out position - 踢出位置（玩家从胃部出来时的位置）
 const Position KickPos = { -8545.0f, 1984.0f, -96.0f, 0.0f};
 
+/**
+ * @brief 克苏恩眼球AI脚本类
+ *
+ * 实现第一阶段的眼球AI，包括：
+ * - 绿色光束阶段（50秒）：每3秒随机目标伤害
+ * - 红色光束阶段（35秒）：旋转扫射
+ * - 触手召唤
+ */
 class boss_eye_of_cthun : public CreatureScript
 {
 public:
+    /**
+     * @brief 构造函数
+     */
     boss_eye_of_cthun() : CreatureScript("boss_eye_of_cthun") { }
 
+    /**
+     * @brief 获取AI实例
+     * @param creature 生物对象指针
+     * @return AI实例指针
+     */
     CreatureAI* GetAI(Creature* creature) const override
     {
         return GetAQ40AI<eye_of_cthunAI>(creature);
     }
 
+    /**
+     * @brief 克苏恩眼球AI结构体
+     */
     struct eye_of_cthunAI : public ScriptedAI
     {
+        /**
+         * @brief 构造函数
+         * @param creature 生物对象指针
+         */
         eye_of_cthunAI(Creature* creature) : ScriptedAI(creature)
         {
             Initialize();
             instance = creature->GetInstanceScript();
 
-            SetCombatMovement(false);
+            SetCombatMovement(false);  // 眼球不移动
         }
 
+        /**
+         * @brief 初始化成员变量
+         *
+         * 重置所有计时器和状态变量到初始值
+         */
         void Initialize()
         {
-            //Phase information
-            PhaseTimer = 50000;                                 //First dark glare in 50 seconds
+            //Phase information - 阶段信息
+            PhaseTimer = 50000;                                 //First dark glare in 50 seconds - 第一次黑暗凝视在50秒后
 
-            //Eye beam phase 50 seconds
-            BeamTimer = 3000;
-            EyeTentacleTimer = 45000;                           //Always spawns 5 seconds before Dark Beam
-            ClawTentacleTimer = 12500;                          //4 per Eye beam phase (unsure if they spawn during Dark beam)
+            //Eye beam phase 50 seconds - 眼球光束阶段（50秒）
+            BeamTimer = 3000;                                   // 绿色光束每3秒施放
+            EyeTentacleTimer = 45000;                           //Always spawns 5 seconds before Dark Beam - 总是在黑暗光束前5秒生成
+            ClawTentacleTimer = 12500;                          //4 per Eye beam phase (unsure if they spawn during Dark beam) - 每个眼球阶段4个（不确定是否在黑暗光束期间生成）
 
-            //Dark Beam phase 35 seconds (each tick = 1 second, 35 ticks)
-            DarkGlareTick = 0;
-            DarkGlareTickTimer = 1000;
-            DarkGlareAngle = 0;
-            ClockWise = false;
+            //Dark Beam phase 35 seconds (each tick = 1 second, 35 ticks) - 黑暗光束阶段（35秒，每tick=1秒，35个tick）
+            DarkGlareTick = 0;                                  // 当前tick计数
+            DarkGlareTickTimer = 1000;                          // tick计时器
+            DarkGlareAngle = 0;                                 // 黑暗光束角度
+            ClockWise = false;                                  // 是否顺时针旋转
         }
 
-        InstanceScript* instance;
+        InstanceScript* instance;  // 实例脚本指针
 
-        //Global variables
-        uint32 PhaseTimer;
+        //Global variables - 全局变量
+        uint32 PhaseTimer;  // 阶段计时器
 
-        //Eye beam phase
-        uint32 BeamTimer;
-        uint32 EyeTentacleTimer;
-        uint32 ClawTentacleTimer;
+        //Eye beam phase - 眼球光束阶段
+        uint32 BeamTimer;          // 绿色光束计时器
+        uint32 EyeTentacleTimer;   // 眼球触手召唤计时器
+        uint32 ClawTentacleTimer;  // 利爪触手召唤计时器
 
-        //Dark Glare phase
-        uint32 DarkGlareTick;
-        uint32 DarkGlareTickTimer;
-        float DarkGlareAngle;
-        bool ClockWise;
+        //Dark Glare phase - 黑暗凝视阶段
+        uint32 DarkGlareTick;      // 黑暗凝视tick计数
+        uint32 DarkGlareTickTimer; // 黑暗凝视tick计时器
+        float DarkGlareAngle;      // 黑暗凝视角度
+        bool ClockWise;            // 旋转方向（顺时针/逆时针）
 
+        /**
+         * @brief 重置AI状态
+         *
+         * 当眼球脱离战斗时调用，恢复所有状态到初始值
+         */
         void Reset() override
         {
             Initialize();
 
-            //Reset flags
-            me->RemoveAurasDueToSpell(SPELL_RED_COLORATION);
-            me->RemoveAurasDueToSpell(SPELL_FREEZE_ANIM);
-            me->RemoveUnitFlag(UNIT_FLAG_UNINTERACTIBLE | UNIT_FLAG_NON_ATTACKABLE);
-            me->SetVisible(true);
+            //Reset flags - 重置标志
+            me->RemoveAurasDueToSpell(SPELL_RED_COLORATION);  // 移除红色着色
+            me->RemoveAurasDueToSpell(SPELL_FREEZE_ANIM);     // 移除冻结动画
+            me->RemoveUnitFlag(UNIT_FLAG_UNINTERACTIBLE | UNIT_FLAG_NON_ATTACKABLE);  // 移除不可交互和不可攻击标志
+            me->SetVisible(true);  // 设置可见
 
-            //Reset Phase
+            //Reset Phase - 重置阶段
             instance->SetData(DATA_CTHUN_PHASE, PHASE_NOT_STARTED);
 
-            //to avoid having a following void zone
+            //to avoid having a following void zone - 避免虚空区域跟随
             Creature* pPortal= me->FindNearestCreature(NPC_CTHUN_PORTAL, 10);
             if (pPortal)
-                pPortal->SetReactState(REACT_PASSIVE);
+                pPortal->SetReactState(REACT_PASSIVE);  // 设置传送门为被动状态
         }
 
+        /**
+         * @brief 进入战斗回调
+         * @param who 进入战斗的目标（未使用）
+         *
+         * 让眼球进入战斗并设置阶段为绿色光束阶段
+         */
         void JustEngagedWith(Unit* /*who*/) override
         {
-            DoZoneInCombat();
-            instance->SetData(DATA_CTHUN_PHASE, PHASE_EYE_GREEN_BEAM);
+            DoZoneInCombat();  // 让所有在战斗区域的敌人进入战斗
+            instance->SetData(DATA_CTHUN_PHASE, PHASE_EYE_GREEN_BEAM);  // 设置阶段为绿色光束
         }
 
+        /**
+         * @brief 生成眼球触手
+         * @param x 相对X坐标偏移
+         * @param y 相对Y坐标偏移
+         *
+         * 在指定位置召唤眼球触手并让其攻击随机目标
+         */
         void SpawnEyeTentacle(float x, float y)
         {
             if (Creature* Spawned = DoSpawnCreature(NPC_EYE_TENTACLE, x, y, 0, 0, TEMPSUMMON_CORPSE_DESPAWN, 500ms))
@@ -235,113 +322,125 @@ public:
                         Spawned->AI()->AttackStart(target);
         }
 
+        /**
+         * @brief 更新AI主循环
+         * @param diff 距离上次更新的时间差（毫秒）
+         *
+         * 眼球AI核心逻辑，处理两个主要阶段：
+         * - 绿色光束阶段：每3秒对随机目标施放绿色光束
+         * - 红色光束阶段：旋转扫射，每秒转动一定角度
+         *
+         * 同时处理触手召唤和阶段转换
+         */
         void UpdateAI(uint32 diff) override
         {
-            //Check if we have a target
+            //Check if we have a target - 检查是否有目标
             if (!UpdateVictim())
                 return;
 
             uint32 currentPhase = instance->GetData(DATA_CTHUN_PHASE);
+            // 在绿色和红色光束阶段都会召唤眼球触手
             if (currentPhase == PHASE_EYE_GREEN_BEAM || currentPhase == PHASE_EYE_RED_BEAM)
             {
-                // EyeTentacleTimer
+                // EyeTentacleTimer - 眼球触手计时器
                 if (EyeTentacleTimer <= diff)
                 {
-                    //Spawn the 8 Eye Tentacles in the corret spots
-                    SpawnEyeTentacle(0, 20);                //south
-                    SpawnEyeTentacle(10, 10);               //south west
-                    SpawnEyeTentacle(20, 0);                //west
-                    SpawnEyeTentacle(10, -10);              //north west
+                    //Spawn the 8 Eye Tentacles in the corret spots - 在8个位置生成眼球触手
+                    SpawnEyeTentacle(0, 20);                //south - 南
+                    SpawnEyeTentacle(10, 10);               //south west - 西南
+                    SpawnEyeTentacle(20, 0);                //west - 西
+                    SpawnEyeTentacle(10, -10);              //north west - 西北
 
-                    SpawnEyeTentacle(0, -20);               //north
-                    SpawnEyeTentacle(-10, -10);             //north east
-                    SpawnEyeTentacle(-20, 0);               // east
-                    SpawnEyeTentacle(-10, 10);              // south east
+                    SpawnEyeTentacle(0, -20);               //north - 北
+                    SpawnEyeTentacle(-10, -10);             //north east - 东北
+                    SpawnEyeTentacle(-20, 0);               // east - 东
+                    SpawnEyeTentacle(-10, 10);              // south east - 东南
 
-                    EyeTentacleTimer = 45000;
+                    EyeTentacleTimer = 45000;  // 45秒后再次召唤
                 } else EyeTentacleTimer -= diff;
             }
 
             switch (currentPhase)
             {
-                case PHASE_EYE_GREEN_BEAM:
-                    //BeamTimer
+                case PHASE_EYE_GREEN_BEAM:  // 绿色光束阶段
+                    //BeamTimer - 绿色光束计时器
                     if (BeamTimer <= diff)
                     {
-                        //SPELL_GREEN_BEAM
+                        //SPELL_GREEN_BEAM - 施放绿色光束
                         if (Unit* target = SelectTarget(SelectTargetMethod::Random, 0))
                         {
-                            me->InterruptNonMeleeSpells(false);
-                            DoCast(target, SPELL_GREEN_BEAM);
+                            me->InterruptNonMeleeSpells(false);  // 中断非近战法术
+                            DoCast(target, SPELL_GREEN_BEAM);    // 施放绿色光束
 
-                            //Correctly update our target
+                            //Correctly update our target - 更新目标
                             me->SetTarget(target->GetGUID());
                         }
 
-                        //Beam every 3 seconds
+                        //Beam every 3 seconds - 每3秒施放一次
                         BeamTimer = 3000;
                     } else BeamTimer -= diff;
 
-                    //ClawTentacleTimer
+                    //ClawTentacleTimer - 利爪触手计时器
                     if (ClawTentacleTimer <= diff)
                     {
                         if (Unit* target = SelectTarget(SelectTargetMethod::Random, 0))
                         {
                             Creature* Spawned = nullptr;
 
-                            //Spawn claw tentacle on the random target
+                            //Spawn claw tentacle on the random target - 在随机目标位置生成利爪触手
                             Spawned = me->SummonCreature(NPC_CLAW_TENTACLE, *target, TEMPSUMMON_CORPSE_DESPAWN, 500ms);
 
                             if (Spawned && Spawned->AI())
                                 Spawned->AI()->AttackStart(target);
                         }
 
-                        //One claw tentacle every 12.5 seconds
+                        //One claw tentacle every 12.5 seconds - 每12.5秒生成一个
                         ClawTentacleTimer = 12500;
                     } else ClawTentacleTimer -= diff;
 
-                    //PhaseTimer
+                    //PhaseTimer - 阶段计时器，控制从绿光到红光的转换
                     if (PhaseTimer <= diff)
                     {
-                        //Switch to Dark Beam
+                        //Switch to Dark Beam - 切换到黑暗光束阶段
                         instance->SetData(DATA_CTHUN_PHASE, PHASE_EYE_RED_BEAM);
 
                         me->InterruptNonMeleeSpells(false);
-                        me->SetReactState(REACT_PASSIVE);
+                        me->SetReactState(REACT_PASSIVE);  // 设置为被动反应
 
-                        //Remove any target
+                        //Remove any target - 移除任何目标
                         me->SetTarget(ObjectGuid::Empty);
 
-                        //Select random target for dark beam to start on
+                        //Select random target for dark beam to start on - 选择随机目标作为黑暗光束的起始方向
                         if (Unit* target = SelectTarget(SelectTargetMethod::Random, 0))
                         {
-                            //Face our target
+                            //Face our target - 面向目标
                             DarkGlareAngle = me->GetAbsoluteAngle(target);
                             DarkGlareTickTimer = 1000;
                             DarkGlareTick = 0;
-                            ClockWise = RAND(true, false);
+                            ClockWise = RAND(true, false);  // 随机选择顺时针或逆时针
                         }
 
-                        //Add red coloration to C'thun
+                        //Add red coloration to C'thun - 给克苏恩添加红色着色
                         DoCast(me, SPELL_RED_COLORATION, true);
 
-                        //Freeze animation
+                        //Freeze animation - 冻结动画
                         DoCast(me, SPELL_FREEZE_ANIM);
                         me->SetOrientation(DarkGlareAngle);
                         me->StopMoving();
 
-                        //Darkbeam for 35 seconds
+                        //Darkbeam for 35 seconds - 黑暗光束持续35秒
                         PhaseTimer = 35000;
                     } else PhaseTimer -= diff;
 
                     break;
 
-                case PHASE_EYE_RED_BEAM:
-                    if (DarkGlareTick < 35)
+                case PHASE_EYE_RED_BEAM:  // 红色光束阶段
+                    if (DarkGlareTick < 35)  // 35个tick
                     {
                         if (DarkGlareTickTimer <= diff)
                         {
-                            //Set angle and cast
+                            //Set angle and cast - 设置角度并施放法术
+                            // 根据旋转方向计算当前角度（每次转动 PI/35 弧度）
                             float angle = ClockWise ? DarkGlareAngle + DarkGlareTick * float(M_PI) / 35 : DarkGlareAngle - DarkGlareTick * float(M_PI) / 35;
 
                             me->SetOrientation(angle);
@@ -349,21 +448,21 @@ public:
 
                             me->StopMoving();
 
-                            //Actual dark glare cast, maybe something missing here?
+                            //Actual dark glare cast, maybe something missing here? - 实际的黑暗凝视施放
                             DoCast(me, SPELL_DARK_GLARE, false);
 
-                            //Increase tick
+                            //Increase tick - 增加tick计数
                             ++DarkGlareTick;
 
-                            //1 second per tick
+                            //1 second per tick - 每tick 1秒
                             DarkGlareTickTimer = 1000;
                         } else DarkGlareTickTimer -= diff;
                     }
 
-                    //PhaseTimer
+                    //PhaseTimer - 阶段计时器，控制从红光到绿光的转换
                     if (PhaseTimer <= diff)
                     {
-                        //Switch to Eye Beam
+                        //Switch to Eye Beam - 切换回眼球光束阶段
                         instance->SetData(DATA_CTHUN_PHASE, PHASE_EYE_GREEN_BEAM);
 
                         BeamTimer = 3000;
@@ -371,76 +470,88 @@ public:
 
                         me->InterruptNonMeleeSpells(false);
 
-                        //Remove Red coloration from c'thun
+                        //Remove Red coloration from c'thun - 移除红色着色
                         me->RemoveAurasDueToSpell(SPELL_RED_COLORATION);
                         me->RemoveAurasDueToSpell(SPELL_FREEZE_ANIM);
 
-                        //set it back to aggressive
+                        //set it back to aggressive - 设置回主动攻击状态
                         me->SetReactState(REACT_AGGRESSIVE);
 
-                        //Eye Beam for 50 seconds
+                        //Eye Beam for 50 seconds - 眼球光束持续50秒
                         PhaseTimer = 50000;
                     } else PhaseTimer -= diff;
 
                     break;
 
-                //Transition phase
+                //Transition phase - 转换阶段
                 case PHASE_CTHUN_TRANSITION:
-                    //Remove any target
+                    //Remove any target - 移除目标
                     me->SetTarget(ObjectGuid::Empty);
                     me->SetHealth(0);
-                    me->SetVisible(false);
+                    me->SetVisible(false);  // 隐藏眼球
                     break;
 
-                //Dead phase
+                //Dead phase - 死亡阶段
                 case PHASE_CTHUN_DONE:
+                    // 移除传送门
                     Creature* pPortal= me->FindNearestCreature(NPC_CTHUN_PORTAL, 10);
                     if (pPortal)
                         pPortal->DespawnOrUnsummon();
 
-                    me->DespawnOrUnsummon();
+                    me->DespawnOrUnsummon();  // 移除眼球
                     break;
             }
         }
 
+        /**
+         * @brief 受伤回调
+         * @param done_by 伤害来源（未使用）
+         * @param damage 伤害值（引用，可修改）
+         * @param damageType 伤害类型（未使用）
+         * @param spellInfo 法术信息（未使用）
+         *
+         * 处理眼球受到伤害时的逻辑：
+         * - 在绿色或红色光束阶段，如果伤害足以杀死眼球，则假死并转换阶段
+         * - 在其他阶段阻止死亡
+         */
         void DamageTaken(Unit* /*done_by*/, uint32& damage, DamageEffectType /*damageType*/, SpellInfo const* /*spellInfo = nullptr*/) override
         {
             switch (instance->GetData(DATA_CTHUN_PHASE))
             {
                 case PHASE_EYE_GREEN_BEAM:
                 case PHASE_EYE_RED_BEAM:
-                    //Only if it will kill
+                    //Only if it will kill - 只有伤害足以击杀时才处理
                     if (damage < me->GetHealth())
                         return;
 
-                    //Fake death in phase 0 or 1 (green beam or dark glare phase)
+                    //Fake death in phase 0 or 1 (green beam or dark glare phase) - 在绿色光束或黑暗光束阶段假死
                     me->InterruptNonMeleeSpells(false);
 
-                    //Remove Red coloration from c'thun
+                    //Remove Red coloration from c'thun - 移除红色着色
                     me->RemoveAurasDueToSpell(SPELL_RED_COLORATION);
 
-                    //Reset to normal emote state and prevent select and attack
+                    //Reset to normal emote state and prevent select and attack - 重置为正常状态并阻止选择和攻击
                     me->SetUnitFlag(UNIT_FLAG_UNINTERACTIBLE | UNIT_FLAG_NON_ATTACKABLE);
 
-                    //Remove Target field
+                    //Remove Target field - 移除目标字段
                     me->SetTarget(ObjectGuid::Empty);
 
-                    //Death animation/respawning;
-                    instance->SetData(DATA_CTHUN_PHASE, PHASE_CTHUN_TRANSITION);
+                    //Death animation/respawning; - 死亡动画/重生
+                    instance->SetData(DATA_CTHUN_PHASE, PHASE_CTHUN_TRANSITION);  // 设置阶段为转换阶段
 
                     me->SetHealth(0);
-                    damage = 0;
+                    damage = 0;  // 将伤害设为0，避免真正死亡
 
                     me->InterruptNonMeleeSpells(true);
                     me->RemoveAllAuras();
                     break;
 
                 case PHASE_CTHUN_DONE:
-                    //Allow death here
+                    //Allow death here - 允许死亡
                     return;
 
                 default:
-                    //Prevent death in these phases
+                    //Prevent death in these phases - 在这些阶段阻止死亡
                     damage = 0;
                     return;
             }

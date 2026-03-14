@@ -15,6 +15,43 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file SpellAuras.cpp
+ * @brief 光环系统核心实现文件 - 实现光环(Aura)及其相关类的核心功能
+ *
+ * 本文件实现了光环系统的核心类：
+ *
+ * - AuraApplication: 光环应用类，管理光环在特定目标上的应用状态
+ * - Aura: 光环基类，游戏中光环效果的核心管理
+ * - UnitAura: 单位光环类，应用于单位的光环
+ * - DynObjAura: 动态对象光环类，应用于动态对象的光环
+ * - ChargeDropEvent: 充能消耗事件类
+ *
+ * 关键实现流程：
+ *
+ * 1. 光环创建流程：
+ *    Aura::TryRefreshStackOrCreate() -> Aura::Create() -> UnitAura/DynObjAura构造函数
+ *    -> Aura::_InitEffects() -> AuraEffect构造函数
+ *
+ * 2. 光环应用流程：
+ *    Unit::_AddAura() -> Aura::ApplyForTargets() -> Aura::UpdateTargetMap()
+ *    -> Unit::_ApplyAura() -> AuraApplication构造 -> AuraEffect::HandleEffect()
+ *
+ * 3. 光环更新流程：
+ *    Unit::Update() -> Aura::UpdateOwner() -> Aura::Update()
+ *    -> 处理持续时间、周期性效果、能量消耗等
+ *
+ * 4. 光环移除流程：
+ *    Aura::Remove() -> Aura::_Remove() -> Unit::_UnapplyAura()
+ *    -> AuraApplication::_Remove() -> AuraEffect::HandleEffect(apply=false)
+ *    -> Aura析构函数
+ *
+ * 性能注意事项：
+ * - 区域光环每500ms更新一次目标映射，避免频繁的GridSearcher调用
+ * - 光环应用对象使用对象池或缓存以减少内存分配
+ * - 脚本调用使用缓存的脚本列表避免重复查找
+ */
+
 #include "Common.h"
 #include "CellImpl.h"
 #include "Config.h"
@@ -2658,8 +2695,12 @@ void UnitAura::FillTargetMap(std::unordered_map<Unit*, uint8>& targets, Unit* ca
         if (!target && targetPair.first == GetUnitOwner()->GetGUID())
             target = GetUnitOwner();
 
-        if (target)
+        if (target) {
             targets.emplace(target, targetPair.second);
+            if (std::find(debugSpellIds.begin(), debugSpellIds.end(), GetSpellInfo()->Id) != debugSpellIds.end()) {
+                TC_LOG_DEBUG("spells", "[XX-{}][{}] UnitAura::FillTargetMap - this: {} owner: {}, target: {}", debugSpellSeqId++, m_spellInfo->Id, (const void*)this, GetUnitOwner()->GetGUID().ToString(), target->GetGUID().ToString());
+            }
+        }
     }
 
     for (SpellEffectInfo const& spellEffectInfo : GetSpellInfo()->GetEffects())
@@ -2718,6 +2759,9 @@ void UnitAura::FillTargetMap(std::unordered_map<Unit*, uint8>& targets, Unit* ca
 
         if (selectionType != TARGET_CHECK_DEFAULT)
         {
+            if (std::find(debugSpellIds.begin(), debugSpellIds.end(), GetSpellInfo()->Id) != debugSpellIds.end()) {
+                TC_LOG_DEBUG("spells", "[XX-{}][{}] UnitAura::FillTargetMap - this: {} owner: {}, selectionType: {}", debugSpellSeqId++, m_spellInfo->Id, (const void*)this, GetUnitOwner()->GetGUID().ToString(), static_cast<int>(selectionType));
+            }
             Trinity::WorldObjectSpellAreaTargetCheck check(radius, GetUnitOwner(), ref, GetUnitOwner(), m_spellInfo, selectionType, condList);
             Trinity::UnitListSearcher<Trinity::WorldObjectSpellAreaTargetCheck> searcher(GetUnitOwner(), units, check);
             Cell::VisitAllObjects(GetUnitOwner(), searcher, radius + extraSearchRadius);
@@ -2726,7 +2770,7 @@ void UnitAura::FillTargetMap(std::unordered_map<Unit*, uint8>& targets, Unit* ca
         for (Unit* unit : units) {
             targets[unit] |= 1 << spellEffectInfo.EffectIndex;
             if (std::find(debugSpellIds.begin(), debugSpellIds.end(), GetSpellInfo()->Id) != debugSpellIds.end()) {
-                TC_LOG_DEBUG("spells", "[XX-{}][{}] UnitAura::FillTargetMap - this: {} owner: {}, target: {}", debugSpellSeqId++, m_spellInfo->Id, (const void*)this, GetUnitOwner()->GetGUID().ToString(), unit->GetGUID().ToString());
+                TC_LOG_DEBUG("spells", "[XX-{}][{}] UnitAura::FillTargetMap - this: {} owner: {}, final target: {}", debugSpellSeqId++, m_spellInfo->Id, (const void*)this, GetUnitOwner()->GetGUID().ToString(), unit->GetGUID().ToString());
             }
         }
     }

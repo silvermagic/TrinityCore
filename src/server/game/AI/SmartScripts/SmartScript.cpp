@@ -15,6 +15,66 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file SmartScript.cpp
+ * @brief SmartAI脚本系统核心执行引擎实现
+ *
+ * 本文件实现了SmartScript类，这是SmartAI系统的核心执行引擎。
+ * 负责加载、管理和执行智能AI事件和动作。
+ *
+ * 主要功能模块：
+ *
+ * 1. 初始化模块
+ *    - OnInitialize(): 绑定到游戏对象
+ *    - GetScript(): 加载脚本配置
+ *    - FillScript(): 填充事件列表
+ *
+ * 2. 事件处理模块
+ *    - ProcessEventsFor(): 处理指定类型的所有事件
+ *    - ProcessEvent(): 处理单个事件
+ *    - CheckTimer(): 检查定时器
+ *    - UpdateTimer(): 更新定时器
+ *
+ * 3. 动作执行模块
+ *    - ProcessAction(): 执行动作（2000+行核心逻辑）
+ *    - ProcessTimedAction(): 处理定时动作
+ *
+ * 4. 目标选择模块
+ *    - GetTargets(): 获取动作目标
+ *    - DoSelectLowestHpFriendly(): 选择最低血量友方
+ *    - DoFindFriendlyCC(): 查找被控制的友方
+ *
+ * 5. 相位管理模块
+ *    - SetPhase()/IncPhase()/DecPhase(): 相位操作
+ *    - IsInPhase(): 相位检查
+ *
+ * 6. 计数器系统
+ *    - StoreCounter(): 存储计数器
+ *    - GetCounterValue(): 获取计数器值
+ *
+ * 7. 存储目标系统
+ *    - StoreTargetList(): 存储目标列表
+ *    - GetStoredTargetVector(): 获取存储的目标
+ *
+ * 执行流程示例（BOSS战斗）：
+ * 1. 玩家攻击BOSS -> 触发SMART_EVENT_AGGRO
+ * 2. ProcessEventsFor(SMART_EVENT_AGGRO) 被调用
+ * 3. 遍历所有AGGRO事件，检查相位和条件
+ * 4. ProcessEvent() 处理满足条件的事件
+ * 5. ProcessAction() 执行动作（如说话、施法）
+ * 6. 可能修改相位，影响后续事件
+ *
+ * 性能优化：
+ * - 事件按优先级排序
+ * - 使用位掩码快速检查相位
+ * - 避免频繁的对象查找
+ * - 限制嵌套事件深度（防止无限循环）
+ *
+ * 线程安全性：
+ * - 每个SmartScript实例绑定到特定对象
+ * - 在地图线程中执行，无需同步
+ */
+
 #include "SmartScript.h"
 #include "CellImpl.h"
 #include "ChatTextBuilder.h"
@@ -43,60 +103,98 @@
 #include "WaypointDefines.h"
 #include <G3D/Quat.h>
 
+/**
+ * @brief SmartScript构造函数
+ *
+ * 初始化所有成员变量为默认状态
+ */
 SmartScript::SmartScript()
 {
-    go = nullptr;
-    me = nullptr;
-    trigger = nullptr;
-    atPlayer = nullptr;
-    mEventPhase = 0;
-    mPathId = 0;
-    mTextTimer = 0;
-    mLastTextID = 0;
-    mUseTextTimer = false;
-    mTalkerEntry = 0;
-    mScriptType = SMART_SCRIPT_TYPE_CREATURE;
-    isProcessingTimedActionList = false;
-    mCurrentPriority = 0;
-    mEventSortingRequired = false;
-    mNestedEventsCounter = 0;
-    mAllEventFlags = 0;
+    go = nullptr;                        // 游戏对象引用初始化为空
+    me = nullptr;                        // 生物对象引用初始化为空
+    trigger = nullptr;                   // 区域触发器初始化为空
+    atPlayer = nullptr;                  // 区域触发器玩家初始化为空
+    mEventPhase = 0;                     // 事件相位初始化为0（总是触发）
+    mPathId = 0;                         // 路径ID初始化为0
+    mTextTimer = 0;                      // 文本定时器初始化为0
+    mLastTextID = 0;                     // 最后文本ID初始化为0
+    mUseTextTimer = false;               // 使用文本定时器标志初始化为false
+    mTalkerEntry = 0;                    // 说话者entry初始化为0
+    mScriptType = SMART_SCRIPT_TYPE_CREATURE; // 脚本类型默认为生物
+    isProcessingTimedActionList = false; // 处理定时动作列表标志初始化为false
+    mCurrentPriority = 0;                // 当前优先级初始化为0
+    mEventSortingRequired = false;       // 事件排序需求标志初始化为false
+    mNestedEventsCounter = 0;            // 嵌套事件计数器初始化为0
+    mAllEventFlags = 0;                  // 所有事件标志初始化为0
 }
 
+/**
+ * @brief SmartScript析构函数
+ *
+ * 清理资源（目前无需特殊清理）
+ */
 SmartScript::~SmartScript()
 {
 }
 
+/**
+ * @brief 检查生物是否使用SmartAI
+ *
+ * 用于验证目标生物是否支持SmartAI操作，防止对不支持SmartAI的生物执行操作
+ *
+ * @param c 要检查的生物
+ * @param silent 是否静默模式（true则不输出错误日志）
+ * @return true 如果生物使用SmartAI
+ */
 bool SmartScript::IsSmart(Creature* c, bool silent) const
 {
     if (!c)
         return false;
 
+    // 尝试将AI转换为SmartAI指针
     bool smart = true;
     if (!dynamic_cast<SmartAI*>(c->AI()))
         smart = false;
 
+    // 如果不是SmartAI且非静默模式，输出错误日志
     if (!smart && !silent)
         TC_LOG_ERROR("sql.sql", "SmartScript: Action target Creature (GUID: {} Entry: {}) is not using SmartAI, action called by Creature (GUID: {} Entry: {}) skipped to prevent crash.", c->GetSpawnId(), c->GetEntry(), me ? me->GetSpawnId() : 0, me ? me->GetEntry() : 0);
 
     return smart;
 }
 
+/**
+ * @brief 检查游戏对象是否使用SmartAI
+ *
+ * 用于验证目标游戏对象是否支持SmartAI操作
+ *
+ * @param g 要检查的游戏对象
+ * @param silent 是否静默模式
+ * @return true 如果游戏对象使用SmartGameObjectAI
+ */
 bool SmartScript::IsSmart(GameObject* g, bool silent) const
 {
     if (!g)
         return false;
 
+    // 尝试将AI转换为SmartGameObjectAI指针
     bool smart = true;
     if (!dynamic_cast<SmartGameObjectAI*>(g->AI()))
         smart = false;
 
+    // 如果不是SmartAI且非静默模式，输出错误日志
     if (!smart && !silent)
         TC_LOG_ERROR("sql.sql", "SmartScript: Action target GameObject (GUID: {} Entry: {}) is not using SmartGameObjectAI, action called by GameObject (GUID: {} Entry: {}) skipped to prevent crash.", g->GetSpawnId(), g->GetEntry(), go ? go->GetSpawnId() : 0, go ? go->GetEntry() : 0);
 
     return smart;
 }
 
+/**
+ * @brief 检查当前对象是否使用SmartAI
+ *
+ * @param silent 是否静默模式
+ * @return true 如果当前对象使用SmartAI
+ */
 bool SmartScript::IsSmart(bool silent) const
 {
     if (me)

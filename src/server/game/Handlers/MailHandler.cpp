@@ -15,6 +15,33 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file MailHandler.cpp
+ * @brief 游戏内邮件系统网络消息处理器
+ *
+ * 本模块负责处理玩家与邮件系统交互的所有网络消息，包括：
+ * - 发送邮件（包含物品附件和金币）
+ * - 接收和阅读邮件
+ * - 取出邮件附件和金币
+ * - 删除邮件和退回邮件
+ * - 查询邮件列表和下次邮件到达时间
+ *
+ * 邮件系统特性：
+ * - 支持金币和物品附件
+ * - 支持货到付款（COD）功能
+ * - 邮件投递有延迟（跨账户发送物品时）
+ * - 支持邮件模板（系统邮件）
+ * - 战队绑定物品可在同账户角色间邮寄
+ *
+ * 安全措施：
+ * - 发送邮件需要等级限制
+ * - 收件人邮箱有容量限制（最多100封）
+ * - 跨阵营邮寄需要特殊权限
+ * - 防止负数金币和COD金额
+ *
+ * @note 邮件系统与物品系统紧密关联，附件物品需要特殊处理
+ */
+
 #include "WorldSession.h"
 #include "AccountMgr.h"
 #include "CharacterCache.h"
@@ -33,6 +60,27 @@
 #include "World.h"
 #include "WorldPacket.h"
 
+/**
+ * @brief 检查玩家是否可以打开邮箱
+ *
+ * 验证玩家是否有权限访问指定的邮箱。支持三种邮箱类型：
+ * 玩家自己（需要GM权限）、游戏对象邮箱、NPC邮箱。
+ *
+ * @param guid 邮箱对象的 GUID
+ * @return true 如果可以打开邮箱，false 否则
+ *
+ * 检查类型：
+ * - 玩家自己的 GUID：需要 GM 邮箱权限（作弊检测）
+ * - 游戏对象：必须是邮箱类型且可交互
+ * - NPC：必须有邮箱 NPC 标志且可交互
+ *
+ * 安全措施：
+ * - 记录尝试通过作弊打开邮箱的玩家
+ * - 验证游戏对象和 NPC 是否可交互
+ *
+ * @see Player::GetGameObjectIfCanInteractWith()
+ * @see Player::GetNPCIfCanInteractWith()
+ */
 bool WorldSession::CanOpenMailBox(ObjectGuid guid)
 {
     if (guid == _player->GetGUID())
@@ -59,6 +107,53 @@ bool WorldSession::CanOpenMailBox(ObjectGuid guid)
     return true;
 }
 
+/**
+ * @brief 处理发送邮件的请求
+ *
+ * 当玩家发送邮件时，系统会验证发送条件、处理物品附件和金币，
+ * 然后将邮件保存到数据库并发送给收件人。
+ *
+ * @param sendMail 发送邮件的数据包，包含收件人、主题、正文、附件、金币和COD金额
+ *
+ * 调用时机：
+ * - 玩家在邮箱界面点击发送按钮时
+ * - 客户端发送 CMSG_SEND_MAIL 消息
+ *
+ * 处理流程：
+ * 1. 验证邮箱访问权限
+ * 2. 验证发件人等级要求
+ * 3. 查找收件人角色信息
+ * 4. 验证金币和COD金额是否合法（非负数）
+ * 5. 验证收件人邮箱容量限制
+ * 6. 验证阵营限制（跨阵营邮寄需要权限）
+ * 7. 验证所有附件物品是否可交易
+ * 8. 扣除邮费和发送的金币
+ * 9. 将物品从发件人背包移至邮件
+ * 10. 保存邮件到数据库
+ * 11. 如果收件人在线，通知其收到新邮件
+ *
+ * 邮件费用：
+ * - 无附件邮件：30铜
+ * - 有附件邮件：30铜 × 附件数量
+ *
+ * 物品附件限制：
+ * - 物品必须可交易
+ * - 不能发送非空背包
+ * - 战队绑定物品只能寄给同账户角色
+ * - 不能发送消耗品和有持续时间的物品
+ * - 包装物品不能使用COD
+ *
+ * 投递延迟：
+ * - 同账户内邮寄：即时投递
+ * - 跨账户邮寄物品：1小时投递延迟
+ *
+ * 性能注意事项：
+ * - 使用异步数据库查询获取离线收件人信息
+ * - 物品转移使用事务保证数据一致性
+ *
+ * @see MailDraft::SendMailTo()
+ * @see Player::CanStoreNewItem()
+ */
 void WorldSession::HandleSendMail(WorldPackets::Mail::SendMail& sendMail)
 {
     if (!CanOpenMailBox(sendMail.Info.Mailbox))
@@ -308,6 +403,28 @@ void WorldSession::HandleSendMail(WorldPackets::Mail::SendMail& sendMail)
     }
 }
 
+/**
+ * @brief 处理将邮件标记为已读的请求
+ *
+ * 当玩家打开一封邮件时，客户端发送此消息将该邮件标记为已读状态。
+ * 这会影响未读邮件计数和邮件列表的显示。
+ *
+ * @param markAsRead 标记已读的数据包，包含邮箱GUID和邮件ID
+ *
+ * 调用时机：
+ * - 玩家打开邮件阅读时
+ * - 客户端发送 CMSG_MAIL_MARK_AS_READ 消息
+ *
+ * 处理流程：
+ * 1. 验证邮箱访问权限
+ * 2. 获取邮件对象
+ * 3. 更新邮件的已读标志
+ * 4. 减少未读邮件计数
+ * 5. 标记邮件状态为已修改
+ *
+ * @see Player::GetMail()
+ * @see MAIL_CHECK_MASK_READ
+ */
 //called when mail is read
 void WorldSession::HandleMailMarkAsRead(WorldPackets::Mail::MailMarkAsRead& markAsRead)
 {
@@ -326,6 +443,33 @@ void WorldSession::HandleMailMarkAsRead(WorldPackets::Mail::MailMarkAsRead& mark
     }
 }
 
+/**
+ * @brief 处理删除邮件的请求
+ *
+ * 当玩家删除邮件时，系统将邮件标记为删除状态。
+ * COD邮件不能被删除，必须先取出附件。
+ *
+ * @param mailDelete 删除邮件的数据包，包含邮箱GUID和邮件ID
+ *
+ * 调用时机：
+ * - 玩家在邮箱界面点击删除按钮时
+ * - 客户端发送 CMSG_MAIL_DELETE 消息
+ *
+ * 处理流程：
+ * 1. 验证邮箱访问权限
+ * 2. 获取邮件对象
+ * 3. 检查是否为COD邮件（COD邮件不能删除）
+ * 4. 将邮件状态标记为已删除
+ * 5. 发送删除结果给客户端
+ *
+ * 安全措施：
+ * - COD邮件不能删除，防止绕过付款
+ * - 即使邮件不存在也返回成功，防止信息泄露
+ *
+ * @note 邮件删除后会从数据库中移除，包含的物品也会被删除
+ *
+ * @see Player::GetMail()
+ */
 //called when client deletes mail
 void WorldSession::HandleMailDelete(WorldPackets::Mail::MailDelete& mailDelete)
 {
@@ -349,6 +493,41 @@ void WorldSession::HandleMailDelete(WorldPackets::Mail::MailDelete& mailDelete)
     player->SendMailResult(mailDelete.MailID, MAIL_DELETED, MAIL_OK);
 }
 
+/**
+ * @brief 处理退回邮件的请求
+ *
+ * 当玩家将邮件退回给发件人时，系统会创建一封新邮件发回给原始发件人，
+ * 包含原始邮件的所有附件和金币，并删除原始邮件。
+ *
+ * @param returnToSender 退回邮件的数据包，包含邮箱GUID和邮件ID
+ *
+ * 调用时机：
+ * - 玩家在邮箱界面点击退回按钮时
+ * - 客户端发送 CMSG_MAIL_RETURN_TO_SENDER 消息
+ *
+ * 处理流程：
+ * 1. 验证邮箱访问权限
+ * 2. 验证邮件存在且未删除
+ * 3. 验证邮件已投递（投递时间已过）
+ * 4. 从数据库删除原始邮件及其物品记录
+ * 5. 从玩家邮件列表移除邮件
+ * 6. 如果发件人存在：
+ *    - 创建新邮件草稿
+ *    - 将附件物品添加到新邮件
+ *    - 发送退回邮件给发件人
+ * 7. 如果发件人不存在，物品被删除
+ * 8. 释放邮件对象内存
+ *
+ * 退回规则：
+ * - 只有普通邮件可以退回
+ * - 退回邮件保留原始主题和正文
+ * - 退回邮件保留所有附件和金币
+ * - 邮件模板邮件可以退回
+ *
+ * @note 如果发件人角色已删除，退回的物品将永久丢失
+ *
+ * @see MailDraft::SendReturnToSender()
+ */
 void WorldSession::HandleMailReturnToSender(WorldPackets::Mail::MailReturnToSender& returnToSender)
 {
     if (!CanOpenMailBox(returnToSender.Mailbox))
@@ -406,6 +585,45 @@ void WorldSession::HandleMailReturnToSender(WorldPackets::Mail::MailReturnToSend
     player->SendMailResult(returnToSender.MailID, MAIL_RETURNED_TO_SENDER, MAIL_OK);
 }
 
+/**
+ * @brief 处理取出邮件附件物品的请求
+ *
+ * 当玩家点击邮件中的附件物品时，系统将物品转移到玩家背包，
+ * 并处理货到付款（COD）逻辑。
+ *
+ * @param takeItem 取出物品的数据包，包含邮箱GUID、邮件ID和附件ID
+ *
+ * 调用时机：
+ * - 玩家在邮件界面点击附件物品图标时
+ * - 客户端发送 CMSG_MAIL_TAKE_ITEM 消息
+ *
+ * 处理流程：
+ * 1. 验证邮箱访问权限
+ * 2. 获取邮件对象并验证有效性
+ * 3. 验证邮件包含指定的附件物品
+ * 4. 如果是COD邮件，验证玩家有足够的金币
+ * 5. 检查玩家背包是否有空间
+ * 6. 如果是COD邮件：
+ *    - 从玩家背包扣除COD金额
+ *    - 将COD金额邮寄给发件人
+ *    - 记录GM交易日志（如有权限）
+ * 7. 从邮件中移除附件物品
+ * 8. 将物品添加到玩家背包
+ * 9. 更新邮件状态并保存
+ *
+ * COD处理：
+ * - COD金额在取出物品时扣除
+ * - COD金额会邮寄给原始发件人
+ * - 取出物品后COD标记清零
+ *
+ * 安全措施：
+ * - 验证附件确实在邮件中，防止作弊取出COD物品
+ * - 验证玩家有足够金币支付COD
+ * - 物品转移使用数据库事务
+ *
+ * @see Player::MoveItemToInventory()
+ * @see MailDraft::SendMailTo()
+ */
 //called when player takes item attached in mail
 void WorldSession::HandleMailTakeItem(WorldPackets::Mail::MailTakeItem& takeItem)
 {
@@ -503,6 +721,37 @@ void WorldSession::HandleMailTakeItem(WorldPackets::Mail::MailTakeItem& takeItem
         player->SendMailResult(takeItem.MailID, MAIL_ITEM_TAKEN, MAIL_ERR_EQUIP_ERROR, msg);
 }
 
+/**
+ * @brief 处理取出邮件中金币的请求
+ *
+ * 当玩家点击邮件中的金币时，系统将金币添加到玩家背包，
+ * 并清空邮件中的金币字段。
+ *
+ * @param takeMoney 取出金币的数据包，包含邮箱GUID和邮件ID
+ *
+ * 调用时机：
+ * - 玩家在邮件界面点击金币图标时
+ * - 客户端发送 CMSG_MAIL_TAKE_MONEY 消息
+ *
+ * 处理流程：
+ * 1. 验证邮箱访问权限
+ * 2. 获取邮件对象并验证有效性
+ * 3. 验证邮件已投递（投递时间已过）
+ * 4. 将金币添加到玩家背包（检查金币上限）
+ * 5. 清空邮件的金币字段
+ * 6. 更新邮件状态为已修改
+ * 7. 保存金币和邮件到数据库
+ *
+ * 金币限制：
+ * - 玩家金币有上限，超过上限时无法取出
+ * - 金币取出后邮件仍保留，直到被删除
+ *
+ * 安全措施：
+ * - 保存金币和邮件到数据库防止作弊
+ * - 使用事务保证数据一致性
+ *
+ * @see Player::ModifyMoney()
+ */
 void WorldSession::HandleMailTakeMoney(WorldPackets::Mail::MailTakeMoney& takeMoney)
 {
     if (!CanOpenMailBox(takeMoney.Mailbox))
@@ -536,6 +785,33 @@ void WorldSession::HandleMailTakeMoney(WorldPackets::Mail::MailTakeMoney& takeMo
     CharacterDatabase.CommitTransaction(trans);
 }
 
+/**
+ * @brief 处理获取邮件列表的请求
+ *
+ * 当玩家打开邮箱时，客户端发送此消息请求获取该玩家的所有邮件列表。
+ * 服务器返回所有有效邮件的详细信息。
+ *
+ * @param getList 获取邮件列表的数据包，包含邮箱GUID
+ *
+ * 调用时机：
+ * - 玩家打开邮箱界面时
+ * - 客户端发送 CMSG_GET_MAIL_LIST 消息
+ *
+ * 处理流程：
+ * 1. 验证邮箱访问权限
+ * 2. 遍历玩家的所有邮件
+ * 3. 过滤掉已删除和未投递的邮件
+ * 4. 构建邮件列表响应包
+ * 5. 发送邮件列表给客户端
+ * 6. 更新下次邮件投递时间和未读邮件计数
+ *
+ * 邮件过滤：
+ * - 跳过已删除的邮件
+ * - 跳过投递时间未到的邮件
+ *
+ * @see Player::GetMails()
+ * @see Player::UpdateNextMailTimeAndUnreads()
+ */
 //called when player lists his received mails
 void WorldSession::HandleGetMailList(WorldPackets::Mail::MailGetList& getList)
 {
@@ -562,6 +838,41 @@ void WorldSession::HandleGetMailList(WorldPackets::Mail::MailGetList& getList)
     _player->UpdateNextMailTimeAndUnreads();
 }
 
+/**
+ * @brief 处理将邮件正文复制为物品的请求
+ *
+ * 当玩家点击"复制邮件内容"时，系统创建一个包含邮件正文的物品，
+ * 允许玩家保存邮件内容到背包中。
+ *
+ * @param createTextItem 创建文本物品的数据包，包含邮箱GUID和邮件ID
+ *
+ * 调用时机：
+ * - 玩家在邮件界面点击复制内容按钮时
+ * - 客户端发送 CMSG_MAIL_CREATE_TEXT_ITEM 消息
+ *
+ * 处理流程：
+ * 1. 验证邮箱访问权限
+ * 2. 获取邮件对象并验证有效性
+ * 3. 验证邮件有正文或邮件模板
+ * 4. 验证邮件未被复制过
+ * 5. 创建邮件正文物品（模板ID: MAIL_BODY_ITEM_TEMPLATE）
+ * 6. 设置物品的文本内容
+ * 7. 设置物品的创建者信息
+ * 8. 将物品添加到玩家背包
+ * 9. 标记邮件为已复制
+ *
+ * 物品属性：
+ * - 使用固定的邮件正文物品模板
+ * - 物品包含邮件的完整正文
+ * - 物品标记为邮件文本类型
+ *
+ * 限制条件：
+ * - 邮件必须有正文内容
+ * - 每封邮件只能复制一次
+ * - 玩家背包需要有空间
+ *
+ * @see Item::SetText()
+ */
 //used when player copies mail body to his inventory
 void WorldSession::HandleMailCreateTextItem(WorldPackets::Mail::MailCreateTextItem& createTextItem)
 {
@@ -619,6 +930,34 @@ void WorldSession::HandleMailCreateTextItem(WorldPackets::Mail::MailCreateTextIt
     }
 }
 
+/**
+ * @brief 处理查询下次邮件到达时间的请求
+ *
+ * 客户端定期查询下次邮件到达时间，用于显示邮件到达提示。
+ * 服务器返回未读邮件的发送者信息（最多2个）。
+ *
+ * @param queryNextMailTime 查询邮件时间的数据包（空数据包）
+ *
+ * 调用时机：
+ * - 客户端定期自动查询
+ * - 玩家有未读邮件时
+ * - 客户端发送 CMSG_QUERY_NEXT_MAIL_TIME 消息
+ *
+ * 处理流程：
+ * 1. 检查玩家是否有未读邮件
+ * 2. 如果没有未读邮件，返回-1天（表示无邮件）
+ * 3. 如果有未读邮件：
+ *    - 返回时间为0（表示立即）
+ *    - 收集未读邮件的发送者信息
+ *    - 每个发送者只显示一次
+ *    - 最多返回2个发送者信息
+ *
+ * 响应内容：
+ * - 下次邮件到达时间
+ * - 未读邮件发送者列表（最多2个）
+ *
+ * @note 客户端会根据返回值显示"你有新邮件"的提示
+ */
 void WorldSession::HandleQueryNextMailTime(WorldPackets::Mail::MailQueryNextMailTime& /*queryNextMailTime*/)
 {
     WorldPackets::Mail::MailQueryNextTimeResult result;

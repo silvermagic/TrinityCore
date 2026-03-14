@@ -15,6 +15,19 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file BattlegroundQueue.cpp
+ * @brief 战场队列系统实现文件
+ *
+ * 实现了战场队列的核心功能，包括：
+ * - 队列更新和匹配算法
+ * - 队伍添加和移除
+ * - 玩家邀请和超时处理
+ * - 平均等待时间计算
+ * - 预组队伍和普通队伍的匹配逻辑
+ * - 竞技场评级匹配
+ */
+
 #include "BattlegroundQueue.h"
 #include "ArenaTeam.h"
 #include "ArenaTeamMgr.h"
@@ -34,16 +47,22 @@
 /***            BATTLEGROUND QUEUE SYSTEM              ***/
 /*********************************************************/
 
+/**
+ * @brief 构造函数
+ *
+ * 初始化战场队列的等待时间统计数组
+ */
 BattlegroundQueue::BattlegroundQueue()
 {
+    // 初始化所有阵营和分段的等待时间统计
     for (uint32 i = 0; i < PVP_TEAMS_COUNT; ++i)
     {
         for (uint32 j = 0; j < MAX_BATTLEGROUND_BRACKETS; ++j)
         {
-            m_SumOfWaitTimes[i][j] = 0;
-            m_WaitTimeLastPlayer[i][j] = 0;
+            m_SumOfWaitTimes[i][j] = 0;           // 等待时间总和
+            m_WaitTimeLastPlayer[i][j] = 0;       // 最后玩家的等待时间
             for (uint32 k = 0; k < COUNT_OF_PLAYERS_TO_AVERAGE_WAIT_TIME; ++k)
-                m_WaitTimes[i][j][k] = 0;
+                m_WaitTimes[i][j][k] = 0;         // 等待时间历史记录数组
         }
     }
 }

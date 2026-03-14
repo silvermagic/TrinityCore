@@ -15,6 +15,24 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file boss_algalon_the_observer.cpp
+ * @brief 奥杜尔副本 - 观察者奥尔加隆首领战脚本
+ *
+ * 本模块实现了奥杜尔副本的最终隐藏首领 - 观察者奥尔加隆的战斗。
+ * 奥尔加隆是泰坦的观察者，负责评估艾泽拉斯是否需要重置。
+ *
+ * 战斗机制：
+ * - 阶段1：基础战斗，召唤坍缩之星和活体星座
+ * - 阶段2：生命值20%以下时进入，奥尔加隆升入天国
+ * - 特殊机制：宇宙重击、相位重击、大爆炸、宇宙粉碎
+ * - 限时战斗：从激活到脱战有1小时时限
+ *
+ * 成就：
+ * - "超新星"：快速击败奥尔加隆
+ * - "星际之门"：完成特殊挑战
+ */
+
 #include "ScriptMgr.h"
 #include "Containers.h"
 #include "DBCStores.h"
@@ -34,120 +52,138 @@
 #include "TemporarySummon.h"
 #include "ulduar.h"
 
+/**
+ * @brief 观察者奥尔加隆战斗台词ID枚举
+ *
+ * 包含布莱恩和奥尔加隆的所有战斗台词
+ */
 enum Texts
 {
-    SAY_BRANN_ALGALON_INTRO_1       = 0,
-    SAY_BRANN_ALGALON_INTRO_2       = 1,
-    SAY_BRANN_ALGALON_OUTRO         = 2,
+    // 布莱恩台词
+    SAY_BRANN_ALGALON_INTRO_1       = 0,  ///< 布莱恩开场台词1
+    SAY_BRANN_ALGALON_INTRO_2       = 1,  ///< 布莱恩开场台词2
+    SAY_BRANN_ALGALON_OUTRO         = 2,  ///< 布莱恩结束语
 
-    SAY_ALGALON_INTRO_1             = 0,
-    SAY_ALGALON_INTRO_2             = 1,
-    SAY_ALGALON_INTRO_3             = 2,
-    SAY_ALGALON_START_TIMER         = 3,
-    SAY_ALGALON_AGGRO               = 4,
-    SAY_ALGALON_COLLAPSING_STAR     = 5,
-    EMOTE_ALGALON_COLLAPSING_STAR   = 6,
-    SAY_ALGALON_BIG_BANG            = 7,
-    EMOTE_ALGALON_BIG_BANG          = 8,
-    SAY_ALGALON_ASCEND              = 9,
-    EMOTE_ALGALON_COSMIC_SMASH      = 10,
-    SAY_ALGALON_PHASE_TWO           = 11,
-    SAY_ALGALON_OUTRO_1             = 12,
-    SAY_ALGALON_OUTRO_2             = 13,
-    SAY_ALGALON_OUTRO_3             = 14,
-    SAY_ALGALON_OUTRO_4             = 15,
-    SAY_ALGALON_OUTRO_5             = 16,
-    SAY_ALGALON_DESPAWN_1           = 17,
-    SAY_ALGALON_DESPAWN_2           = 18,
-    SAY_ALGALON_DESPAWN_3           = 19,
-    SAY_ALGALON_KILL                = 20,
+    // 奥尔加隆台词
+    SAY_ALGALON_INTRO_1             = 0,  ///< 开场台词1：分析世界
+    SAY_ALGALON_INTRO_2             = 1,  ///< 开场台词2：发现问题
+    SAY_ALGALON_INTRO_3             = 2,  ///< 开场台词3：启动重置
+    SAY_ALGALON_START_TIMER         = 3,  ///< 开始计时器台词
+    SAY_ALGALON_AGGRO               = 4,  ///< 开战台词
+    SAY_ALGALON_COLLAPSING_STAR     = 5,  ///< 召唤坍缩之星台词
+    EMOTE_ALGALON_COLLAPSING_STAR   = 6,  ///< 坍缩之星表情提示
+    SAY_ALGALON_BIG_BANG            = 7,  ///< 大爆炸台词
+    EMOTE_ALGALON_BIG_BANG          = 8,  ///< 大爆炸表情提示
+    SAY_ALGALON_ASCEND              = 9,  ///< 升入天国台词
+    EMOTE_ALGALON_COSMIC_SMASH      = 10, ///< 宇宙粉碎表情提示
+    SAY_ALGALON_PHASE_TWO           = 11, ///< 阶段2台词
+    SAY_ALGALON_OUTRO_1             = 12, ///< 结束语1
+    SAY_ALGALON_OUTRO_2             = 13, ///< 结束语2
+    SAY_ALGALON_OUTRO_3             = 14, ///< 结束语3
+    SAY_ALGALON_OUTRO_4             = 15, ///< 结束语4
+    SAY_ALGALON_OUTRO_5             = 16, ///< 结束语5
+    SAY_ALGALON_DESPAWN_1           = 17, ///< 消散台词1
+    SAY_ALGALON_DESPAWN_2           = 18, ///< 消散台词2
+    SAY_ALGALON_DESPAWN_3           = 19, ///< 消散台词3
+    SAY_ALGALON_KILL                = 20, ///< 击杀玩家台词
 
     // Direct Sound
-    ENGAGE_MUSIC_ID                 = 15878
+    ENGAGE_MUSIC_ID                 = 15878  ///< 战斗音乐ID
 };
 
+/**
+ * @brief 观察者奥尔加隆战斗法术ID枚举
+ *
+ * 包含奥尔加隆及其召唤物的所有法术
+ */
 enum Spells
 {
-    // Algalon the Observer
-    SPELL_ARRIVAL                       = 64997,
-    SPELL_RIDE_THE_LIGHTNING            = 64986,
-    SPELL_SUMMON_AZEROTH                = 64994,
-    SPELL_REORIGINATION                 = 64996,
-    SPELL_SUPERMASSIVE_FAIL             = 65311,
-    SPELL_QUANTUM_STRIKE                = 64395,
-    SPELL_PHASE_PUNCH                   = 64412,
-    SPELL_BIG_BANG                      = 64443,
-    SPELL_ASCEND_TO_THE_HEAVENS         = 64487,
-    SPELL_COSMIC_SMASH                  = 62301,
-    SPELL_COSMIC_SMASH_TRIGGERED        = 62304,
-    SPELL_COSMIC_SMASH_VISUAL_STATE     = 62300,
-    SPELL_SELF_STUN                     = 65256,
-    SPELL_KILL_CREDIT                   = 65184,
-    SPELL_TELEPORT                      = 62940,
+    // Algalon the Observer - 奥尔加隆本体法术
+    SPELL_ARRIVAL                       = 64997,  ///< 到达：开场视觉效果
+    SPELL_RIDE_THE_LIGHTNING            = 64986,  ///< 骑乘闪电：传送效果
+    SPELL_SUMMON_AZEROTH                = 64994,  ///< 召唤艾泽拉斯：开场召唤
+    SPELL_REORIGINATION                 = 64996,  ///< 世界重置：团灭机制
+    SPELL_SUPERMASSIVE_FAIL             = 65311,  ///< 超大质量失败：失败效果
+    SPELL_QUANTUM_STRIKE                = 64395,  ///< 量子打击：主要近战技能
+    SPELL_PHASE_PUNCH                   = 64412,  ///< 相位重击：阶段转换技能
+    SPELL_BIG_BANG                      = 64443,  ///< 大爆炸：全团高伤害技能
+    SPELL_ASCEND_TO_THE_HEAVENS         = 64487,  ///< 升入天国：阶段2技能
+    SPELL_COSMIC_SMASH                  = 62301,  ///< 宇宙粉碎：范围伤害技能
+    SPELL_COSMIC_SMASH_TRIGGERED        = 62304,  ///< 宇宙粉碎触发：实际伤害
+    SPELL_COSMIC_SMASH_VISUAL_STATE     = 62300,  ///< 宇宙粉碎视觉：视觉效果
+    SPELL_SELF_STUN                     = 65256,  ///< 自我击晕：施放大爆炸时
+    SPELL_KILL_CREDIT                   = 65184,  ///< 击杀荣誉：给予荣誉
+    SPELL_TELEPORT                      = 62940,  ///< 传送：位置传送
 
-    // Algalon Stalker
-    SPELL_TRIGGER_3_ADDS                = 62266,    // Triggers Living Constellation
+    // Algalon Stalker - 奥尔加隆潜伏者法术
+    SPELL_TRIGGER_3_ADDS                = 62266,  ///< 触发3个增援：召唤活体星座
 
-    // Living Constellation
-    SPELL_ARCANE_BARRAGE                = 64599,
-    SPELL_DESPAWN_BLACK_HOLE            = 64391,
+    // Living Constellation - 活体星座行星法术
+    SPELL_ARCANE_BARRAGE                = 64599,  ///< 奥术弹幕：远程攻击
+    SPELL_DESPAWN_BLACK_HOLE            = 64391,  ///< 消散黑洞：移除黑洞
 
-    // Collapsing Star
-    SPELL_COLLAPSE                      = 62018,
-    SPELL_BLACK_HOLE_SPAWN_VISUAL       = 62003,
-    SPELL_SUMMON_BLACK_HOLE             = 62189,
+    // Collapsing Star - 坍缩之星法术
+    SPELL_COLLAPSE                      = 62018,  ///< 坍缩：自毁机制
+    SPELL_BLACK_HOLE_SPAWN_VISUAL       = 62003,  ///< 黑洞生成视觉：视觉效果
+    SPELL_SUMMON_BLACK_HOLE             = 62189,  ///< 召唤黑洞：生成黑洞
 
-    // Black Hole
-    SPELL_BLACK_HOLE_TRIGGER            = 62185,
-    SPELL_CONSTELLATION_PHASE_TRIGGER   = 65508,
-    SPELL_CONSTELLATION_PHASE_EFFECT    = 65509,
-    SPELL_BLACK_HOLE_EXPLOSION          = 64122,
-    SPELL_SUMMON_VOID_ZONE_VISUAL       = 64470,
-    SPELL_VOID_ZONE_VISUAL              = 64469,
-    SPELL_BLACK_HOLE_CREDIT             = 65312,
-    SPELL_BLACK_HOLE_DOT                = 62169,
+    // Black Hole - 黑洞法术
+    SPELL_BLACK_HOLE_TRIGGER            = 62185,  ///< 黑洞触发：检测玩家
+    SPELL_CONSTELLATION_PHASE_TRIGGER   = 65508,  ///< 星座阶段触发：星座交互
+    SPELL_CONSTELLATION_PHASE_EFFECT    = 65509,  ///< 星座阶段效果：消散星座
+    SPELL_BLACK_HOLE_EXPLOSION          = 64122,  ///< 黑洞爆炸：爆炸伤害
+    SPELL_SUMMON_VOID_ZONE_VISUAL       = 64470,  ///< 召唤虚空区域视觉：视觉效果
+    SPELL_VOID_ZONE_VISUAL              = 64469,  ///< 虚空区域视觉：视觉效果
+    SPELL_BLACK_HOLE_CREDIT             = 65312,  ///< 黑洞荣誉：成就计数
+    SPELL_BLACK_HOLE_DOT                = 62169,  ///< 黑洞持续伤害：区域伤害
 
-    // Worm Hole
-    SPELL_WORM_HOLE_TRIGGER             = 65251,
-    SPELL_SUMMON_UNLEASHED_DARK_MATTER  = 64450
+    // Worm Hole - 虫洞法术
+    SPELL_WORM_HOLE_TRIGGER             = 65251,  ///< 虫洞触发：召唤机制
+    SPELL_SUMMON_UNLEASHED_DARK_MATTER  = 64450   ///< 召唤暗物质：召唤增援
 };
 
+/// 相位重击的透明度效果ID数组（5层递进）
 uint32 const PhasePunchAlphaId[5] = {64435, 64434, 64428, 64421, 64417};
 
+/**
+ * @brief 观察者奥尔加隆战斗事件ID枚举
+ *
+ * 用于AI事件调度系统，管理复杂的战斗流程
+ */
 enum Events
 {
-    // Celestial Planetarium Access
-    EVENT_DESPAWN_CONSOLE = 1,
+    // Celestial Planetarium Access - 天文台访问事件
+    EVENT_DESPAWN_CONSOLE = 1,  ///< 消散控制台
 
-    // Brann Bronzebeard
-    EVENT_BRANN_MOVE_INTRO,
-    EVENT_BRANN_SAY_INTRO_1,
-    EVENT_SUMMON_ALGALON,
-    EVENT_BRANN_OUTRO_1,
-    EVENT_BRANN_OUTRO_2,
+    // Brann Bronzebeard - 布莱恩事件
+    EVENT_BRANN_MOVE_INTRO,      ///< 布莱恩移动开场
+    EVENT_BRANN_SAY_INTRO_1,     ///< 布莱恩开场台词1
+    EVENT_SUMMON_ALGALON,        ///< 召唤奥尔加隆
+    EVENT_BRANN_OUTRO_1,         ///< 布莱恩结束1
+    EVENT_BRANN_OUTRO_2,         ///< 布莱恩结束2
 
-    // Algalon the Observer
-    EVENT_INTRO_1,
-    EVENT_INTRO_2,
-    EVENT_SUMMON_AZEROTH,
-    EVENT_INTRO_3,
-    EVENT_INTRO_FINISH,
-    EVENT_START_COMBAT,
-    EVENT_INTRO_TIMER_DONE,
-    EVENT_QUANTUM_STRIKE,
-    EVENT_PHASE_PUNCH,
-    EVENT_SUMMON_COLLAPSING_STAR,
-    EVENT_BIG_BANG,
-    EVENT_RESUME_UPDATING,
-    EVENT_ASCEND_TO_THE_HEAVENS,
-    EVENT_EVADE,
-    EVENT_COSMIC_SMASH,
-    EVENT_UNLOCK_YELL,
-    EVENT_OUTRO_START,
-    EVENT_OUTRO_1,
-    EVENT_OUTRO_2,
-    EVENT_OUTRO_3,
-    EVENT_OUTRO_4,
+    // Algalon the Observer - 奥尔加隆事件
+    EVENT_INTRO_1,                  ///< 开场1
+    EVENT_INTRO_2,                  ///< 开场2
+    EVENT_SUMMON_AZEROTH,           ///< 召唤艾泽拉斯
+    EVENT_INTRO_3,                  ///< 开场3
+    EVENT_INTRO_FINISH,             ///< 开场完成
+    EVENT_START_COMBAT,             ///< 开始战斗
+    EVENT_INTRO_TIMER_DONE,         ///< 开场计时完成
+    EVENT_QUANTUM_STRIKE,           ///< 量子打击
+    EVENT_PHASE_PUNCH,              ///< 相位重击
+    EVENT_SUMMON_COLLAPSING_STAR,   ///< 召唤坍缩之星
+    EVENT_BIG_BANG,                 ///< 大爆炸
+    EVENT_RESUME_UPDATING,          ///< 恢复更新
+    EVENT_ASCEND_TO_THE_HEAVENS,    ///< 升入天国
+    EVENT_EVADE,                    ///< 逃避
+    EVENT_COSMIC_SMASH,             ///< 宇宙粉碎
+    EVENT_UNLOCK_YELL,              ///< 解锁台词
+    EVENT_OUTRO_START,              ///< 结局开始
+    EVENT_OUTRO_1,                  ///< 结局1
+    EVENT_OUTRO_2,                  ///< 结局2
+    EVENT_OUTRO_3,                  ///< 结局3
+    EVENT_OUTRO_4,                  ///< 结局4
     EVENT_OUTRO_5,
     EVENT_OUTRO_6,
     EVENT_OUTRO_7,

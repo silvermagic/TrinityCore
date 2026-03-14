@@ -22,6 +22,21 @@ Comment: All quest related commands
 Category: commandscripts
 EndScriptData */
 
+/**
+ * @file cs_quest.cpp
+ * @brief 任务管理命令模块
+ *
+ * 本模块提供了一系列GM命令，用于管理玩家的任务状态。
+ * 主要功能包括：
+ * - 添加任务：将指定任务添加到玩家的任务日志
+ * - 完成任务：将指定任务标记为完成状态
+ * - 移除任务：从玩家的任务日志中删除指定任务
+ * - 奖励任务：给予玩家任务奖励并完成任务
+ *
+ * 这些命令主要用于游戏测试、任务调试和玩家支持。
+ * 所有命令都需要相应的RBAC权限才能执行。
+ */
+
 #include "ScriptMgr.h"
 #include "Chat.h"
 #include "DatabaseEnv.h"
@@ -37,13 +52,39 @@ EndScriptData */
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #endif
 
+/**
+ * @class quest_commandscript
+ * @brief 任务命令脚本类
+ *
+ * 该类继承自CommandScript，提供所有与任务管理相关的GM命令。
+ * 命令包括：添加任务、完成任务、移除任务、给予任务奖励。
+ * 这些命令对于测试任务流程、调试任务问题和处理玩家任务卡住情况非常有用。
+ */
 class quest_commandscript : public CommandScript
 {
 public:
+    /**
+     * @brief 构造函数
+     *
+     * 初始化任务命令脚本，注册命令名称为"quest_commandscript"
+     */
     quest_commandscript() : CommandScript("quest_commandscript") { }
 
+    /**
+     * @brief 获取所有任务命令的命令表
+     * @return 返回命令表向量，包含所有任务相关命令的定义
+     *
+     * 该函数注册了以下任务命令：
+     * - quest add: 添加任务到玩家的任务日志
+     * - quest complete: 将任务标记为完成状态
+     * - quest remove: 从任务日志中移除任务
+     * - quest reward: 给予任务奖励并完成任务
+     *
+     * 所有命令都需要相应的RBAC权限
+     */
     std::vector<ChatCommand> GetCommands() const override
     {
+        // 任务命令子表
         static std::vector<ChatCommand> questCommandTable =
         {
             { "add",      rbac::RBAC_PERM_COMMAND_QUEST_ADD,      false, &HandleQuestAdd,      "" },
@@ -58,6 +99,25 @@ public:
         return commandTable;
     }
 
+    /**
+     * @brief 添加任务命令处理函数
+     * @param handler 聊天处理器指针
+     * @param quest 任务对象指针（从命令参数解析）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .quest add <任务ID> - 将指定任务添加到选中玩家或自己的任务日志
+     *
+     * 执行流程：
+     * 1. 获取目标玩家（选中的玩家或自己）
+     * 2. 检查任务是否被禁用
+     * 3. 检查是否是物品触发的任务（这类任务需要物品才能正常工作）
+     * 4. 检查玩家是否已有该任务
+     * 5. 验证玩家是否可以接受该任务
+     * 6. 添加任务并检查是否自动完成
+     *
+     * @note 物品触发的任务不能通过此命令添加，因为缺少启动物品
+     *       任务的接受条件仍会被检查（前置任务、等级要求等）
+     */
     static bool HandleQuestAdd(ChatHandler* handler, Quest const* quest)
     {
         Player* player = handler->getSelectedPlayerOrSelf();
@@ -99,6 +159,27 @@ public:
         return true;
     }
 
+    /**
+     * @brief 移除任务命令处理函数
+     * @param handler 聊天处理器指针
+     * @param quest 任务对象指针
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .quest remove <任务ID> - 从选中玩家的任务日志中移除指定任务
+     *
+     * 执行流程：
+     * 1. 获取目标玩家（必须是选中的玩家）
+     * 2. 验证任务是否存在
+     * 3. 检查玩家是否接了该任务
+     * 4. 从任务日志的所有槽位中清除该任务
+     * 5. 移除任务源物品（但保留已装备的任务物品）
+     * 6. 如果任务有PvP标志，更新玩家的PvP状态
+     * 7. 从活跃任务和已完成任务列表中移除
+     * 8. 触发任务状态改变脚本事件
+     *
+     * @note 这会完全移除任务，包括任务历史记录
+     *       玩家可以重新接受该任务
+     */
     static bool HandleQuestRemove(ChatHandler* handler, Quest const* quest)
     {
         Player* player = handler->getSelectedPlayer();
@@ -152,6 +233,32 @@ public:
         }
     }
 
+    /**
+     * @brief 完成任务命令处理函数
+     * @param handler 聊天处理器指针
+     * @param quest 任务对象指针
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .quest complete <任务ID> - 完成选中玩家或自己的指定任务
+     *
+     * 该命令会自动满足任务的所有要求：
+     * 1. 添加任务所需的物品到玩家背包
+     * 2. 模拟击杀所需生物/游戏对象
+     * 3. 模拟击杀所需玩家（如果是PvP任务）
+     * 4. 设置所需的声望值
+     * 5. 添加所需的金币（如果任务需要金币才能完成）
+     * 6. 记录GM完成任务到任务追踪系统（如果启用）
+     * 7. 标记任务为完成状态
+     *
+     * 执行流程：
+     * - 验证玩家是否接了该任务
+     * - 自动填充所有任务目标
+     * - 更新任务追踪数据库（用于统计分析）
+     * - 将任务标记为完成（但不领取奖励）
+     *
+     * @note 使用此命令完成任务不会获得经验值奖励
+     *       需要使用.quest reward命令领取奖励
+     */
     static bool HandleQuestComplete(ChatHandler* handler, Quest const* quest)
     {
         Player* player = handler->getSelectedPlayerOrSelf();
@@ -252,6 +359,25 @@ public:
         return true;
     }
 
+    /**
+     * @brief 领取任务奖励命令处理函数
+     * @param handler 聊天处理器指针
+     * @param quest 任务对象指针
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .quest reward <任务ID> - 给予选中玩家指定任务的奖励
+     *
+     * 执行流程：
+     * 1. 获取目标玩家（必须是选中的玩家）
+     * 2. 验证任务是否处于完成状态
+     * 3. 检查任务是否被禁用
+     * 4. 给予任务奖励（物品、金币、经验等）
+     * 5. 从任务日志中移除任务
+     * 6. 触发任务完成脚本
+     *
+     * @note 任务必须处于完成状态才能领取奖励
+     *       此命令会触发正常的任务完成流程
+     */
     static bool HandleQuestReward(ChatHandler* handler, Quest const* quest)
     {
         Player* player = handler->getSelectedPlayer();

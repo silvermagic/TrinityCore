@@ -15,6 +15,33 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file boss_valithria_dreamwalker.cpp
+ * @brief 瓦莉丝瑞亚·梦行者BOSS战AI实现
+ *
+ * 本模块实现了冰冠城塞副本中"冰霜之翼大厅"特殊BOSS瓦莉丝瑞亚·梦行者的完整战斗逻辑。
+ * 这是一场独特的治疗型BOSS战，玩家需要治疗BOSS至满血而非击杀。
+ *
+ * 主要功能：
+ * - 治疗目标：将瓦莉丝瑞亚从50%血量治疗至100%
+ * - 梦境之门：玩家进入梦境获取增益效果
+ * - 召唤小怪：多种敌对生物不断涌出
+ * - 抑制者：减少BOSS受到的治疗量
+ * - 腐蚀：降低BOSS血量
+ *
+ * 敌对生物：
+ * - 复活的法师：施放寒冰箭齐射、法力虚空、霜冻之柱
+ * - 炽热骷髅：施放火球术、魔网浪费
+ * - 抑制者：施放抑制降低治疗效果
+ * - 溃烂的僵尸：死亡时施放酸液爆发
+ * - 暴食的憎恶：施放内脏喷射，死亡时召唤蛆虫
+ *
+ * 成就：
+ * - 传送门劣人：在不超过3次梦境传送门进入次数的情况下击败BOSS
+ *
+ * @see icecrown_citadel.h 副本实例脚本定义
+ */
+
 #include "icecrown_citadel.h"
 #include "CellImpl.h"
 #include "Containers.h"

@@ -15,6 +15,18 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file AuctionHouseBotSeller.cpp
+ * @brief 拍卖行机器人销售者功能实现
+ *
+ * 本文件实现了拍卖行机器人的销售功能,负责自动向拍卖行投放物品。
+ * 主要功能包括:
+ * - 物品池的初始化和过滤
+ * - 根据配置自动上架物品
+ * - 价格计算和定价策略
+ * - 拍卖行库存管理和补货
+ */
+
 #include "AuctionHouseBotSeller.h"
 #include "AuctionHouseMgr.h"
 #include "Containers.h"
@@ -27,26 +39,53 @@
 #include "Random.h"
 #include <sstream>
 
+/**
+ * @brief 拍卖行机器人销售者构造函数
+ *
+ * 初始化所有拍卖行类型的配置对象。
+ * 为联盟、部落和中立拍卖行分别创建 SellerConfiguration 实例。
+ */
 AuctionBotSeller::AuctionBotSeller()
 {
-    // Define faction for our main data class.
+    // 定义主要数据类的阵营
     for (uint8 i = 0; i < MAX_AUCTION_HOUSE_TYPE; ++i)
         _houseConfig[i].Initialize(AuctionHouseType(i));
 }
 
+/**
+ * @brief 拍卖行机器人销售者析构函数
+ */
 AuctionBotSeller::~AuctionBotSeller()
 {
 }
 
+/**
+ * @brief 初始化拍卖行机器人销售者
+ *
+ * 该方法执行以下初始化步骤:
+ * 1. 加载强制包含和排除的物品列表
+ * 2. 加载NPC商人出售的物品列表(用于过滤)
+ * 3. 加载战利品表中的物品列表(用于过滤)
+ * 4. 根据配置项过滤并构建物品池
+ * 5. 加载销售者配置
+ *
+ * @return true 如果初始化成功且有可用物品
+ * @return false 如果没有可用物品,将禁用拍卖行机器人
+ */
 bool AuctionBotSeller::Initialize()
 {
+    // NPC商人出售的物品集合
     std::unordered_set<uint32> npcItems;
+    // 战利品物品集合
     std::unordered_set<uint32> lootItems;
+    // 强制包含的物品集合
     std::unordered_set<uint32> includeItems;
+    // 强制排除的物品集合
     std::unordered_set<uint32> excludeItems;
 
     TC_LOG_DEBUG("ahbot", "AHBot seller filters:");
 
+    // 解析强制包含物品列表(逗号分隔的物品ID字符串)
     {
         std::stringstream includeStream(sAuctionBotConfig->GetAHBotIncludes());
         std::string temp;
@@ -54,6 +93,7 @@ bool AuctionBotSeller::Initialize()
             includeItems.insert(atoi(temp.c_str()));
     }
 
+    // 解析强制排除物品列表(逗号分隔的物品ID字符串)
     {
         std::stringstream excludeStream(sAuctionBotConfig->GetAHBotExcludes());
         std::string temp;
@@ -64,6 +104,7 @@ bool AuctionBotSeller::Initialize()
     TC_LOG_DEBUG("ahbot", "Forced Inclusion {} items", (uint32)includeItems.size());
     TC_LOG_DEBUG("ahbot", "Forced Exclusion {} items", (uint32)excludeItems.size());
 
+    // 加载NPC商人物品用于过滤器
     TC_LOG_DEBUG("ahbot", "Loading npc vendor items for filter..");
     CreatureTemplateContainer const& creatures = sObjectMgr->GetCreatureTemplates();
     for (auto const& creatureTemplatePair : creatures)
@@ -73,6 +114,8 @@ bool AuctionBotSeller::Initialize()
 
     TC_LOG_DEBUG("ahbot", "Npc vendor filter has {} items", (uint32)npcItems.size());
 
+    // 加载所有战利品表中的物品用于过滤器
+    // 从多个战利品表中查询所有非引用物品
     TC_LOG_DEBUG("ahbot", "Loading loot items for filter..");
     QueryResult result = WorldDatabase.PQuery(
         "SELECT `item` FROM `creature_loot_template` WHERE `Reference` = 0 UNION "
@@ -106,21 +149,22 @@ bool AuctionBotSeller::Initialize()
 
     uint32 itemsAdded = 0;
 
+    // 遍历所有物品模板,构建拍卖行物品池
     for (uint32 itemId = 0; itemId < sItemStore.GetNumRows(); ++itemId)
     {
         ItemTemplate const* prototype = sObjectMgr->GetItemTemplate(itemId);
         if (!prototype)
             continue;
 
-        // skip items with too high quality (code can't properly work with its)
+        // 跳过品质过高的物品(代码无法正确处理)
         if (prototype->Quality >= MAX_AUCTION_QUALITY)
             continue;
 
-        // forced exclude filter
+        // 强制排除过滤器检查
         if (excludeItems.count(itemId))
             continue;
 
-        // forced include filter
+        // 强制包含过滤器检查 - 直接添加到物品池,跳过其他过滤
         if (includeItems.count(itemId))
         {
             _itemPool[prototype->Quality][prototype->Class].push_back(itemId);
@@ -128,7 +172,7 @@ bool AuctionBotSeller::Initialize()
             continue;
         }
 
-        // bounding filters
+        // 绑定类型过滤器检查
         switch (prototype->Bonding)
         {
             case NO_BIND:
@@ -155,6 +199,7 @@ bool AuctionBotSeller::Initialize()
                 continue;
         }
 
+        // 根据物品类别检查是否允许零价格物品
         bool allowZero = false;
         switch (prototype->Class)
         {
@@ -190,7 +235,7 @@ bool AuctionBotSeller::Initialize()
                 allowZero = false;
         }
 
-        // Filter out items with no buy/sell price unless otherwise flagged in the config.
+        // 过滤掉没有买价/卖价的物品,除非配置中明确允许
         if (!allowZero)
         {
             if (sAuctionBotConfig->GetConfig(CONFIG_AHBOT_BUYPRICE_SELLER))
@@ -205,21 +250,22 @@ bool AuctionBotSeller::Initialize()
             }
         }
 
-        // vendor filter
+        // NPC商人物品过滤器
         if (!sAuctionBotConfig->GetConfig(CONFIG_AHBOT_ITEMS_VENDOR))
         {
             if (npcItems.count(itemId))
                 continue;
         }
 
-        // loot filter
+        // 战利品物品过滤器
         if (!sAuctionBotConfig->GetConfig(CONFIG_AHBOT_ITEMS_LOOT))
         {
             if (lootItems.count(itemId))
                 continue;
         }
 
-        // not vendor/loot filter
+        // 非商人/非战利品物品过滤器
+        // 如果启用,只添加来自商人或战利品的物品
         if (!sAuctionBotConfig->GetConfig(CONFIG_AHBOT_ITEMS_MISC))
         {
             bool const isVendorItem = npcItems.count(itemId) > 0;
@@ -229,12 +275,14 @@ bool AuctionBotSeller::Initialize()
                 continue;
         }
 
-        // item class/subclass specific filters
+        // 物品类别/子类别特定过滤器
+        // 根据不同的物品类别应用不同的过滤规则
         switch (prototype->Class)
         {
             case ITEM_CLASS_ARMOR:
             case ITEM_CLASS_WEAPON:
             {
+                // 护甲和武器:检查物品等级、需求等级和技能等级范围
                 if (uint32 value = sAuctionBotConfig->GetConfig(CONFIG_AHBOT_ITEM_MIN_ITEM_LEVEL))
                     if (prototype->ItemLevel < value)
                         continue;
@@ -259,6 +307,7 @@ bool AuctionBotSeller::Initialize()
             case ITEM_CLASS_CONSUMABLE:
             case ITEM_CLASS_PROJECTILE:
             {
+                // 配方、消耗品和弹药:检查需求等级和技能等级范围
                 if (uint32 value = sAuctionBotConfig->GetConfig(CONFIG_AHBOT_ITEM_MIN_REQ_LEVEL))
                     if (prototype->RequiredLevel < value)
                         continue;
@@ -274,6 +323,7 @@ bool AuctionBotSeller::Initialize()
                 break;
             }
             case ITEM_CLASS_MISC:
+                // 坐骑的特殊过滤
                 if (prototype->SubClass == ITEM_SUBCLASS_JUNK_MOUNT)
                 {
                     if (uint32 value = sAuctionBotConfig->GetConfig(CONFIG_AHBOT_CLASS_MISC_MOUNT_MIN_REQ_LEVEL))
@@ -290,9 +340,10 @@ bool AuctionBotSeller::Initialize()
                             continue;
                 }
 
+                // 可战利品物品(如锁箱)的特殊处理
                 if (prototype->HasFlag(ITEM_FLAG_HAS_LOOT))
                 {
-                    // skip any not locked lootable items (mostly quest specific or reward cases)
+                    // 跳过任何未锁定的可战利品物品(主要是任务特定或奖励情况)
                     if (!prototype->LockID)
                         continue;
 
@@ -303,6 +354,7 @@ bool AuctionBotSeller::Initialize()
                 break;
             case ITEM_CLASS_GLYPH:
             {
+                // 雕文:检查需求等级和物品等级范围
                 if (uint32 value = sAuctionBotConfig->GetConfig(CONFIG_AHBOT_CLASS_GLYPH_MIN_REQ_LEVEL))
                     if (prototype->RequiredLevel < value)
                         continue;
@@ -319,6 +371,7 @@ bool AuctionBotSeller::Initialize()
             }
             case ITEM_CLASS_TRADE_GOODS:
             {
+                // 交易商品:检查物品等级范围
                 if (uint32 value = sAuctionBotConfig->GetConfig(CONFIG_AHBOT_CLASS_TRADEGOOD_MIN_ITEM_LEVEL))
                     if (prototype->ItemLevel < value)
                         continue;
@@ -330,6 +383,7 @@ bool AuctionBotSeller::Initialize()
             case ITEM_CLASS_CONTAINER:
             case ITEM_CLASS_QUIVER:
             {
+                // 容器和箭袋:检查物品等级范围
                 if (uint32 value = sAuctionBotConfig->GetConfig(CONFIG_AHBOT_CLASS_CONTAINER_MIN_ITEM_LEVEL))
                     if (prototype->ItemLevel < value)
                         continue;
@@ -340,10 +394,12 @@ bool AuctionBotSeller::Initialize()
             }
         }
 
+        // 通过所有过滤器,将物品添加到对应品质和类别的物品池中
         _itemPool[prototype->Quality][prototype->Class].push_back(itemId);
         ++itemsAdded;
     }
 
+    // 如果没有添加任何物品,禁用拍卖行机器人
     if (!itemsAdded)
     {
         TC_LOG_ERROR("ahbot", "AuctionHouseBot seller not have items, disabled.");
@@ -357,6 +413,7 @@ bool AuctionBotSeller::Initialize()
 
     LoadConfig();
 
+    // 输出各品质和类别的物品数量统计
     TC_LOG_DEBUG("ahbot", "Items loaded \tGray\tWhite\tGreen\tBlue\tPurple\tOrange\tYellow");
     for (uint32 i = 0; i < MAX_ITEM_CLASS; ++i)
         TC_LOG_DEBUG("ahbot", "\t\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
@@ -368,6 +425,11 @@ bool AuctionBotSeller::Initialize()
     return true;
 }
 
+/**
+ * @brief 加载拍卖行机器人销售者配置
+ *
+ * 为每个激活的拍卖行类型加载销售者配置值。
+ */
 void AuctionBotSeller::LoadConfig()
 {
     for (uint8 i = 0; i < MAX_AUCTION_HOUSE_TYPE; ++i)
@@ -375,17 +437,27 @@ void AuctionBotSeller::LoadConfig()
             LoadSellerValues(_houseConfig[i]);
 }
 
+/**
+ * @brief 加载物品数量配置
+ *
+ * 根据配置计算各拍卖行应该保持的物品数量。
+ * 基于配置的比例值计算各品质和类别的物品数量。
+ *
+ * @param config 销售者配置对象的引用
+ */
 void AuctionBotSeller::LoadItemsQuantity(SellerConfiguration& config)
 {
     uint32 ratio = sAuctionBotConfig->GetConfigItemAmountRatio(config.GetHouseType());
 
+    // 计算各品质的物品数量(基于比例)
     for (uint32 i = 0; i < MAX_AUCTION_QUALITY; ++i)
     {
         uint32 amount = sAuctionBotConfig->GetConfig(AuctionBotConfigUInt32Values(CONFIG_AHBOT_ITEM_GRAY_AMOUNT + i));
         config.SetItemsAmountPerQuality(AuctionQuality(i), std::lroundf(amount * ratio / 100.f));
     }
 
-    // Set Stack Quantities
+    // 设置各类别的随机堆叠比例
+    // 这些比例决定了物品是单个上架还是堆叠上架
     config.SetRandomStackRatioPerClass(ITEM_CLASS_CONSUMABLE, sAuctionBotConfig->GetConfig(CONFIG_AHBOT_CLASS_RANDOMSTACKRATIO_CONSUMABLE));
     config.SetRandomStackRatioPerClass(ITEM_CLASS_CONTAINER, sAuctionBotConfig->GetConfig(CONFIG_AHBOT_CLASS_RANDOMSTACKRATIO_CONTAINER));
     config.SetRandomStackRatioPerClass(ITEM_CLASS_WEAPON, sAuctionBotConfig->GetConfig(CONFIG_AHBOT_CLASS_RANDOMSTACKRATIO_WEAPON));
@@ -402,7 +474,8 @@ void AuctionBotSeller::LoadItemsQuantity(SellerConfiguration& config)
     config.SetRandomStackRatioPerClass(ITEM_CLASS_MISC, sAuctionBotConfig->GetConfig(CONFIG_AHBOT_CLASS_RANDOMSTACKRATIO_MISC));
     config.SetRandomStackRatioPerClass(ITEM_CLASS_GLYPH, sAuctionBotConfig->GetConfig(CONFIG_AHBOT_CLASS_RANDOMSTACKRATIO_GLYPH));
 
-    // Set the best value to get nearest amount of items wanted
+    // 设置最优值以获取最接近期望的物品数量
+    // Lambda函数:获取指定物品类别的优先级
     auto getPriorityForClass = [](uint32 itemClass) -> uint32
     {
         AuctionBotConfigUInt32Values index;
@@ -445,12 +518,13 @@ void AuctionBotSeller::LoadItemsQuantity(SellerConfiguration& config)
         return sAuctionBotConfig->GetConfig(index);
     };
 
+    // 计算每个品质的总优先级
     std::vector<uint32> totalPrioPerQuality(MAX_AUCTION_QUALITY);
     for (uint32 j = 0; j < MAX_AUCTION_QUALITY; ++j)
     {
         for (uint32 i = 0; i < MAX_ITEM_CLASS; ++i)
         {
-            // skip empty pools
+            // 跳过空的物品池
             if (_itemPool[j][i].empty())
                 continue;
 
@@ -458,6 +532,7 @@ void AuctionBotSeller::LoadItemsQuantity(SellerConfiguration& config)
         }
     }
 
+    // 根据优先级权重分配各品质中各类别的物品数量
     for (uint32 j = 0; j < MAX_AUCTION_QUALITY; ++j)
     {
         uint32 qualityAmount = config.GetItemsAmountPerQuality(AuctionQuality(j));
@@ -470,12 +545,13 @@ void AuctionBotSeller::LoadItemsQuantity(SellerConfiguration& config)
             if (_itemPool[j][i].empty())
                 classPrio = 0;
 
+            // 按权重计算该类别的物品数量
             uint32 weightedAmount = std::lroundf(classPrio / float(totalPrioPerQuality[j]) * qualityAmount);
             config.SetItemsAmountPerClass(AuctionQuality(j), ItemClass(i), weightedAmount);
         }
     }
 
-    // do some assert checking, GetItemAmount must always return 0 if selected _itemPool is empty
+    // 断言检查:如果选定的物品池为空,GetItemAmount必须返回0
     for (uint32 j = 0; j < MAX_AUCTION_QUALITY; ++j)
     {
         for (uint32 i = 0; i < MAX_ITEM_CLASS; ++i)
@@ -486,17 +562,26 @@ void AuctionBotSeller::LoadItemsQuantity(SellerConfiguration& config)
     }
 }
 
+/**
+ * @brief 加载销售者配置值
+ *
+ * 加载销售者的完整配置,包括物品数量和价格比例。
+ *
+ * @param config 销售者配置对象的引用
+ */
 void AuctionBotSeller::LoadSellerValues(SellerConfiguration& config)
 {
     LoadItemsQuantity(config);
     uint32 ratio = sAuctionBotConfig->GetConfigPriceRatio(config.GetHouseType());
 
+    // 设置各品质的价格比例
     for (uint32 i = 0; i < MAX_AUCTION_QUALITY; ++i)
     {
         uint32 amount = sAuctionBotConfig->GetConfig(AuctionBotConfigUInt32Values(CONFIG_AHBOT_ITEM_GRAY_PRICE_RATIO + i));
         config.SetPriceRatioPerQuality(AuctionQuality(i), std::lroundf(amount * ratio / 100.f));
     }
 
+    // 设置各类别的价格比例
     config.SetPriceRatioPerClass(ITEM_CLASS_CONSUMABLE, sAuctionBotConfig->GetConfig(CONFIG_AHBOT_CLASS_CONSUMABLE_PRICE_RATIO));
     config.SetPriceRatioPerClass(ITEM_CLASS_CONTAINER, sAuctionBotConfig->GetConfig(CONFIG_AHBOT_CLASS_CONTAINER_PRICE_RATIO));
     config.SetPriceRatioPerClass(ITEM_CLASS_WEAPON, sAuctionBotConfig->GetConfig(CONFIG_AHBOT_CLASS_WEAPON_PRICE_RATIO));
@@ -515,17 +600,25 @@ void AuctionBotSeller::LoadSellerValues(SellerConfiguration& config)
     config.SetPriceRatioPerClass(ITEM_CLASS_MISC, sAuctionBotConfig->GetConfig(CONFIG_AHBOT_CLASS_MISC_PRICE_RATIO));
     config.SetPriceRatioPerClass(ITEM_CLASS_GLYPH, sAuctionBotConfig->GetConfig(CONFIG_AHBOT_CLASS_GLYPH_PRICE_RATIO));
 
-    //load min and max auction times
+    // 加载最小和最大拍卖时间
     config.SetMinTime(sAuctionBotConfig->GetConfig(CONFIG_AHBOT_MINTIME));
     config.SetMaxTime(sAuctionBotConfig->GetConfig(CONFIG_AHBOT_MAXTIME));
 }
 
-// Set static of items on one AH faction.
-// Fill ItemInfos object with real content of AH.
+/**
+ * @brief 设置拍卖行物品统计数据
+ *
+ * 统计当前拍卖行中的物品数量,计算需要补充的物品数量。
+ * 只统计属于拍卖行机器人的物品。
+ *
+ * @param config 销售者配置对象的引用
+ * @return uint32 需要补充的物品总数
+ */
 uint32 AuctionBotSeller::SetStat(SellerConfiguration& config)
 {
     AllItemsArray itemsSaved(MAX_AUCTION_QUALITY, std::vector<uint32>(MAX_ITEM_CLASS));
 
+    // 遍历拍卖行中的所有拍卖项
     AuctionHouseObject* auctionHouse = sAuctionMgr->GetAuctionsMap(config.GetHouseType());
     for (AuctionHouseObject::AuctionEntryMap::const_iterator itr = auctionHouse->GetAuctionsBegin(); itr != auctionHouse->GetAuctionsEnd(); ++itr)
     {
@@ -535,11 +628,13 @@ uint32 AuctionBotSeller::SetStat(SellerConfiguration& config)
         {
             ItemTemplate const* prototype = item->GetTemplate();
             if (prototype)
-                if (!auctionEntry->owner || sAuctionBotConfig->IsBotChar(auctionEntry->owner)) // Add only ahbot items
+                // 只添加拍卖行机器人的物品
+                if (!auctionEntry->owner || sAuctionBotConfig->IsBotChar(auctionEntry->owner))
                     ++itemsSaved[prototype->Quality][prototype->Class];
         }
     }
 
+    // 计算各品质和类别需要补充的物品数量
     uint32 count = 0;
     for (uint32 j = 0; j < MAX_AUCTION_QUALITY; ++j)
     {
@@ -550,6 +645,7 @@ uint32 AuctionBotSeller::SetStat(SellerConfiguration& config)
         }
     }
 
+    // 输出调试信息
     TC_LOG_DEBUG("ahbot", "AHBot: Missed Item       \tGray\tWhite\tGreen\tBlue\tPurple\tOrange\tYellow");
     for (uint32 i = 0; i < MAX_ITEM_CLASS; ++i)
     {
@@ -567,7 +663,18 @@ uint32 AuctionBotSeller::SetStat(SellerConfiguration& config)
     return count;
 }
 
-// getRandomArray is used to make viable the possibility to add any of missed item in place of first one to last one.
+/**
+ * @brief 获取需要销售的物品列表
+ *
+ * 根据拍卖行当前库存和配置,确定哪些物品类别需要补充。
+ * 该方法用于创建一个可随机选择的物品类别列表。
+ *
+ * @param config 销售者配置对象的引用
+ * @param itemsToSellArray 输出参数,需要销售的物品类别列表
+ * @param addedItem 已添加物品的统计数组
+ * @return true 如果有需要补充的物品
+ * @return false 如果拍卖行已满
+ */
 bool AuctionBotSeller::GetItemsToSell(SellerConfiguration& config, ItemsToSellArray& itemsToSellArray, AllItemsArray const& addedItem)
 {
     itemsToSellArray.clear();
@@ -577,7 +684,7 @@ bool AuctionBotSeller::GetItemsToSell(SellerConfiguration& config, ItemsToSellAr
     {
         for (uint32 i = 0; i < MAX_ITEM_CLASS; ++i)
         {
-            // if _itemPool for chosen is empty, MissedItemsPerClass will return 0 here (checked at startup)
+            // 如果选定类别的物品池为空,MissedItemsPerClass将返回0(在启动时检查)
             if (config.GetMissedItemsPerClass(AuctionQuality(j), ItemClass(i)) > addedItem[j][i])
             {
                 ItemToSell miss_item;
@@ -592,7 +699,22 @@ bool AuctionBotSeller::GetItemsToSell(SellerConfiguration& config, ItemsToSellAr
     return found;
 }
 
-// Set items price. All important value are passed by address.
+/**
+ * @brief 设置物品价格
+ *
+ * 根据物品模板和配置计算拍卖行的买断价和竞价。
+ * 价格计算考虑了:
+ * - 物品的类别和品质价格比例
+ * - 物品的买价/卖价
+ * - 堆叠数量
+ * - 配置中的价格比率
+ *
+ * @param itemProto 物品模板指针
+ * @param config 销售者配置对象的引用
+ * @param buyp 输出参数,买断价格
+ * @param bidp 输出参数,竞拍价格
+ * @param stackCount 堆叠数量
+ */
 void AuctionBotSeller::SetPricesOfItem(ItemTemplate const* itemProto, SellerConfiguration& config, uint32& buyp, uint32& bidp, uint32 stackCount)
 {
     uint32 classRatio = config.GetPriceRatioPerClass(ItemClass(itemProto->Class));
@@ -602,12 +724,14 @@ void AuctionBotSeller::SetPricesOfItem(ItemTemplate const* itemProto, SellerConf
     float buyPrice = itemProto->BuyPrice;
     float sellPrice = itemProto->SellPrice;
 
+    // 如果没有买价,尝试从卖价计算
     if (buyPrice == 0)
     {
         if (sellPrice > 0)
             buyPrice = sellPrice * GetSellModifier(itemProto);
         else
         {
+            // 如果既没有买价也没有卖价,基于物品等级和品质计算
             float divisor = ((itemProto->Class == ITEM_CLASS_WEAPON || itemProto->Class == ITEM_CLASS_ARMOR) ? 284.0f : 80.0f);
             float tempLevel = (itemProto->ItemLevel == 0 ? 1.0f : itemProto->ItemLevel);
             float tempQuality = (itemProto->Quality == 0 ? 1.0f : itemProto->Quality);
@@ -616,37 +740,59 @@ void AuctionBotSeller::SetPricesOfItem(ItemTemplate const* itemProto, SellerConf
         }
     }
 
+    // 如果没有卖价,从买价计算
     if (sellPrice == 0)
         sellPrice = (buyPrice > 10 ? buyPrice / GetSellModifier(itemProto) : buyPrice);
 
+    // 根据配置决定使用买价还是卖价作为基础
     if (sAuctionBotConfig->GetConfig(CONFIG_AHBOT_BUYPRICE_SELLER))
         buyPrice = sellPrice;
 
+    // 计算基础价格并应用价格比率
     float basePriceFloat = buyPrice * stackCount / (itemProto->Class == 6 ? 200.0f : static_cast<float>(itemProto->BuyCount));
     basePriceFloat *= priceRatio;
 
+    // 添加随机浮动(±4%)
     float range = basePriceFloat * 0.04f;
 
     buyp = static_cast<uint32>(frand(basePriceFloat - range, basePriceFloat + range) + 0.5f);
     if (buyp == 0)
         buyp = 1;
 
+    // 计算竞拍价格(买断价的一定比例)
     float bidPercentage = frand(sAuctionBotConfig->GetConfig(CONFIG_AHBOT_BIDPRICE_MIN), sAuctionBotConfig->GetConfig(CONFIG_AHBOT_BIDPRICE_MAX));
     bidp = static_cast<uint32>(bidPercentage * buyp);
     if (bidp == 0)
         bidp = 1;
 }
 
-// Determines the stack size to use for the item
+/**
+ * @brief 获取物品的堆叠大小
+ *
+ * 根据配置决定物品是单个上架还是以随机堆叠数量上架。
+ *
+ * @param itemProto 物品模板指针
+ * @param config 销售者配置对象的引用
+ * @return uint32 堆叠大小(1或随机值)
+ */
 uint32 AuctionBotSeller::GetStackSizeForItem(ItemTemplate const* itemProto, SellerConfiguration& config) const
 {
+    // 根据配置的随机堆叠比例决定是否使用随机堆叠
     if (config.GetRandomStackRatioPerClass(ItemClass(itemProto->Class)) > urand(0, 99))
         return urand(1, itemProto->GetMaxStackSize());
     else
         return 1;
 }
 
-// Determine the multiplier for the sell price of any weapon without a buy price.
+/**
+ * @brief 获取卖价修正系数
+ *
+ * 用于从卖价推算买价,或从买价推算卖价。
+ * 不同类别的物品有不同的修正系数。
+ *
+ * @param prototype 物品模板指针
+ * @return uint32 卖价修正系数
+ */
 uint32 AuctionBotSeller::GetSellModifier(ItemTemplate const* prototype)
 {
     switch (prototype->Class)
@@ -661,7 +807,15 @@ uint32 AuctionBotSeller::GetSellModifier(ItemTemplate const* prototype)
     }
 }
 
-// Return the modifier by which the item's level and quality will be modified by to derive a relatively accurate price.
+/**
+ * @brief 获取买价修正系数
+ *
+ * 用于计算物品的基础价格。不同类别和子类别的物品有不同的修正系数。
+ * 该系数与物品等级和品质一起使用,以计算相对准确的价格。
+ *
+ * @param prototype 物品模板指针
+ * @return uint32 买价修正系数
+ */
 uint32 AuctionBotSeller::GetBuyModifier(ItemTemplate const* prototype)
 {
     switch (prototype->Class)
@@ -754,6 +908,15 @@ uint32 AuctionBotSeller::GetBuyModifier(ItemTemplate const* prototype)
     }
 }
 
+/**
+ * @brief 设置所有拍卖行的物品数量比例
+ *
+ * 同时设置联盟、部落和中立拍卖行的物品数量比例。
+ *
+ * @param al 联盟拍卖行物品数量比例
+ * @param ho 部落拍卖行物品数量比例
+ * @param ne 中立拍卖行物品数量比例
+ */
 void AuctionBotSeller::SetItemsRatio(uint32 al, uint32 ho, uint32 ne)
 {
     sAuctionBotConfig->SetConfig(CONFIG_AHBOT_ALLIANCE_ITEM_AMOUNT_RATIO, std::max(al, 100000u));
@@ -764,9 +927,15 @@ void AuctionBotSeller::SetItemsRatio(uint32 al, uint32 ho, uint32 ne)
         LoadItemsQuantity(_houseConfig[i]);
 }
 
+/**
+ * @brief 设置指定拍卖行的物品数量比例
+ *
+ * @param house 拍卖行类型
+ * @param val 物品数量比例值
+ */
 void AuctionBotSeller::SetItemsRatioForHouse(AuctionHouseType house, uint32 val)
 {
-    val = std::max(val, 10000u); // apply same upper limit as used for config load
+    val = std::max(val, 10000u); // 应用与配置加载相同的上限
 
     switch (house)
     {
@@ -778,6 +947,13 @@ void AuctionBotSeller::SetItemsRatioForHouse(AuctionHouseType house, uint32 val)
     LoadItemsQuantity(_houseConfig[house]);
 }
 
+/**
+ * @brief 设置所有品质的物品数量
+ *
+ * 同时设置所有品质(灰色到橙色)的物品数量。
+ *
+ * @param amounts 包含所有品质物品数量的数组
+ */
 void AuctionBotSeller::SetItemsAmount(std::array<uint32, MAX_AUCTION_QUALITY> const& amounts)
 {
     sAuctionBotConfig->SetConfig(CONFIG_AHBOT_ITEM_GRAY_AMOUNT, amounts[AUCTION_QUALITY_GRAY]);
@@ -792,6 +968,12 @@ void AuctionBotSeller::SetItemsAmount(std::array<uint32, MAX_AUCTION_QUALITY> co
         LoadItemsQuantity(_houseConfig[i]);
 }
 
+/**
+ * @brief 设置指定品质的物品数量
+ *
+ * @param quality 物品品质
+ * @param val 物品数量值
+ */
 void AuctionBotSeller::SetItemsAmountForQuality(AuctionQuality quality, uint32 val)
 {
     switch (quality)
@@ -816,14 +998,25 @@ void AuctionBotSeller::SetItemsAmountForQuality(AuctionQuality quality, uint32 v
         LoadItemsQuantity(_houseConfig[i]);
 }
 
-// Add new auction to one of the factions.
-// Faction and setting associated is defined passed argument ( config )
+/**
+ * @brief 向拍卖行添加新拍卖
+ *
+ * 根据配置自动向指定拍卖行添加新的拍卖项。
+ * 该方法会:
+ * 1. 确定需要补充的物品数量
+ * 2. 随机选择需要补充的物品类别
+ * 3. 从物品池中随机选择具体物品
+ * 4. 创建物品并设置价格
+ * 5. 创建拍卖项并保存到数据库
+ *
+ * @param config 销售者配置对象的引用
+ */
 void AuctionBotSeller::AddNewAuctions(SellerConfiguration& config)
 {
     uint32 count = 0;
     uint32 items = 0;
 
-    // If there is large amount of items missed we can use boost value to get fast filled AH
+    // 如果缺少大量物品,使用加速值快速填充拍卖行
     if (config.LastMissedItem > sAuctionBotConfig->GetItemPerCycleBoost())
     {
         items = sAuctionBotConfig->GetItemPerCycleBoost();
@@ -832,6 +1025,7 @@ void AuctionBotSeller::AddNewAuctions(SellerConfiguration& config)
     else
         items = sAuctionBotConfig->GetItemPerCycleNormal();
 
+    // 确定拍卖行ID
     uint32 houseid = 0;
     switch (config.GetHouseType())
     {
@@ -852,19 +1046,20 @@ void AuctionBotSeller::AddNewAuctions(SellerConfiguration& config)
 
     ItemsToSellArray itemsToSell;
     AllItemsArray allItems(MAX_AUCTION_QUALITY, std::vector<uint32>(MAX_ITEM_CLASS));
-    // Main loop
-    // getRandomArray will give what categories of items should be added (return true if there is at least 1 items missed)
+
+    // 主循环
+    // GetItemsToSell会给出应该添加哪些类别的物品(如果有至少1个物品缺失则返回true)
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
     while (GetItemsToSell(config, itemsToSell, allItems) && items > 0)
     {
         --items;
 
-        // Select random position from missed items table
+        // 从缺失物品表中随机选择一个位置
         ItemToSell const& sellItem = Trinity::Containers::SelectRandomContainerElement(itemsToSell);
 
-        // Set itemId with random item ID for selected categories and color, from _itemPool table
+        // 从物品池表中为选定的类别和颜色设置随机的物品ID
         uint32 itemId = Trinity::Containers::SelectRandomContainerElement(_itemPool[sellItem.Color][sellItem.Itemclass]);
-        ++allItems[sellItem.Color][sellItem.Itemclass]; // Helper table to avoid rescan from DB in this loop. (has we add item in random orders)
+        ++allItems[sellItem.Color][sellItem.Itemclass]; // 辅助表,避免在此循环中重新扫描数据库(因为物品是随机顺序添加的)
 
         if (!itemId)
         {
@@ -888,18 +1083,18 @@ void AuctionBotSeller::AddNewAuctions(SellerConfiguration& config)
             return;
         }
 
-        // Update the just created item so that if it needs random properties it has them.
-        // Ex:  Notched Shortsword of Stamina will only generate as a Notched Shortsword without this.
+        // 更新刚创建的物品,如果需要随机属性则添加
+        // 例如:如果没有这个步骤,"耐力之刻痕短剑"只会生成为"刻痕短剑"
         if (int32 randomPropertyId = GenerateItemRandomPropertyId(itemId))
             item->SetItemRandomProperties(randomPropertyId);
 
         uint32 buyoutPrice;
         uint32 bidPrice = 0;
 
-        // Price of items are set here
+        // 在此处设置物品价格
         SetPricesOfItem(prototype, config, buyoutPrice, bidPrice, stackCount);
 
-        // Deposit time
+        // 随机确定拍卖时长
         uint32 etime = urand(1, 3);
         switch (etime)
         {
@@ -915,6 +1110,7 @@ void AuctionBotSeller::AddNewAuctions(SellerConfiguration& config)
                 break;
         }
 
+        // 创建拍卖项
         AuctionEntry* auctionEntry = new AuctionEntry();
         auctionEntry->Id = sObjectMgr->GenerateAuctionID();
         auctionEntry->owner = sAuctionBotConfig->GetRandChar();
@@ -930,6 +1126,7 @@ void AuctionBotSeller::AddNewAuctions(SellerConfiguration& config)
         auctionEntry->expire_time = GameTime::GetGameTime() + urand(config.GetMinTime(), config.GetMaxTime()) * HOUR;
         auctionEntry->Flags = AUCTION_ENTRY_FLAG_NONE;
 
+        // 保存物品和拍卖项到数据库
         item->SaveToDB(trans);
         sAuctionMgr->AddAItem(item);
         auctionHouse->AddAuction(auctionEntry);
@@ -944,6 +1141,16 @@ void AuctionBotSeller::AddNewAuctions(SellerConfiguration& config)
     TC_LOG_DEBUG("ahbot", "AHBot: Added {} items to auction", count);
 }
 
+/**
+ * @brief 更新指定拍卖行的拍卖项
+ *
+ * 该方法定期被调用,用于检查和补充拍卖行中的物品。
+ * 如果拍卖行启用了机器人,会统计当前库存并添加缺失的物品。
+ *
+ * @param houseType 拍卖行类型(联盟/部落/中立)
+ * @return true 如果该拍卖行已启用机器人
+ * @return false 如果该拍卖行未启用机器人
+ */
 bool AuctionBotSeller::Update(AuctionHouseType houseType)
 {
     if (sAuctionBotConfig->GetConfigItemAmountRatio(houseType) > 0)

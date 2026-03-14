@@ -22,6 +22,23 @@ Comment: All modify related commands
 Category: commandscripts
 EndScriptData */
 
+/**
+ * @file cs_modify.cpp
+ * @brief 游戏修改命令模块
+ *
+ * 本模块提供了一系列GM命令，用于修改玩家和单位的各种属性。
+ * 主要功能包括：
+ * - 修改玩家属性：生命值、法力值、能量、怒气、符文能量等
+ * - 修改玩家资源：金币、荣誉点、竞技场点、经验值等
+ * - 修改玩家状态：速度、缩放、阵营、性别、醉酒状态等
+ * - 修改单位外观：变形（morph）、模型缩放
+ * - 修改玩家声望和天赋点
+ * - 设置玩家阶段掩码和姿态状态
+ *
+ * 这些命令主要用于游戏测试、事件管理和玩家支持。
+ * 所有命令都需要相应的RBAC权限才能执行。
+ */
+
 #include "ScriptMgr.h"
 #include "Chat.h"
 #include "DBCStores.h"
@@ -39,13 +56,38 @@ EndScriptData */
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #endif
 
+/**
+ * @class modify_commandscript
+ * @brief 修改命令脚本类
+ *
+ * 该类继承自CommandScript，提供所有与修改玩家/单位属性相关的GM命令。
+ * 命令包括：修改生命值、法力值、速度、金币、声望、荣誉点、竞技场点、
+ * 变形、缩放、阵营、性别等。所有命令都需要相应的RBAC权限。
+ */
 class modify_commandscript : public CommandScript
 {
 public:
+    /**
+     * @brief 构造函数
+     *
+     * 初始化修改命令脚本，注册命令名称为"modify_commandscript"
+     */
     modify_commandscript() : CommandScript("modify_commandscript") { }
 
+    /**
+     * @brief 获取所有修改命令的命令表
+     * @return 返回命令表向量，包含所有修改相关命令的定义
+     *
+     * 该函数注册了以下命令类别：
+     * - modifyspeedCommandTable: 速度修改命令（包括所有速度、后退速度、飞行速度、行走速度、游泳速度）
+     * - modifyCommandTable: 主要修改命令（竞技场点、位、醉酒、能量、阵营、性别、荣誉、HP、法力等）
+     * - commandTable: 顶层命令（morph变形、demorph取消变形、modify修改）
+     *
+     * @note 每个命令都关联了相应的RBAC权限控制
+     */
     std::vector<ChatCommand> GetCommands() const override
     {
+        // 速度修改命令子表
         static std::vector<ChatCommand> modifyspeedCommandTable =
         {
             { "all",      rbac::RBAC_PERM_COMMAND_MODIFY_SPEED_ALL,      false, &HandleModifyASpeedCommand, "" },
@@ -55,6 +97,7 @@ public:
             { "swim",     rbac::RBAC_PERM_COMMAND_MODIFY_SPEED_SWIM,     false, &HandleModifySwimCommand,   "" },
             { "",         rbac::RBAC_PERM_COMMAND_MODIFY_SPEED,          false, &HandleModifyASpeedCommand, "" },
         };
+        // 主要修改命令表
         static std::vector<ChatCommand> modifyCommandTable =
         {
             { "arenapoints",  rbac::RBAC_PERM_COMMAND_MODIFY_ARENAPOINTS,  false, &HandleModifyArenaCommand,         "" },
@@ -79,6 +122,7 @@ public:
             { "talentpoints", rbac::RBAC_PERM_COMMAND_MODIFY_TALENTPOINTS, false, &HandleModifyTalentCommand,        "" },
             { "xp",           rbac::RBAC_PERM_COMMAND_MODIFY_XP,           false, &HandleModifyXPCommand,            "" },
         };
+        // 顶层命令表
         static std::vector<ChatCommand> commandTable =
         {
             { "morph",   rbac::RBAC_PERM_COMMAND_MORPH,   false, &HandleModifyMorphCommand,          "" },
@@ -88,6 +132,20 @@ public:
         return commandTable;
     }
 
+    /**
+     * @brief 发送修改通知给目标玩家
+     * @tparam Args 可变参数模板
+     * @param handler 聊天处理器指针，用于发送消息
+     * @param target 目标单位（必须是玩家）
+     * @param resourceMessage 发送给执行者的消息ID
+     * @param resourceReportMessage 发送给目标的消息ID
+     * @param args 可变参数列表，用于格式化消息
+     *
+     * 该函数用于在修改操作完成后，向执行者和目标玩家发送通知消息。
+     * 如果目标玩家需要接收报告，则会同时向其发送格式化后的消息。
+     *
+     * @note 仅当目标是玩家时才发送消息
+     */
     template<typename... Args>
     static void NotifyModification(ChatHandler* handler, Unit* target, TrinityStrings resourceMessage, TrinityStrings resourceReportMessage, Args&&... args)
     {
@@ -99,6 +157,25 @@ public:
         }
     }
 
+    /**
+     * @brief 检查修改资源参数的有效性
+     * @param handler 聊天处理器指针
+     * @param args 命令参数字符串
+     * @param target 目标玩家
+     * @param res [out] 输出的资源值（已乘以倍数）
+     * @param resmax [out] 输出的资源最大值（已乘以倍数）
+     * @param multiplier 倍数因子，默认为1（用于能量、怒气等转换）
+     * @return 如果参数有效且通过权限检查返回true，否则返回false
+     *
+     * 该函数用于验证修改资源命令的参数：
+     * 1. 检查参数是否为空
+     * 2. 解析参数并应用倍数
+     * 3. 验证值的范围（必须大于0且res <= resmax）
+     * 4. 检查目标是否存在
+     * 5. 检查执行者权限是否高于目标
+     *
+     * @note 能量和怒气在游戏中显示值与实际存储值有10倍差异
+     */
     static bool CheckModifyResources(ChatHandler* handler, char const* args, Player* target, int32& res, int32& resmax, int8 const multiplier = 1)
     {
         if (!*args)
@@ -127,6 +204,22 @@ public:
         return true;
     }
 
+    /**
+     * @brief 修改玩家生命值命令处理函数
+     * @param handler 聊天处理器指针
+     * @param args 命令参数（生命值）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .modify hp <值> - 设置选中玩家或自己的生命值
+     *
+     * 执行流程：
+     * 1. 获取目标玩家（选中的玩家或自己）
+     * 2. 检查参数有效性
+     * 3. 设置最大生命值和当前生命值
+     * 4. 发送修改通知
+     *
+     * @see CheckModifyResources() 参数验证
+     */
     //Edit Player HP
     static bool HandleModifyHPCommand(ChatHandler* handler, char const* args)
     {
@@ -142,6 +235,20 @@ public:
         return false;
     }
 
+    /**
+     * @brief 修改玩家法力值命令处理函数
+     * @param handler 聊天处理器指针
+     * @param args 命令参数（法力值）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .modify mana <值> - 设置选中玩家或自己的法力值
+     *
+     * 执行流程：
+     * 1. 获取目标玩家
+     * 2. 检查参数有效性
+     * 3. 设置最大法力值和当前法力值
+     * 4. 发送修改通知
+     */
     //Edit Player Mana
     static bool HandleModifyManaCommand(ChatHandler* handler, char const* args)
     {
@@ -158,6 +265,23 @@ public:
         return false;
     }
 
+    /**
+     * @brief 修改玩家能量命令处理函数
+     * @param handler 聊天处理器指针
+     * @param args 命令参数（能量值）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .modify energy <值> - 设置选中玩家或自己的能量值
+     *
+     * 执行流程：
+     * 1. 获取目标玩家
+     * 2. 检查参数有效性（能量值乘以10作为实际存储值）
+     * 3. 设置最大能量和当前能量
+     * 4. 发送修改通知（显示值除以10）
+     *
+     * @note 能量在游戏中显示值与内部存储值有10倍差异
+     *       显示值乘以10 = 存储值
+     */
     //Edit Player Energy
     static bool HandleModifyEnergyCommand(ChatHandler* handler, char const* args)
     {
@@ -174,6 +298,23 @@ public:
         return false;
     }
 
+    /**
+     * @brief 修改玩家怒气命令处理函数
+     * @param handler 聊天处理器指针
+     * @param args 命令参数（怒气值）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .modify rage <值> - 设置选中玩家或自己的怒气值
+     *
+     * 执行流程：
+     * 1. 获取目标玩家
+     * 2. 检查参数有效性（怒气值乘以10作为实际存储值）
+     * 3. 设置最大怒气和当前怒气
+     * 4. 发送修改通知（显示值除以10）
+     *
+     * @note 怒气在游戏中显示值与内部存储值有10倍差异
+     *       显示值乘以10 = 存储值
+     */
     //Edit Player Rage
     static bool HandleModifyRageCommand(ChatHandler* handler, char const* args)
     {
@@ -190,6 +331,23 @@ public:
         return false;
     }
 
+    /**
+     * @brief 修改玩家符文能量命令处理函数
+     * @param handler 聊天处理器指针
+     * @param args 命令参数（符文能量值）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .modify runicpower <值> - 设置选中玩家或自己的符文能量值
+     *
+     * 执行流程：
+     * 1. 获取目标玩家
+     * 2. 检查参数有效性（符文能量值乘以10作为实际存储值）
+     * 3. 设置最大符文能量和当前符文能量
+     * 4. 发送修改通知（显示值除以10）
+     *
+     * @note 符文能量在游戏中显示值与内部存储值有10倍差异
+     *       这是死亡骑士职业使用的资源类型
+     */
     // Edit Player Runic Power
     static bool HandleModifyRunicPowerCommand(ChatHandler* handler, char const* args)
     {
@@ -206,6 +364,26 @@ public:
         return false;
     }
 
+    /**
+     * @brief 修改单位阵营命令处理函数
+     * @param handler 聊天处理器指针
+     * @param factionid 阵营ID（可选）
+     * @param flag 单位标志（可选）
+     * @param npcflag NPC标志（可选）
+     * @param dyflag 动态标志（可选）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .modify faction [阵营ID] [标志] [NPC标志] [动态标志]
+     *
+     * 执行流程：
+     * 1. 获取选中的生物目标
+     * 2. 如果未提供参数，显示当前阵营信息
+     * 3. 如果提供阵营ID，验证其有效性
+     * 4. 设置新的阵营、单位标志、NPC标志和动态标志
+     *
+     * @note 此命令主要用于NPC/生物，不是玩家阵营修改
+     *       阵营模板ID定义在 FactionTemplate.dbc 中
+     */
     //Edit Player Faction
     static bool HandleModifyFactionCommand(ChatHandler* handler, Optional<uint32> factionid, Optional<uint32> flag, Optional<uint32> npcflag, Optional<uint32> dyflag)
     {
@@ -249,6 +427,25 @@ public:
         return true;
     }
 
+    /**
+     * @brief 修改玩家法术修正值命令处理函数
+     * @param handler 聊天处理器指针
+     * @param args 命令参数（法术平坦修正ID 操作符 值 标记）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .modify spell <法术平坦修正ID> <操作符> <值> [标记]
+     *
+     * 该命令直接修改玩家的法术修正值，用于调试法术效果。
+     * 参数格式：<flatid> <op> <val> [mark]
+     *
+     * 执行流程：
+     * 1. 解析参数：法术平坦修正ID、操作符、值、标记
+     * 2. 获取目标玩家
+     * 3. 检查权限
+     * 4. 发送修改包（SMSG_SET_FLAT_SPELL_MODIFIER）给客户端
+     *
+     * @note 这是一个底层调试命令，需要深入了解法术系统
+     */
     //Edit Player Spell
     static bool HandleModifySpellCommand(ChatHandler* handler, char const* args)
     {
@@ -305,6 +502,22 @@ public:
         return true;
     }
 
+    /**
+     * @brief 修改玩家或宠物天赋点数命令处理函数
+     * @param handler 聊天处理器指针
+     * @param args 命令参数（天赋点数）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .modify talentpoints <值> - 设置选中玩家或宠物的天赋点数
+     *
+     * 执行流程：
+     * 1. 解析天赋点数参数
+     * 2. 获取目标单位（玩家或宠物）
+     * 3. 如果是玩家，设置自由天赋点数并更新客户端
+     * 4. 如果是宠物（永久的），设置宠物天赋点数并通知主人
+     *
+     * @note 宠物天赋点数修改需要主人在线
+     */
     //Edit Player TP
     static bool HandleModifyTalentCommand (ChatHandler* handler, char const* args)
     {
@@ -351,6 +564,24 @@ public:
         return false;
     }
 
+    /**
+     * @brief 检查修改速度参数的有效性（已解析速度值版本）
+     * @param handler 聊天处理器指针
+     * @param target 目标单位
+     * @param speed 速度值（已解析）
+     * @param minimumBound 最小速度边界
+     * @param maximumBound 最大速度边界
+     * @param checkInFlight 是否检查玩家是否在飞行中，默认为true
+     * @return 如果速度有效且通过权限检查返回true，否则返回false
+     *
+     * 该函数用于验证速度值是否在有效范围内，并检查：
+     * 1. 速度是否在[min, max]范围内
+     * 2. 目标是否存在
+     * 3. 执行者权限是否高于目标（对于玩家）
+     * 4. 玩家是否在飞行中（如果需要检查）
+     *
+     * @note 飞行中的玩家不能修改移动速度
+     */
     static bool CheckModifySpeed(ChatHandler* handler, Unit* target, float speed, float minimumBound, float maximumBound, bool checkInFlight = true)
     {
         if (speed > maximumBound || speed < minimumBound)
@@ -383,6 +614,23 @@ public:
         return true;
     }
 
+    /**
+     * @brief 检查修改速度参数的有效性（从字符串解析版本）
+     * @param handler 聊天处理器指针
+     * @param args 命令参数字符串
+     * @param target 目标单位
+     * @param speed [out] 输出的速度值
+     * @param minimumBound 最小速度边界
+     * @param maximumBound 最大速度边界
+     * @param checkInFlight 是否检查玩家是否在飞行中，默认为true
+     * @return 如果参数有效且通过权限检查返回true，否则返回false
+     *
+     * 该函数从字符串参数解析速度值，并调用另一个重载版本进行验证。
+     * 执行流程：
+     * 1. 检查参数是否为空
+     * 2. 解析速度浮点值
+     * 3. 调用重载版本进行完整验证
+     */
     static bool CheckModifySpeed(ChatHandler* handler, char const* args, Unit* target, float& speed, float minimumBound, float maximumBound, bool checkInFlight = true)
     {
         if (!*args)
@@ -392,6 +640,24 @@ public:
         return CheckModifySpeed(handler, target, speed, minimumBound, maximumBound, checkInFlight);
     }
 
+    /**
+     * @brief 修改玩家所有速度命令处理函数
+     * @param handler 聊天处理器指针
+     * @param args 命令参数（速度倍率）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .modify speed all <速度> 或 .modify speed <速度>
+     *
+     * 该命令同时设置所有类型的速度：
+     * - 行走速度（MOVE_WALK）
+     * - 奔跑速度（MOVE_RUN）
+     * - 游泳速度（MOVE_SWIM）
+     * - 飞行速度（MOVE_FLIGHT）
+     *
+     * 速度有效范围：0.1 到 50.0
+     *
+     * @note 速度倍率是相对于基础速度的倍数，1.0为正常速度
+     */
     //Edit Player Aspeed
     static bool HandleModifyASpeedCommand(ChatHandler* handler, char const* args)
     {
@@ -409,6 +675,16 @@ public:
         return false;
     }
 
+    /**
+     * @brief 修改玩家奔跑速度命令处理函数
+     * @param handler 聊天处理器指针
+     * @param args 命令参数（速度倍率）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .modify speed walk <速度> - 设置奔跑速度
+     *
+     * 只修改奔跑速度（MOVE_RUN），速度有效范围：0.1 到 50.0
+     */
     //Edit Player Speed
     static bool HandleModifySpeedCommand(ChatHandler* handler, char const* args)
     {
@@ -423,6 +699,16 @@ public:
         return false;
     }
 
+    /**
+     * @brief 修改玩家游泳速度命令处理函数
+     * @param handler 聊天处理器指针
+     * @param args 命令参数（速度倍率）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .modify speed swim <速度> - 设置游泳速度
+     *
+     * 只修改游泳速度（MOVE_SWIM），速度有效范围：0.1 到 50.0
+     */
     //Edit Player Swim Speed
     static bool HandleModifySwimCommand(ChatHandler* handler, char const* args)
     {
@@ -437,6 +723,16 @@ public:
         return false;
     }
 
+    /**
+     * @brief 修改玩家后退速度命令处理函数
+     * @param handler 聊天处理器指针
+     * @param args 命令参数（速度倍率）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .modify speed backwalk <速度> - 设置后退速度
+     *
+     * 只修改后退速度（MOVE_RUN_BACK），速度有效范围：0.1 到 50.0
+     */
     //Edit Player Backwards Walk Speed
     static bool HandleModifyBWalkCommand(ChatHandler* handler, char const* args)
     {
@@ -451,6 +747,19 @@ public:
         return false;
     }
 
+    /**
+     * @brief 修改玩家飞行速度命令处理函数
+     * @param handler 聊天处理器指针
+     * @param args 命令参数（速度倍率）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .modify speed fly <速度> - 设置飞行速度
+     *
+     * 只修改飞行速度（MOVE_FLIGHT），速度有效范围：0.1 到 50.0
+     * 该命令不检查玩家是否在飞行状态（checkInFlight = false）
+     *
+     * @note 允许在飞行状态下修改飞行速度
+     */
     //Edit Player Fly
     static bool HandleModifyFlyCommand(ChatHandler* handler, char const* args)
     {
@@ -465,6 +774,19 @@ public:
         return false;
     }
 
+    /**
+     * @brief 修改玩家或生物缩放比例命令处理函数
+     * @param handler 聊天处理器指针
+     * @param args 命令参数（缩放比例）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .modify scale <比例> - 设置选中单位或自己的模型缩放比例
+     *
+     * 缩放比例有效范围：0.1 到 10.0
+     * 该命令适用于玩家和NPC/生物
+     *
+     * @note 过大或过小的缩放可能导致视觉效果异常
+     */
     //Edit Player or Creature Scale
     static bool HandleModifyScaleCommand(ChatHandler* handler, char const* args)
     {
@@ -479,6 +801,24 @@ public:
         return false;
     }
 
+    /**
+     * @brief 使玩家骑乘坐骑命令处理函数
+     * @param handler 聊天处理器指针
+     * @param mount 坐骑显示ID
+     * @param speed 移动速度
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .modify mount <坐骑ID> <速度> - 使选中玩家或自己骑乘指定坐骑
+     *
+     * 执行流程：
+     * 1. 验证坐骑显示ID是否有效（从CreatureDisplayInfoStore查找）
+     * 2. 获取目标玩家
+     * 3. 检查权限
+     * 4. 验证速度范围（0.1 到 50.0）
+     * 5. 让玩家骑乘坐骑并设置奔跑和飞行速度
+     *
+     * @note 坐骑ID是生物显示信息ID，定义在 CreatureDisplayInfo.dbc 中
+     */
     //Enable Player mount
     static bool HandleModifyMountCommand(ChatHandler* handler, uint32 mount, float speed)
     {
@@ -511,6 +851,28 @@ public:
         return true;
     }
 
+    /**
+     * @brief 修改玩家金币命令处理函数
+     * @param handler 聊天处理器指针
+     * @param args 命令参数（金币数量或金币字符串）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .modify money <数量> - 增加或减少选中玩家或自己的金币
+     *
+     * 参数格式支持两种方式：
+     * 1. 数值方式：直接输入数值（可正可负）
+     * 2. 字符串方式：使用"g"（金）、"s"（银）、"c"（铜）格式
+     *    例如：10g20s30c 表示10金20银30铜
+     *
+     * 执行流程：
+     * 1. 获取目标玩家
+     * 2. 解析金币参数
+     * 3. 如果金额为负，扣除金币（最多扣到0）
+     * 4. 如果金额为正，增加金币（不超过MAX_MONEY_AMOUNT）
+     * 5. 发送修改通知
+     *
+     * @note 金币上限为 MAX_MONEY_AMOUNT (214748g 36s 47c)
+     */
     //Edit Player money
     static bool HandleModifyMoneyCommand(ChatHandler* handler, char const* args)
     {
@@ -580,6 +942,23 @@ public:
         return true;
     }
 
+    /**
+     * @brief 修改单位字段位标志命令处理函数
+     * @param handler 聊天处理器指针
+     * @param args 命令参数（字段索引 位位置）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .modify bit <字段> <位> - 切换选中单位的指定位标志
+     *
+     * 该命令用于直接操作单位字段的位标志，是一个底层调试工具。
+     * 如果该位已设置，则清除；如果未设置，则设置。
+     *
+     * 参数：
+     * - 字段：从OBJECT_END开始的有效字段索引
+     * - 位：1到32之间的位位置
+     *
+     * @note 这是对单位字段值的直接位操作，需要谨慎使用
+     */
     //Edit Unit field
     static bool HandleModifyBitCommand(ChatHandler* handler, char const* args)
     {
@@ -635,6 +1014,22 @@ public:
         return true;
     }
 
+    /**
+     * @brief 修改玩家荣誉点数命令处理函数
+     * @param handler 聊天处理器指针
+     * @param args 命令参数（荣誉点数）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .modify honor <数量> - 增加选中玩家的荣誉点数（可正可负）
+     *
+     * 执行流程：
+     * 1. 获取目标玩家
+     * 2. 检查权限
+     * 3. 修改荣誉点数
+     * 4. 发送当前荣誉点数信息
+     *
+     * @note 荣誉点数用于PvP奖励系统
+     */
     static bool HandleModifyHonorCommand (ChatHandler* handler, char const* args)
     {
         if (!*args)
@@ -661,6 +1056,19 @@ public:
         return true;
     }
 
+    /**
+     * @brief 修改玩家醉酒状态命令处理函数
+     * @param handler 聊天处理器指针
+     * @param args 命令参数（醉酒等级，0-100）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .modify drunk <等级> - 设置选中玩家或自己的醉酒程度
+     *
+     * 醉酒等级范围：0（清醒）到 100（完全醉酒）
+     * 超过100的值会被限制为100
+     *
+     * @note 醉酒状态会影响画面模糊效果和某些NPC的互动
+     */
     static bool HandleModifyDrunkCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
@@ -676,6 +1084,34 @@ public:
         return true;
     }
 
+    /**
+     * @brief 修改玩家声望命令处理函数
+     * @param handler 聊天处理器指针
+     * @param args 命令参数（阵营ID 数值 或 阵营ID 声望等级名称 [偏移量]）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .modify reputation <阵营ID> <数值或等级名称> [偏移量]
+     *
+     * 该命令支持两种设置方式：
+     * 1. 直接数值方式：.modify reputation <阵营ID> <数值>
+     *    例如：.modify reputation 72 42000
+     *
+     * 2. 声望等级名称方式：.modify reputation <阵营ID> <等级名> [偏移量]
+     *    等级名可以是：hated（仇恨）、hostile（敌对）、unfriendly（冷淡）、
+     *                 neutral（中立）、friendly（友好）、honored（尊敬）、
+     *                 revered（崇敬）、exalted（崇拜）
+     *    例如：.modify reputation 72 exalted
+     *         .modify reputation 72 revered 5000
+     *
+     * 执行流程：
+     * 1. 获取目标玩家并检查权限
+     * 2. 从链接提取阵营ID
+     * 3. 解析声望数值或等级名称
+     * 4. 验证阵营是否存在且有声望索引
+     * 5. 设置声望值并发送状态更新
+     *
+     * @note 声望值范围：-42000（仇恨）到 42999（崇拜）
+     */
     static bool HandleModifyRepCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
@@ -776,6 +1212,22 @@ public:
         return true;
     }
 
+    /**
+     * @brief 变形玩家或生物命令处理函数
+     * @param handler 聊天处理器指针
+     * @param display_id 显示ID（模型ID）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .morph <显示ID> - 将选中单位或自己变形为指定模型
+     *
+     * 执行流程：
+     * 1. 获取目标单位（选中单位或自己）
+     * 2. 检查权限（如果目标是玩家）
+     * 3. 设置单位的显示ID
+     *
+     * @note 显示ID定义在 CreatureDisplayInfo.dbc 中
+     *       变形是临时的，登出或使用demorph命令可恢复
+     */
     //morph creature or player
     static bool HandleModifyMorphCommand(ChatHandler* handler, uint32 display_id)
     {
@@ -792,6 +1244,25 @@ public:
         return true;
     }
 
+    /**
+     * @brief 设置玩家临时阶段掩码命令处理函数
+     * @param handler 聊天处理器指针
+     * @param phasemask 阶段掩码值
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .modify phase <阶段掩码> - 设置选中单位或自己的阶段掩码
+     *
+     * 阶段掩码控制玩家/单位能看到的游戏对象和其他单位。
+     * 不同的阶段掩码值让玩家看到不同阶段的游戏内容。
+     *
+     * 执行流程：
+     * 1. 获取目标单位
+     * 2. 检查权限
+     * 3. 设置阶段掩码并更新客户端
+     *
+     * @note 这是临时修改，登出后阶段掩码会重置
+     *       阶段系统用于任务链中的阶段性内容展示
+     */
     //set temporary phase mask for player
     static bool HandleModifyPhaseCommand(ChatHandler* handler, uint32 phasemask)
     {
@@ -807,6 +1278,19 @@ public:
         return true;
     }
 
+    /**
+     * @brief 修改玩家姿态状态命令处理函数
+     * @param handler 聊天处理器指针
+     * @param args 命令参数（动画ID）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .modify standstate <动画ID> - 设置玩家的表情状态
+     *
+     * 动画ID对应不同的表情/姿态，如站立、坐下、睡觉等。
+     * 该命令影响角色的持续表情动画。
+     *
+     * @note 表情状态定义在 Emotes.dbc 中
+     */
     //change standstate
     static bool HandleModifyStandStateCommand(ChatHandler* handler, char const* args)
     {
@@ -819,6 +1303,22 @@ public:
         return true;
     }
 
+    /**
+     * @brief 修改玩家竞技场点数命令处理函数
+     * @param handler 聊天处理器指针
+     * @param args 命令参数（竞技场点数）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .modify arenapoints <数量> - 增加选中玩家的竞技场点数
+     *
+     * 执行流程：
+     * 1. 获取目标玩家
+     * 2. 解析竞技场点数
+     * 3. 修改竞技场点数
+     * 4. 发送当前竞技场点数信息
+     *
+     * @note 竞技场点数用于购买高级PvP装备
+     */
     static bool HandleModifyArenaCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
@@ -841,6 +1341,24 @@ public:
         return true;
     }
 
+    /**
+     * @brief 修改玩家性别命令处理函数
+     * @param handler 聊天处理器指针
+     * @param args 命令参数（"male" 或 "female"）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .modify gender <male/female> - 修改选中玩家或自己的性别
+     *
+     * 执行流程：
+     * 1. 获取目标玩家
+     * 2. 获取玩家种族信息
+     * 3. 解析性别参数（"male"或"female"）
+     * 4. 设置性别和原生性别
+     * 5. 重新初始化显示ID以匹配新性别
+     * 6. 发送修改通知
+     *
+     * @note 性别修改会改变角色的外观模型
+     */
     static bool HandleModifyGenderCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
@@ -901,6 +1419,22 @@ public:
 
         return true;
     }
+
+    /**
+     * @brief 取消变形命令处理函数
+     * @param handler 聊天处理器指针
+     * @param args 未使用的参数
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .demorph - 恢复选中单位或自己的原始模型
+     *
+     * 执行流程：
+     * 1. 获取目标单位
+     * 2. 检查权限
+     * 3. 调用DeMorph恢复原始显示ID
+     *
+     * @note 这是.morph命令的逆操作，用于取消变形效果
+     */
 //demorph player or unit
     static bool HandleDeMorphCommand(ChatHandler* handler, char const* /*args*/)
     {
@@ -917,6 +1451,22 @@ public:
         return true;
     }
 
+    /**
+     * @brief 修改玩家经验值命令处理函数
+     * @param handler 聊天处理器指针
+     * @param args 命令参数（经验值数量）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .modify xp <数量> - 给予选中玩家或自己指定数量的经验值
+     *
+     * 执行流程：
+     * 1. 解析经验值参数（必须大于0）
+     * 2. 获取目标玩家
+     * 3. 检查权限
+     * 4. 给予玩家经验值（可能触发升级）
+     *
+     * @note 经验值给予会触发正常的升级流程和检查
+     */
     // mod xp command
     static bool HandleModifyXPCommand(ChatHandler *handler, char const* args)
     {

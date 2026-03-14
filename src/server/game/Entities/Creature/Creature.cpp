@@ -15,6 +15,23 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file Creature.cpp
+ * @brief 生物实体类的实现文件
+ *
+ * 本文件实现了游戏世界中所有生物（NPC、怪物等）的核心功能，包括：
+ * - 生物的创建、更新、销毁生命周期管理
+ * - 生物属性（生命值、能量、属性）的计算和更新
+ * - AI行为和移动控制
+ * - 战斗系统（仇恨管理、攻击、死亡）
+ * - 战利品系统和商贩系统
+ * - 生物编队和召唤系统
+ * - 重生和尸体腐烂机制
+ *
+ * Creature类是游戏中最重要的实体类之一，继承自Unit基类，
+ * 几乎所有的游戏交互都与生物相关。
+ */
+
 #include "Creature.h"
 #include "BattlegroundMgr.h"
 #include "CellImpl.h"
@@ -54,9 +71,23 @@
 #include "WorldPacket.h"
 #include <G3D/g3dmath.h>
 
+/// 生物移动数据构造函数
+/// 职责：初始化生物的移动行为参数
+/// 参数：无（使用成员初始化列表）
+/// 默认值：
+///   - Ground: Run (地面移动方式为奔跑)
+///   - Flight: None (无飞行能力)
+///   - Swim: true (可以游泳)
+///   - Rooted: false (不被定身)
+///   - Chase: Run (追逐时奔跑)
+///   - Random: Walk (随机移动时行走)
+///   - InteractionPauseTimer: 从配置读取玩家交互暂停时间
 CreatureMovementData::CreatureMovementData() : Ground(CreatureGroundMovementType::Run), Flight(CreatureFlightMovementType::None), Swim(true), Rooted(false), Chase(CreatureChaseMovementType::Run),
 Random(CreatureRandomMovementType::Walk), InteractionPauseTimer(sWorld->getIntConfig(CONFIG_CREATURE_STOP_FOR_PLAYER)) { }
 
+/// 将移动数据转换为字符串表示
+/// 职责：生成可读的移动参数描述，用于调试和日志输出
+/// 返回值：包含所有移动参数的格式化字符串
 std::string CreatureMovementData::ToString() const
 {
     char const* const GroundStates[] = { "None", "Run", "Hover" };
@@ -78,14 +109,33 @@ std::string CreatureMovementData::ToString() const
     return str.str();
 }
 
+/// 商贩物品计数构造函数
+/// 职责：初始化商贩物品的数量追踪
+/// 参数：
+///   - _item: 物品ID
+///   - _count: 当前数量
 VendorItemCount::VendorItemCount(uint32 _item, uint32 _count)
     : itemId(_item), count(_count), lastIncrementTime(GameTime::GetGameTime()) { }
 
+/// 检查商贩物品是否需要金币
+/// 职责：判断购买该物品是否需要支付金币
+/// 参数：pProto - 物品模板
+/// 返回值：需要金币返回true，否则返回false
+/// 逻辑：如果物品有扩展消耗且没有"忽略购买价格"标志，则不需要金币
 bool VendorItem::IsGoldRequired(ItemTemplate const* pProto) const
 {
     return pProto->HasFlag(ITEM_FLAG2_DONT_IGNORE_BUY_PRICE) || !ExtendedCost;
 }
 
+/**
+ * @brief 从商贩物品列表中移除指定物品
+ *
+ * @param item_id 要移除的物品ID
+ * @return true 成功找到并移除了物品
+ * @return false 未找到指定物品
+ *
+ * @note 此函数使用std::remove_if算法进行高效移除
+ */
 bool VendorItemData::RemoveItem(uint32 item_id)
 {
     auto newEnd = std::remove_if(m_items.begin(), m_items.end(), [=](VendorItem const& vendorItem)
@@ -98,6 +148,15 @@ bool VendorItemData::RemoveItem(uint32 item_id)
     return found;
 }
 
+/**
+ * @brief 查找商贩物品列表中指定物品和扩展消耗的组合
+ *
+ * @param item_id 物品ID
+ * @param extendedCost 扩展消耗ID（如荣誉点数、徽章等）
+ * @return VendorItem const* 找到的商贩物品指针，未找到返回nullptr
+ *
+ * @note 扩展消耗用于实现使用特殊货币购买物品的功能
+ */
 VendorItem const* VendorItemData::FindItemCostPair(uint32 item_id, uint32 extendedCost) const
 {
     for (VendorItem const& vendorItem : m_items)
@@ -106,6 +165,10 @@ VendorItem const* VendorItemData::FindItemCostPair(uint32 item_id, uint32 extend
     return nullptr;
 }
 
+/// 获取随机有效模型ID
+/// 职责：从生物模板的四个可能模型ID中随机选择一个有效的
+/// 返回值：随机选择的有效模型ID，如果都没有则返回0
+/// 用途：用于生物创建时选择随机显示模型
 uint32 CreatureTemplate::GetRandomValidModelId() const
 {
     uint8 c = 0;
@@ -119,6 +182,10 @@ uint32 CreatureTemplate::GetRandomValidModelId() const
     return ((c>0) ? modelIDs[urand(0, c-1)] : 0);
 }
 
+/// 获取第一个有效模型ID
+/// 职责：按顺序返回第一个有效的模型ID
+/// 返回值：第一个有效的模型ID，如果都没有则返回0
+/// 用途：当不需要随机模型时使用
 uint32 CreatureTemplate::GetFirstValidModelId() const
 {
     if (Modelid1) return Modelid1;
@@ -128,6 +195,10 @@ uint32 CreatureTemplate::GetFirstValidModelId() const
     return 0;
 }
 
+/// 获取第一个隐形模型ID
+/// 职责：查找第一个标记为trigger（触发器/隐形）的模型ID
+/// 返回值：第一个隐形模型ID，如果没有则返回默认隐形模型11686
+/// 用途：用于创建不可见的触发器生物
 uint32 CreatureTemplate::GetFirstInvisibleModel() const
 {
     CreatureModelInfo const* modelInfo = sObjectMgr->GetCreatureModelInfo(Modelid1);
@@ -149,6 +220,10 @@ uint32 CreatureTemplate::GetFirstInvisibleModel() const
     return 11686;
 }
 
+/// 获取第一个可见模型ID
+/// 职责：查找第一个非trigger（非隐形）的模型ID
+/// 返回值：第一个可见模型ID，如果没有则返回默认可见模型17519
+/// 用途：用于需要显示的生物
 uint32 CreatureTemplate::GetFirstVisibleModel() const
 {
     CreatureModelInfo const* modelInfo = sObjectMgr->GetCreatureModelInfo(Modelid1);
@@ -170,12 +245,31 @@ uint32 CreatureTemplate::GetFirstVisibleModel() const
     return 17519;
 }
 
+/// 初始化查询数据
+/// 职责：为所有支持的语言预先生成生物查询响应数据
+/// 用途：优化客户端查询生物信息时的性能
 void CreatureTemplate::InitializeQueryData()
 {
     for (uint8 loc = LOCALE_enUS; loc < TOTAL_LOCALES; ++loc)
         QueryData[loc] = BuildQueryData(static_cast<LocaleConstant>(loc));
 }
 
+/// 构建查询数据包
+/// 职责：构建响应客户端生物查询的数据包
+/// 参数：loc - 语言常量
+/// 返回值：包含生物信息的世界数据包
+/// 主要内容：
+///   - 生物ID
+///   - 名称和标题（根据语言本地化）
+///   - 光标图标名称
+///   - 类型标志、生物类型、家族、阶级
+///   - 击杀信用ID数组
+///   - 四个模型显示ID
+///   - 生命值和能量倍数
+///   - 是否为种族领袖
+///   - 任务物品列表
+///   - 移动信息ID
+/// 调用时机：客户端查询生物信息时
 WorldPacket CreatureTemplate::BuildQueryData(LocaleConstant loc) const
 {
     WorldPackets::Query::QueryCreatureResponse queryTemp;
@@ -220,6 +314,19 @@ WorldPacket CreatureTemplate::BuildQueryData(LocaleConstant loc) const
     return queryTemp.Move();
 }
 
+/// 援助延迟事件执行
+/// 职责：处理延迟的援助请求，让协助者加入战斗
+/// 参数：
+///   - e_time: 事件执行时间（未使用）
+///   - p_time: 上一时间（未使用）
+/// 返回值：总是返回true
+/// 主要流程：
+///   1. 获取受害者对象
+///   2. 遍历所有协助者
+///   3. 验证协助者存在且可以协助
+///   4. 设置协助者不再呼叫援助（防止连锁）
+///   5. 让协助者攻击受害者
+/// 调用时机：援助延迟事件触发时
 bool AssistDelayEvent::Execute(uint64 /*e_time*/, uint32 /*p_time*/)
 {
     if (Unit* victim = ObjectAccessor::GetUnit(m_owner, m_victim))
@@ -239,17 +346,49 @@ bool AssistDelayEvent::Execute(uint64 /*e_time*/, uint32 /*p_time*/)
     return true;
 }
 
+/**
+ * @brief 获取生物基础属性
+ *
+ * @param level 生物等级
+ * @param unitClass 生物职业（战士、法师等）
+ * @return CreatureBaseStats const* 基础属性结构指针
+ *
+ * @note 基础属性包括基础生命值、基础法力值、基础护甲等，
+ *       这些值会根据等级和职业从数据库中获取
+ */
 CreatureBaseStats const* CreatureBaseStats::GetBaseStats(uint8 level, uint8 unitClass)
 {
     return sObjectMgr->GetCreatureBaseStats(level, unitClass);
 }
 
+/**
+ * @brief 强制消失延迟事件执行
+ *
+ * @param e_time 事件执行时间（未使用）
+ * @param p_time 上一时间（未使用）
+ * @return true 总是返回true
+ *
+ * @brief 职责：执行延迟消失逻辑，让生物消失或取消召唤
+ * @details 由于此函数被调用时，对象类型已经在运行时确定，
+ *          所以这里不会是临时召唤物类型
+ */
 bool ForcedDespawnDelayEvent::Execute(uint64 /*e_time*/, uint32 /*p_time*/)
 {
     m_owner.DespawnOrUnsummon(0s, m_respawnTimer);    // since we are here, we are not TempSummon as object type cannot change during runtime
     return true;
 }
 
+/// 生物类构造函数
+/// 职责：初始化生物对象的所有成员变量
+/// 参数：isWorldObject - 是否作为世界对象（默认true）
+/// 初始化项：
+///   - 战利品相关：团队战利品计时器、战利品接收者
+///   - 重生相关：重生时间、重生延迟（300秒）、尸体延迟（60秒）
+///   - 战斗相关：反应状态（侵略性）、边界检查时间（2.5秒）
+///   - 移动相关：默认移动类型（空闲）、游荡距离
+///   - AI相关：法术列表初始化、视野距离、战斗距离
+///   - 标志相关：生命值恢复标志、声誉获取禁用标志
+/// 调用时机：创建新的生物对象时
 Creature::Creature(bool isWorldObject): Unit(isWorldObject), MapObject(), m_groupLootTimer(0), lootingGroupLowGUID(0), m_PlayerDamageReq(0), m_lootRecipient(), m_lootRecipientGroup(0), _pickpocketLootRestore(0),
     m_corpseRemoveTime(0), m_respawnTime(0), m_respawnDelay(300), m_corpseDelay(60), m_ignoreCorpseDecayRatio(false), m_wanderDistance(0.0f), m_boundaryCheckTime(2500), m_combatPulseTime(0), m_combatPulseDelay(0), m_reactState(REACT_AGGRESSIVE),
     m_defaultMovementType(IDLE_MOTION_TYPE), m_spawnId(0), m_equipmentId(0), m_originalEquipmentId(0), m_AlreadyCallAssistance(false), m_AlreadySearchedAssistance(false), m_cannotReachTarget(false), m_cannotReachTimer(0),
@@ -272,6 +411,18 @@ Creature::Creature(bool isWorldObject): Unit(isWorldObject), MapObject(), m_grou
     m_isTempWorldObject = false;
 }
 
+/// 将生物添加到游戏世界
+/// 职责：注册生物到游戏世界的对象存储和查找系统
+/// 主要流程：
+///   1. 将生物插入地图的对象存储器
+///   2. 如果有spawnId，注册到spawnId查找表
+///   3. 调用Unit::AddToWorld()进行基础注册
+///   4. 搜索并加入编队（如果存在）
+///   5. 初始化AI
+///   6. 如果是载具，安装载具组件
+///   7. 通知区域脚本生物创建
+/// 调用时机：生物被创建或生成时
+/// 注意：必须确保生物未在世界中
 void Creature::AddToWorld()
 {
     ///- Register the creature for guid lookup
@@ -294,6 +445,16 @@ void Creature::AddToWorld()
     }
 }
 
+/// 将生物从游戏世界中移除
+/// 职责：从游戏世界的对象存储和查找系统中注销生物
+/// 主要流程：
+///   1. 通知区域脚本生物即将移除
+///   2. 如果在编队中，从编队移除
+///   3. 调用Unit::RemoveFromWorld()进行基础移除
+///   4. 从spawnId查找表中移除
+///   5. 从地图对象存储器中移除
+/// 调用时机：生物被删除或卸载时
+/// 注意：必须确保生物在世界中
 void Creature::RemoveFromWorld()
 {
     if (IsInWorld())
@@ -314,6 +475,10 @@ void Creature::RemoveFromWorld()
     }
 }
 
+/// 检查生物是否正在返回出生点
+/// 职责：判断生物当前是否在执行返回出生点的移动
+/// 返回值：正在返回出生点返回true，否则返回false
+/// 检查方式：检查移动管理器的当前移动类型是否为HOME_MOTION_TYPE
 bool Creature::IsReturningHome() const
 {
     if (GetMotionMaster()->GetCurrentMovementGeneratorType() == HOME_MOTION_TYPE)
@@ -322,6 +487,14 @@ bool Creature::IsReturningHome() const
     return false;
 }
 
+/// 搜索编队
+/// 职责：查找并加入生物所属的编队
+/// 主要流程：
+///   1. 如果是召唤物，返回（召唤物不加入编队）
+///   2. 如果没有spawnId，返回
+///   3. 从编队管理器获取编队信息
+///   4. 如果找到编队信息，加入编队
+/// 调用时机：生物添加到世界时
 void Creature::SearchFormation()
 {
     if (IsSummon())
@@ -335,6 +508,14 @@ void Creature::SearchFormation()
         sFormationMgr->AddCreatureToGroup(formationInfo->LeaderSpawnId, this);
 }
 
+/**
+ * @brief 检查生物是否为编队领袖
+ *
+ * @return true 该生物是编队领袖
+ * @return false 该生物不是编队领袖或没有编队
+ *
+ * @note 编队领袖负责领导整个编队的移动和行为
+ */
 bool Creature::IsFormationLeader() const
 {
     if (!m_formation)
@@ -343,6 +524,14 @@ bool Creature::IsFormationLeader() const
     return m_formation->IsLeader(this);
 }
 
+/**
+ * @brief 通知编队开始移动
+ *
+ * @brief 职责：如果是编队领袖，通知编队系统领袖已开始移动
+ * @details 编队成员会跟随领袖的移动模式
+ *
+ * @note 只有编队领袖才能触发此通知
+ */
 void Creature::SignalFormationMovement()
 {
     if (!m_formation)
@@ -354,6 +543,14 @@ void Creature::SignalFormationMovement()
     m_formation->LeaderStartedMoving();
 }
 
+/**
+ * @brief 检查编队领袖是否允许移动
+ *
+ * @return true 允许移动
+ * @return false 不允许移动或没有编队
+ *
+ * @note 此函数用于编队移动的同步控制，防止成员和领袖移动不同步
+ */
 bool Creature::IsFormationLeaderMoveAllowed() const
 {
     if (!m_formation)
@@ -362,6 +559,25 @@ bool Creature::IsFormationLeaderMoveAllowed() const
     return m_formation->CanLeaderStartMoving();
 }
 
+/// 移除生物尸体
+/// 职责：处理生物尸体消失逻辑，准备重生
+/// 参数：
+///   - setSpawnTime: 是否设置重生时间
+///   - destroyForNearbyPlayers: 是否对附近玩家销毁该对象
+/// 主要流程：
+///   - 兼容模式(m_respawnCompatibilityMode):
+///     1. 设置尸体移除时间为当前时间
+///     2. 将死亡状态设为DEAD
+///     3. 移除所有光环和战利品
+///     4. 通知AI尸体被移除
+///     5. 如果需要，销毁给附近玩家
+///     6. 设置重生时间
+///     7. 将生物传送回重生点
+///   - 正常模式:
+///     1. 通知AI尸体被移除
+///     2. 设置并保存重生时间
+///     3. 如果是临时召唤物则取消召唤，否则添加到移除列表
+/// 调用时机：尸体腐烂时间到期或强制移除尸体时
 void Creature::RemoveCorpse(bool setSpawnTime, bool destroyForNearbyPlayers)
 {
     if (getDeathState() != CORPSE)
@@ -431,9 +647,24 @@ void Creature::RemoveCorpse(bool setSpawnTime, bool destroyForNearbyPlayers)
     }
 }
 
-/**
- * change the entry of creature until respawn
- */
+/// 初始化生物条目
+/// 职责：设置生物的基础属性和显示信息
+/// 参数：
+///   - entry: 生物的模板ID
+///   - data: 可选的生物数据，用于覆盖默认值
+/// 返回值：初始化成功返回true，模板不存在或模型无效返回false
+/// 主要流程：
+///   1. 获取生物模板
+///   2. 根据地图难度选择合适的模板（副本难度调整）
+///   3. 设置条目、种族、职业
+///   4. 选择并设置显示模型ID
+///   5. 加载装备
+///   6. 设置名称和速度
+///   7. 设置模型大小和碰撞半径
+///   8. 加载法术列表
+///   9. 设置默认移动类型
+/// 调用时机：生物创建或条目更新时
+/// 注意：此函数不会修改生物的阵营和属性，这些由UpdateEntry处理
 bool Creature::InitEntry(uint32 entry, CreatureData const* data /*= nullptr*/)
 {
     CreatureTemplate const* normalInfo = sObjectMgr->GetCreatureTemplate(entry);
@@ -534,6 +765,27 @@ bool Creature::InitEntry(uint32 entry, CreatureData const* data /*= nullptr*/)
     return true;
 }
 
+/// 更新生物条目
+/// 职责：完整更新生物的所有属性、阵营、标志等
+/// 参数：
+///   - entry: 新的生物模板ID
+///   - data: 可选的生物数据，用于覆盖默认值
+///   - updateLevel: 是否更新等级（默认为true）
+/// 返回值：更新成功返回true，失败返回false
+/// 主要流程：
+///   1. 调用InitEntry初始化基础属性
+///   2. 设置生命值恢复标志
+///   3. 设置武器姿态
+///   4. 设置阵营
+///   5. 设置NPC标志、单位标志、动态标志
+///   6. 如果需要，更新等级和属性
+///   7. 设置抗性和攻击时间
+///   8. 根据阵营模板设置PVP标志
+///   9. 处理载具相关逻辑
+///   10. 初始化反应状态
+///   11. 加载免疫、移动标志和附加数据
+/// 调用时机：生物需要改变类型或重新加载模板时
+/// 注意：保留战斗状态标志
 bool Creature::UpdateEntry(uint32 entry, CreatureData const* data /*= nullptr*/, bool updateLevel /* = true */)
 {
     if (!InitEntry(entry, data))
@@ -638,6 +890,17 @@ bool Creature::UpdateEntry(uint32 entry, CreatureData const* data /*= nullptr*/,
     return true;
 }
 
+/// 设置相位掩码
+/// 职责：更改生物的相位并更新相关乘客
+/// 参数：
+///   - newPhaseMask: 新的相位掩码
+///   - update: 是否立即更新对象可见性
+/// 主要流程：
+///   1. 如果相位未改变，直接返回
+///   2. 设置新相位
+///   3. 更新载具上所有乘客的相位
+///   4. 如果需要，更新对象可见性
+/// 调用时机：生物需要改变相位时
 void Creature::SetPhaseMask(uint32 newPhaseMask, bool update)
 {
     if (newPhaseMask == GetPhaseMask())
@@ -656,6 +919,35 @@ void Creature::SetPhaseMask(uint32 newPhaseMask, bool update)
         UpdateObjectVisibility();
 }
 
+/// 生物更新函数（核心循环）
+/// 职责：每帧更新生物的状态，处理死亡、重生、尸体腐烂、生命值恢复等
+/// 参数：diff - 距离上次更新的时间差（毫秒）
+/// 主要流程：
+///   1. 检查并触发JustAppeared事件（刚出现时）
+///   2. 更新移动标志
+///   3. 根据死亡状态执行不同逻辑：
+///      - JUST_RESPAWNED: 错误状态，记录日志
+///      - JUST_DIED: 错误状态，记录日志
+///      - DEAD: 检查是否需要重生
+///        * 检查spawn group是否激活
+///        * 检查关联重生时间
+///        * 执行重生逻辑
+///      - CORPSE: 尸体状态
+///        * 调用Unit::Update
+///        * 如果在战斗中，更新AI
+///        * 处理团队战利品分配计时器
+///        * 检查尸体移除时间
+///      - ALIVE: 存活状态
+///        * 调用Unit::Update
+///        * 更新威胁管理器
+///        * 处理法术焦点延迟
+///        * 检查 evade boundary（边界检查）
+///        * 处理战斗脉冲（副本中）
+///        * 调用AI更新
+///        * 生命值和能量恢复
+///        * 无法到达目标的处理
+/// 调用时机：每帧游戏循环
+/// 性能注意：这是高频调用的函数，需要保持高效
 void Creature::Update(uint32 diff)
 {
     if (IsAIEnabled() && m_triggerJustAppeared && m_deathState != DEAD)
@@ -866,6 +1158,20 @@ void Creature::Update(uint32 diff)
     }
 }
 
+/// 能量恢复
+/// 职责：恢复生物的法力值、集中值或能量值
+/// 参数：power - 能量类型（POWER_FOCUS, POWER_ENERGY, POWER_MANA等）
+/// 主要流程：
+///   1. 检查是否有能量恢复标志
+///   2. 如果当前值已达最大值，直接返回
+///   3. 根据能量类型计算恢复量：
+///      - POWER_FOCUS: 猎人宠物集中值，24*速率
+///      - POWER_ENERGY: 死亡骑士食尸鬼能量，固定20
+///      - POWER_MANA: 法力值，根据精神计算
+///   4. 应用光环修正值
+///   5. 增加能量值
+/// 调用时机：Update中的恢复计时器到期时
+/// 注意：战斗中的法力恢复需要检查5秒规则
 void Creature::Regenerate(Powers power)
 {
     uint32 curValue = GetPower(power);
@@ -923,6 +1229,18 @@ void Creature::Regenerate(Powers power)
     ModifyPower(power, int32(addvalue));
 }
 
+/// 生命值恢复
+/// 职责：恢复生物的生命值
+/// 主要流程：
+///   1. 检查是否可以恢复生命值
+///   2. 如果当前生命值已达最大值，直接返回
+///   3. 计算恢复量：
+///      - 受控生物（宠物等）：根据精神值计算，有法力值的按0.25倍精神，无法力值按0.80倍精神
+///      - 非受控生物：最大生命值的1/3
+///   4. 应用光环修正值
+///   5. 增加生命值
+/// 调用时机：Update中的恢复计时器到期时
+/// 注意：变形状态下的生物不恢复生命值
 void Creature::RegenerateHealth()
 {
     if (!CanRegenerateHealth())
@@ -958,6 +1276,17 @@ void Creature::RegenerateHealth()
     ModifyHealth(addvalue);
 }
 
+/// 逃跑寻求援助
+/// 职责：当生物生命值低时逃跑并寻找帮助
+/// 主要流程：
+///   1. 检查是否有受害者
+///   2. 检查是否有防止逃跑的光环
+///   3. 获取援助半径配置
+///   4. 在半径内搜索最近的可以协助的生物
+///   5. 设置已搜索援助标志
+///   6. 如果没找到协助者，进入恐惧状态
+///   7. 如果找到，移动到协助者位置
+/// 调用时机：生物生命值低于阈值时（由AI调用）
 void Creature::DoFleeToGetAssistance()
 {
     if (!GetVictim())
@@ -984,6 +1313,15 @@ void Creature::DoFleeToGetAssistance()
     }
 }
 
+/**
+ * @brief 销毁生物的AI实例
+ *
+ * @return true 总是返回true
+ *
+ * @brief 职责：移除当前AI并刷新AI状态
+ * @details 此函数会弹出当前AI实例，然后刷新AI，
+ *          通常用于重新创建AI或切换AI行为
+ */
 bool Creature::AIM_Destroy()
 {
     PopAI();
@@ -991,6 +1329,16 @@ bool Creature::AIM_Destroy()
     return true;
 }
 
+/**
+ * @brief 创建生物的AI实例
+ *
+ * @param ai 可选的自定义AI实例，为nullptr时由工厂自动选择
+ * @return true 创建成功
+ *
+ * @brief 职责：初始化移动并创建AI实例
+ * @details 首先初始化移动管理器，然后设置AI。
+ *          如果没有提供自定义AI，则通过工厂选择器根据生物类型选择合适的AI
+ */
 bool Creature::AIM_Create(CreatureAI* ai /*= nullptr*/)
 {
     Motion_Initialize();
@@ -1000,6 +1348,16 @@ bool Creature::AIM_Create(CreatureAI* ai /*= nullptr*/)
     return true;
 }
 
+/// 初始化AI
+/// 职责：创建并初始化生物的AI实例
+/// 参数：ai - 可选的自定义AI实例（默认nullptr由工厂创建）
+/// 返回值：初始化成功返回true
+/// 主要流程：
+///   1. 调用AIM_Create创建AI
+///   2. 调用AI的InitializeAI方法
+///   3. 如果是载具，重置载具组件
+/// 调用时机：生物添加到世界时
+/// 注意：必须在生物基础属性设置完成后调用
 bool Creature::AIM_Initialize(CreatureAI* ai)
 {
     if (!AIM_Create(ai))
@@ -1011,6 +1369,16 @@ bool Creature::AIM_Initialize(CreatureAI* ai)
     return true;
 }
 
+/// 初始化移动
+/// 职责：设置生物的初始移动状态
+/// 主要流程：
+///   1. 如果在编队中：
+///      a. 如果是队长，重置编队
+///      b. 如果编队已形成，设置为空闲等待队长命令
+///      c. 返回，不初始化移动
+///   2. 否则，初始化移动管理器的默认移动
+/// 调用时机：AI初始化或重生时
+/// 注意：编队成员需要等待队长的移动命令
 void Creature::Motion_Initialize()
 {
     if (m_formation)
@@ -1027,6 +1395,37 @@ void Creature::Motion_Initialize()
     GetMotionMaster()->Initialize();
 }
 
+/// 创建生物（完整创建流程）
+/// 职责：初始化生物的所有基础属性并创建对象
+/// 参数：
+///   - guidlow: 低GUID值
+///   - map: 所在地图
+///   - phaseMask: 相位掩码
+///   - entry: 生物模板ID
+///   - pos: 位置信息
+///   - data: 可选的生物数据
+///   - vehId: 载具ID（可选）
+///   - dynamic: 是否使用动态生成模式
+/// 返回值：创建成功返回true，失败返回false
+/// 主要流程：
+///   1. 设置地图和相位
+///   2. 设置生成模式（动态/兼容）
+///   3. 获取并验证生物模板
+///   4. 重定位到指定位置
+///   5. 验证位置有效性
+///   6. 获取地形数据
+///   7. 设置幽灵可见性
+///   8. 调用CreateFromProto创建基础对象
+///   9. 设置副本Boss的重生延迟
+///   10. 根据生物等级设置尸体腐烂时间
+///   11. 调整悬停高度
+///   12. 设置脚本ID
+///   13. 设置幽灵可见性（灵魂医者/向导）
+///   14. 设置路径查找标志
+///   15. 设置免疫击退
+///   16. 初始化威胁管理器
+/// 调用时机：生物首次生成时
+/// 注意：必须在地图加载阶段或运行时创建生物时调用
 bool Creature::Create(ObjectGuid::LowType guidlow, Map* map, uint32 phaseMask, uint32 entry, Position const& pos, CreatureData const* data /*= nullptr*/, uint32 vehId /*= 0*/, bool dynamic)
 {
     ASSERT(map);
@@ -1116,6 +1515,23 @@ bool Creature::Create(ObjectGuid::LowType guidlow, Map* map, uint32 phaseMask, u
     return true;
 }
 
+/// 选择攻击目标（受害者）
+/// 职责：为生物选择当前应该攻击的目标
+/// 返回值：选中的目标单位指针，如果没有有效目标则返回nullptr
+/// 主要流程：
+///   1. 如果有威胁列表，从威胁管理器获取当前受害者
+///   2. 如果没有威胁列表且不是被动反应：
+///      a. 获取攻击者作为目标
+///      b. 如果是召唤物，检查主人的攻击者
+///      c. 检查主人其他受控单位的攻击者
+///   3. 如果是被动反应，返回nullptr
+///   4. 验证目标是否可接受且可攻击
+///   5. 如果有效，设置面向目标并返回
+///   6. 如果在载具上，返回nullptr
+///   7. 检查永久隐形光环
+///   8. 如果没有有效目标，进入规避模式
+/// 调用时机：AI需要确定攻击目标时
+/// 注意：此函数可能导致生物进入规避状态
 Unit* Creature::SelectVictim()
 {
     Unit* target = nullptr;
@@ -1181,6 +1597,12 @@ Unit* Creature::SelectVictim()
     return nullptr;
 }
 
+/// 初始化反应状态
+/// 职责：根据生物类型设置默认的反应状态
+/// 规则：
+///   - 图腾、触发器、小动物、灵魂服务者：设为被动(REACT_PASSIVE)
+///   - 其他生物：设为侵略性(REACT_AGGRESSIVE)
+/// 调用时机：生物创建或重生时
 void Creature::InitializeReactState()
 {
     if (IsTotem() || IsTrigger() || IsCritter() || IsSpiritService())
@@ -1193,6 +1615,17 @@ void Creature::InitializeReactState()
         SetReactState(REACT_AGGRESSIVE);
 }
 
+/**
+ * @brief 检查玩家是否可以与战场军官交互
+ *
+ * @param player 玩家指针
+ * @param msg 是否显示错误消息（如果等级不足）
+ * @return true 可以交互
+ * @return false 不能交互
+ *
+ * @details 检查玩家等级是否符合战场要求。如果等级不足且msg为true，
+ *          会显示相应的错误消息。不同的战场有不同的等级要求和错误消息
+ */
 bool Creature::isCanInteractWithBattleMaster(Player* player, bool msg) const
 {
     if (!IsBattleMaster())
@@ -1225,6 +1658,20 @@ bool Creature::isCanInteractWithBattleMaster(Player* player, bool msg) const
     return true;
 }
 
+/**
+ * @brief 检查是否可以重置天赋
+ *
+ * @param player 玩家指针
+ * @param pet 是否是宠物天赋重置
+ * @return true 可以重置天赋
+ * @return false 不能重置天赋
+ *
+ * @details 验证条件：
+ *          1. 该NPC必须是一个训练师
+ *          2. 玩家等级必须>=10
+ *          3. 训练师类型必须匹配（宠物训练师或职业训练师）
+ *          4. 该训练师对玩家有效
+ */
 bool Creature::CanResetTalents(Player* player, bool pet) const
 {
     Trainer::Trainer const* trainer = sObjectMgr->GetTrainer(GetEntry());
@@ -1236,6 +1683,13 @@ bool Creature::CanResetTalents(Player* player, bool pet) const
         trainer->IsTrainerValidForPlayer(player);
 }
 
+/**
+ * @brief 获取战利品接收者玩家
+ *
+ * @return Player* 战利品接收者玩家指针，没有则返回nullptr
+ *
+ * @note 返回对生物造成伤害或标签生物的玩家
+ */
 Player* Creature::GetLootRecipient() const
 {
     if (!m_lootRecipient)
@@ -1243,6 +1697,13 @@ Player* Creature::GetLootRecipient() const
     return ObjectAccessor::FindConnectedPlayer(m_lootRecipient);
 }
 
+/**
+ * @brief 获取战利品接收者团队
+ *
+ * @return Group* 战利品接收者团队指针，没有则返回nullptr
+ *
+ * @note 返回有权拾取该生物战利品的团队
+ */
 Group* Creature::GetLootRecipientGroup() const
 {
     if (!m_lootRecipientGroup)
@@ -1250,6 +1711,20 @@ Group* Creature::GetLootRecipientGroup() const
     return sGroupMgr->GetGroupByGUID(m_lootRecipientGroup);
 }
 
+/// 设置战利品接收者
+/// 职责：设置哪个玩家或团队有权拾取该生物的战利品
+/// 参数：
+///   - unit: 接收者单位
+///   - withGroup: 是否包含团队（默认true）
+/// 主要流程：
+///   1. 如果unit为空，清除接收者和团队，移除拾取标志
+///   2. 如果单位不是玩家且不是载具，返回
+///   3. 获取玩家（可能是主人）
+///   4. 设置接收者GUID
+///   5. 如果withGroup，设置团队GUID
+///   6. 设置被标签动态标志
+/// 调用时机：生物受到伤害或被击杀时
+/// 注意：被标签的生物显示为灰色给其他玩家
 void Creature::SetLootRecipient(Unit* unit, bool withGroup)
 {
     // set the player whose group should receive the right
@@ -1284,6 +1759,14 @@ void Creature::SetLootRecipient(Unit* unit, bool withGroup)
 }
 
 // return true if this creature is tapped by the player or by a member of his group.
+/// 检查生物是否被玩家标签
+/// 职责：判断生物是否被指定玩家或其团队标签
+/// 参数：player - 玩家指针
+/// 返回值：已被该玩家或其团队标签返回true，否则返回false
+/// 逻辑：
+///   1. 如果玩家GUID匹配战利品接收者，返回true
+///   2. 如果玩家有团队且团队匹配战利品接收者团队，返回true
+/// 用途：用于判断玩家是否有权攻击或拾取该生物
 bool Creature::isTappedBy(Player const* player) const
 {
     if (player->GetGUID() == m_lootRecipient)
@@ -1296,6 +1779,15 @@ bool Creature::isTappedBy(Player const* player) const
     return true;
 }
 
+/// 保存生物到数据库（使用现有数据）
+/// 职责：将生物当前状态保存到数据库
+/// 主要流程：
+///   1. 从对象管理器获取生物数据
+///   2. 验证数据存在
+///   3. 计算地图ID（考虑运输工具）
+///   4. 调用完整SaveToDB函数
+/// 调用时机：需要持久化生物状态时
+/// 注意：仅适用于已加载的生物
 void Creature::SaveToDB()
 {
     // this should only be used when the creature has already been loaded
@@ -1311,6 +1803,21 @@ void Creature::SaveToDB()
     SaveToDB(mapId, data->spawnMask, GetPhaseMask());
 }
 
+/// 保存生物到数据库（指定参数）
+/// 职责：将生物数据完整保存到数据库
+/// 参数：
+///   - mapid: 地图ID
+///   - spawnMask: 生成掩码
+///   - phaseMask: 相位掩码
+/// 主要流程：
+///   1. 如果没有spawnId，生成一个新的
+///   2. 获取或创建生物数据结构
+///   3. 收集当前属性（显示ID、NPC标志、单位标志、动态标志）
+///   4. 与模板比较，仅保存差异值
+///   5. 设置生物数据字段
+///   6. 根据是否在运输工具上设置位置
+///   7. 执行数据库事务：先删除旧记录，再插入新记录
+/// 调用时机：需要保存生物状态或创建新生物记录时
 void Creature::SaveToDB(uint32 mapid, uint8 spawnMask, uint32 phaseMask)
 {
     // update in loaded data
@@ -1411,6 +1918,13 @@ void Creature::SaveToDB(uint32 mapid, uint8 spawnMask, uint32 phaseMask)
     WorldDatabase.CommitTransaction(trans);
 }
 
+/// 选择生物等级
+/// 职责：根据模板的等级范围随机确定生物的等级
+/// 主要流程：
+///   1. 从模板获取最小和最大等级
+///   2. 如果最小等于最大，使用该等级
+///   3. 否则在范围内随机选择一个等级
+/// 调用时机：生物创建时
 void Creature::SelectLevel()
 {
     CreatureTemplate const* cInfo = GetCreatureTemplate();
@@ -1422,6 +1936,21 @@ void Creature::SelectLevel()
     SetLevel(level);
 }
 
+/// 更新等级相关属性
+/// 职责：根据等级和生物类型计算并设置生命值、法力值、伤害、护甲等属性
+/// 主要流程：
+///   1. 获取生物基础属性
+///   2. 根据等级获取基础属性值
+///   3. 计算生命值（基础值 * 阶级修正系数）
+///   4. 设置生命值上限和当前值
+///   5. 计算法力值
+///   6. 根据职业设置法力值上限
+///   7. 计算基础伤害
+///   8. 设置武器伤害（主手、副手、远程）
+///   9. 设置攻击强度
+///   10. 计算护甲值
+/// 调用时机：等级变化或生物创建时
+/// 注意：不适用于守护者（Guardian），它们有独立的属性初始化逻辑
 void Creature::UpdateLevelDependantStats()
 {
     CreatureTemplate const* cInfo = GetCreatureTemplate();
@@ -1478,6 +2007,15 @@ void Creature::UpdateLevelDependantStats()
     SetStatFlatModifier(UNIT_MOD_ARMOR, BASE_VALUE, armor);
 }
 
+/**
+ * @brief 根据生物阶级获取生命值修正系数
+ *
+ * @param Rank 生物阶级（普通、精英、稀有、世界Boss等）
+ * @return float 生命值修正系数
+ *
+ * @note 不同阶级的生物有不同的生命值倍率，
+ *       这些倍率可以通过服务器配置调整
+ */
 float Creature::_GetHealthMod(int32 Rank)
 {
     switch (Rank)                                           // define rates for each elite rank
@@ -1497,12 +2035,30 @@ float Creature::_GetHealthMod(int32 Rank)
     }
 }
 
+/**
+ * @brief 降低玩家伤害需求值
+ *
+ * @param unDamage 降低的伤害值
+ *
+ * @brief 职责：用于追踪玩家对生物造成的伤害
+ * @details 某些生物需要玩家造成一定伤害才能获得战利品/经验，
+ *          此函数用于递减这个需求值
+ */
 void Creature::LowerPlayerDamageReq(uint32 unDamage)
 {
     if (m_PlayerDamageReq)
         m_PlayerDamageReq > unDamage ? m_PlayerDamageReq -= unDamage : m_PlayerDamageReq = 0;
 }
 
+/**
+ * @brief 根据生物阶级获取伤害修正系数
+ *
+ * @param Rank 生物阶级
+ * @return float 伤害修正系数
+ *
+ * @note 不同阶级的生物有不同的伤害倍率，
+ *       世界Boss的倍率最高
+ */
 float Creature::_GetDamageMod(int32 Rank)
 {
     switch (Rank)                                           // define rates for each elite rank
@@ -1522,6 +2078,15 @@ float Creature::_GetDamageMod(int32 Rank)
     }
 }
 
+/**
+ * @brief 根据生物阶级获取法术伤害修正系数
+ *
+ * @param Rank 生物阶级
+ * @return float 法术伤害修正系数
+ *
+ * @note 不同阶级的生物有不同的法术伤害倍率，
+ *       这影响施法类生物的伤害输出
+ */
 float Creature::GetSpellDamageMod(int32 Rank) const
 {
     switch (Rank)                                           // define rates for each elite rank
@@ -1541,6 +2106,23 @@ float Creature::GetSpellDamageMod(int32 Rank) const
     }
 }
 
+/// 从模板创建生物
+/// 职责：根据模板数据创建生物的基础结构
+/// 参数：
+///   - guidlow: 低GUID值
+///   - entry: 生物模板ID
+///   - data: 可选的生物数据
+///   - vehId: 载具ID（可选）
+/// 返回值：创建成功返回true，模板不存在返回false
+/// 主要流程：
+///   1. 设置区域脚本
+///   2. 如果有区域脚本，可能修改生物条目
+///   3. 获取并验证生物模板
+///   4. 保存原始条目
+///   5. 创建对象（区分载具和普通单位）
+///   6. 调用UpdateEntry设置属性
+///   7. 如果是载具，创建载具组件
+/// 调用时机：Create函数内部调用
 bool Creature::CreateFromProto(ObjectGuid::LowType guidlow, uint32 entry, CreatureData const* data /*= nullptr*/, uint32 vehId /*= 0*/)
 {
     SetZoneScript();
@@ -1583,6 +2165,31 @@ bool Creature::CreateFromProto(ObjectGuid::LowType guidlow, uint32 entry, Creatu
     return true;
 }
 
+/// 从数据库加载生物
+/// 职责：从数据库数据加载并初始化生物
+/// 参数：
+///   - spawnId: 生成ID（数据库主键）
+///   - map: 目标地图
+///   - addToMap: 是否添加到地图
+///   - allowDuplicate: 是否允许重复生成
+/// 返回值：加载成功返回true，失败返回false
+/// 主要流程：
+///   1. 检查是否已存在该spawnId的生物
+///   2. 如果存在存活实例，跳过创建
+///   3. 如果存在死亡实例，标记为移除
+///   4. 从对象管理器获取生物数据
+///   5. 设置spawnId和相关数据
+///   6. 创建生物对象
+///   7. 设置出生位置
+///   8. 设置死亡状态为存活
+///   9. 获取重生时间
+///   10. 检查spawn group是否激活
+///   11. 如果有重生时间，处理重生逻辑
+///   12. 设置出生生命值
+///   13. 设置默认移动类型
+///   14. 如果需要，添加到地图
+/// 调用时机：地图加载生物时
+/// 注意：这是从数据库加载持久化生物的主要入口
 bool Creature::LoadFromDB(ObjectGuid::LowType spawnId, Map* map, bool addToMap, bool allowDuplicate)
 {
     if (!allowDuplicate)
@@ -1690,12 +2297,29 @@ bool Creature::LoadFromDB(ObjectGuid::LowType spawnId, Map* map, bool addToMap, 
     return true;
 }
 
+/**
+ * @brief 设置生物是否可以双持武器
+ *
+ * @param value true可以双持，false不能双持
+ *
+ * @details 调用Unit的基类方法，然后更新副手伤害
+ */
 void Creature::SetCanDualWield(bool value)
 {
     Unit::SetCanDualWield(value);
     UpdateDamagePhysical(OFF_ATTACK);
 }
 
+/// 加载装备
+/// 职责：设置生物的虚拟装备显示
+/// 参数：
+///   - id: 装备ID（0表示无装备）
+///   - force: 是否强制设置（默认true）
+/// 主要流程：
+///   1. 如果id为0且强制，清除所有装备
+///   2. 否则从对象管理器获取装备信息
+///   3. 设置所有虚拟物品槽位
+/// 调用时机：生物创建或装备更新时
 void Creature::LoadEquipment(int8 id, bool force /*= true*/)
 {
     if (id == 0)
@@ -1719,6 +2343,17 @@ void Creature::LoadEquipment(int8 id, bool force /*= true*/)
         SetVirtualItem(i, einfo->ItemEntry[i]);
 }
 
+/// 设置出生生命值
+/// 职责：将生物的生命值和法力值设置为出生时的初始值
+/// 主要流程：
+///   1. 如果生命值恢复被锁定，直接返回
+///   2. 如果有生物数据且不恢复生命值：
+///      a. 使用数据库中的生命值
+///      b. 应用阶级修正系数
+///      c. 设置法力值
+///   3. 否则使用最大生命值和法力值
+///   4. 根据死亡状态设置当前生命值
+/// 调用时机：生物创建或重生时
 void Creature::SetSpawnHealth()
 {
     if (_regenerateHealthLock)
@@ -1745,22 +2380,49 @@ void Creature::SetSpawnHealth()
     SetHealth((m_deathState == ALIVE || m_deathState == JUST_RESPAWNED) ? curhealth : 0);
 }
 
+/// 加载模板定身状态
+/// 职责：根据移动模板设置生物的定身状态
+/// 用途：某些生物天生就是定身的（如炮台、陷阱）
 void Creature::LoadTemplateRoot()
 {
     if (GetMovementTemplate().IsRooted())
         SetControlled(true, UNIT_STATE_ROOT);
 }
 
+/// 检查是否有任务
+/// 职责：判断该生物是否提供指定任务
+/// 参数：quest_id - 任务ID
+/// 返回值：提供该任务返回true，否则返回false
 bool Creature::hasQuest(uint32 quest_id) const
 {
     return sObjectMgr->GetCreatureQuestRelations(GetEntry()).HasQuest(quest_id);
 }
 
+/// 检查是否涉及任务
+/// 职责：判断该生物是否与指定任务相关（如任务目标）
+/// 参数：quest_id - 任务ID
+/// 返回值：与该任务相关返回true，否则返回false
 bool Creature::hasInvolvedQuest(uint32 quest_id) const
 {
     return sObjectMgr->GetCreatureQuestInvolvedRelations(GetEntry()).HasQuest(quest_id);
 }
 
+/// 从数据库删除生物（静态函数）
+/// 职责：完全删除生物及其所有相关数据
+/// 参数：spawnId - 生成ID
+/// 返回值：删除成功返回true，生物不存在返回false
+/// 主要流程：
+///   1. 获取生物数据
+///   2. 在所有地图中卸载该生物
+///   3. 从内存中删除生物数据
+///   4. 从数据库删除所有相关记录：
+///      - creature表
+///      - spawn_group_member表
+///      - creature_addon表
+///      - game_event_creature表
+///      - game_event_model_equip表
+///      - linked_respawn表
+/// 调用时机：管理员删除生物或脚本清理时
 /*static*/ bool Creature::DeleteFromDB(ObjectGuid::LowType spawnId)
 {
     CreatureData const* data = sObjectMgr->GetCreatureData(spawnId);
@@ -1836,6 +2498,14 @@ bool Creature::hasInvolvedQuest(uint32 quest_id) const
     return true;
 }
 
+/**
+ * @brief 检查生物是否因消失而隐形
+ *
+ * @return true 生物因消失状态而隐形
+ * @return false 生物可见
+ *
+ * @details 如果生物已死亡、尸体已腐烂，则认为生物因消失而隐形
+ */
 bool Creature::IsInvisibleDueToDespawn() const
 {
     if (Unit::IsInvisibleDueToDespawn())
@@ -1847,6 +2517,15 @@ bool Creature::IsInvisibleDueToDespawn() const
     return true;
 }
 
+/**
+ * @brief 检查生物是否总能看到某个对象
+ *
+ * @param obj 要检查的对象
+ * @return true 总能看到
+ * @return false 正常视野检查
+ *
+ * @details 某些AI可能有特殊视野规则，此函数委托给AI检查
+ */
 bool Creature::CanAlwaysSee(WorldObject const* obj) const
 {
     if (IsAIEnabled() && AI()->CanSeeAlways(obj))
@@ -1855,6 +2534,24 @@ bool Creature::CanAlwaysSee(WorldObject const* obj) const
     return false;
 }
 
+/// 检查是否可以开始攻击
+/// 职责：判断生物是否可以攻击指定目标
+/// 参数：
+///   - who: 潜在的攻击目标
+///   - force: 是否强制攻击检查
+/// 返回值：可以攻击返回true，否则返回false
+/// 检查条件：
+///   1. 不能是平民
+///   2. 如果免疫NPC，目标必须有玩家控制标志
+///   3. 如果免疫PC，目标不能有玩家控制标志
+///   4. 不能攻击非战斗宠物
+///   5. 如果不能飞行，高度差不能超过攻击范围
+///   6. 目标必须是可接受的
+///   7. 必须在攻击距离内
+///   8. 必须通过CanCreatureAttack检查
+///   9. 不能有灰色生物仇恨（低等级）
+///   10. 必须在视线内
+/// 调用时机：AI决定是否主动攻击目标时
 bool Creature::CanStartAttack(Unit const* who, bool force) const
 {
     if (IsCivilian())
@@ -1894,6 +2591,18 @@ bool Creature::CanStartAttack(Unit const* who, bool force) const
     return IsWithinLOSInMap(who);
 }
 
+/**
+ * @brief 检查是否应禁用灰色生物的仇恨
+ *
+ * @param playerLevel 玩家等级
+ * @param creatureLevel 生物等级
+ * @return true 应该禁用仇恨（不攻击）
+ * @return false 正常仇恨逻辑
+ *
+ * @details 当生物等级远低于玩家等级时（灰色经验），
+ *          根据服务器配置决定是否禁用仇恨。
+ *          这允许高等级玩家轻松通过低等级区域
+ */
 bool Creature::CheckNoGrayAggroConfig(uint32 playerLevel, uint32 creatureLevel) const
 {
     if (Trinity::XP::GetColorCode(playerLevel, creatureLevel) != XP_GRAY)
@@ -1909,6 +2618,17 @@ bool Creature::CheckNoGrayAggroConfig(uint32 playerLevel, uint32 creatureLevel) 
     return false;
 }
 
+/// 获取攻击距离（仇恨半径）
+/// 职责：计算生物对目标的仇恨检测距离
+/// 参数：player - 目标单位
+/// 返回值：仇恨半径（码）
+/// 计算公式：
+///   - 基础距离：20码 - 碰撞半径
+///   - 根据等级差调整：每级 +-1码
+///   - 应用检测范围光环修正
+///   - 对于超过资料片最高等级的生物，使用最高等级计算
+///   - 限制在5-45码之间
+/// 调用时机：判断目标是否进入仇恨范围时
 float Creature::GetAttackDistance(Unit const* player) const
 {
     float aggroRate = sWorld->getRate(RATE_CREATURE_AGGRO);
@@ -1951,6 +2671,38 @@ float Creature::GetAttackDistance(Unit const* player) const
     return (aggroRadius * aggroRate);
 }
 
+/// 设置死亡状态
+/// 职责：处理生物的死亡状态转换
+/// 参数：s - 新的死亡状态
+/// 主要流程：
+///   - JUST_DIED（刚死亡）：
+///     1. 设置尸体移除时间
+///     2. 应用动态重生时间缩放
+///     3. 设置重生时间
+///     4. 保存重生时间到数据库
+///     5. 释放法术焦点
+///     6. 清除目标
+///     7. 移除NPC标志
+///     8. 取消坐骑
+///     9. 设置为非活跃状态
+///     10. 重置协助搜索标志
+///     11. 如果是编队领袖，重置编队
+///     12. 如果在空中，开始下落
+///     13. 转换到尸体状态
+///   - JUST_RESPAWNED（刚重生）：
+///     1. 设置满生命值或出生生命值
+///     2. 清除战利品接收者
+///     3. 重置玩家伤害需求
+///     4. 清除无法到达目标标志
+///     5. 更新移动标志
+///     6. 清除可擦除的单位状态
+///     7. 恢复NPC标志、单位标志、动态标志
+///     8. 恢复近战伤害类型
+///     9. 恢复相位
+///     10. 初始化移动
+///     11. 转换到存活状态
+///     12. 加载附加数据
+/// 调用时机：生物死亡或重生时
 void Creature::setDeathState(DeathState s)
 {
     Unit::setDeathState(s);
@@ -2047,6 +2799,33 @@ void Creature::setDeathState(DeathState s)
     }
 }
 
+/// 生物重生
+/// 职责：处理生物的完整重生流程
+/// 参数：force - 是否强制重生（即使还活着也杀死重生）
+/// 主要流程：
+///   - 强制重生模式：
+///     1. 如果存活，设置为刚死亡
+///     2. 如果不是尸体状态，设置为尸体
+///   - 兼容模式(m_respawnCompatibilityMode)：
+///     1. 销毁给附近玩家
+///     2. 移除尸体
+///     3. 如果是死亡状态：
+///        * 清除重生时间
+///        * 清除偷窃填充计时器
+///        * 清除战利品
+///        * 如果条目改变，恢复原始条目
+///        * 重新选择等级
+///        * 设置为刚重生状态
+///        * 随机性别模型
+///        * 初始化默认移动
+///        * 重置反应状态
+///        * 重置AI
+///        * 触发JustAppeared
+///        * 如果在池中，更新池
+///     4. 更新对象可见性
+///   - 正常模式：
+///     * 调用地图的Respawn函数
+/// 调用时机：重生时间到期或强制重生时
 void Creature::Respawn(bool force)
 {
     if (force)
@@ -2110,6 +2889,23 @@ void Creature::Respawn(bool force)
 
 }
 
+/// 强制消失
+/// 职责：强制生物消失并可选设置重生计时器
+/// 参数：
+///   - timeMSToDespawn: 延迟消失时间（毫秒），0表示立即消失
+///   - forceRespawnTimer: 强制重生时间（秒），0表示使用默认值
+/// 主要流程：
+///   1. 如果有延迟时间，添加延迟事件
+///   2. 兼容模式：
+///      a. 销毁给附近玩家
+///      b. 如果存活，设置为死亡
+///      c. 移除尸体
+///      d. 恢复尸体和重生延迟
+///   3. 正常模式：
+///      a. 如果有强制重生时间，保存
+///      b. 否则使用默认重生时间
+///      c. 添加到移除列表
+/// 调用时机：脚本或系统需要强制移除生物时
 void Creature::ForcedDespawn(uint32 timeMSToDespawn, Seconds forceRespawnTimer)
 {
     if (timeMSToDespawn)
@@ -2162,6 +2958,15 @@ void Creature::ForcedDespawn(uint32 timeMSToDespawn, Seconds forceRespawnTimer)
     }
 }
 
+/// 消失或取消召唤
+/// 职责：统一处理生物的消失逻辑（区分临时召唤和普通生物）
+/// 参数：
+///   - timeToDespawn: 延迟消失时间（毫秒）
+///   - forceRespawnTimer: 强制重生时间（秒）
+/// 主要流程：
+///   1. 如果是临时召唤物，调用UnSummon
+///   2. 否则，调用ForcedDespawn
+/// 调用时机：需要移除生物时
 void Creature::DespawnOrUnsummon(Milliseconds timeToDespawn /*= 0s*/, Seconds forceRespawnTimer /*= 0s*/)
 {
     if (TempSummon* summon = ToTempSummon())
@@ -2170,6 +2975,17 @@ void Creature::DespawnOrUnsummon(Milliseconds timeToDespawn /*= 0s*/, Seconds fo
         ForcedDespawn(timeToDespawn.count(), forceRespawnTimer);
 }
 
+/**
+ * @brief 加载模板免疫
+ *
+ * @brief 职责：从生物模板加载免疫数据并应用到生物
+ * @details 主要处理两种免疫：
+ *          1. 机制免疫（MechanicImmuneMask）- 如免疫昏迷、恐惧等
+ *          2. 法术学派免疫（SpellSchoolImmuneMask）- 如免疫火焰、冰霜等
+ *
+ * @note 使用占位符法术ID（uint32最大值）来标识模板免疫，
+ *       猎人宠物不继承模板免疫
+ */
 void Creature::LoadTemplateImmunities()
 {
     // uint32 max used for "spell id", the immunity system will not perform SpellInfo checks against invalid spells
@@ -2206,6 +3022,17 @@ void Creature::LoadTemplateImmunities()
     }
 }
 
+/// 检查是否免疫法术
+/// 职责：判断生物是否对指定法术完全免疫
+/// 参数：
+///   - spellInfo: 法术信息
+///   - caster: 施法者
+///   - requireImmunityPurgesEffectAttribute: 是否需要免疫清除效果属性
+/// 返回值：免疫该法术返回true，否则返回false
+/// 主要流程：
+///   1. 检查所有效果是否都免疫
+///   2. 如果所有效果都免疫，返回true
+///   3. 否则调用Unit基类的检查
 bool Creature::IsImmunedToSpell(SpellInfo const* spellInfo, WorldObject const* caster, bool requireImmunityPurgesEffectAttribute /*= false*/) const
 {
     if (!spellInfo)
@@ -2227,6 +3054,18 @@ bool Creature::IsImmunedToSpell(SpellInfo const* spellInfo, WorldObject const* c
     return Unit::IsImmunedToSpell(spellInfo, caster, requireImmunityPurgesEffectAttribute);
 }
 
+/**
+ * @brief 检查是否免疫法术效果
+ *
+ * @param spellInfo 法术信息
+ * @param spellEffectInfo 法术效果信息
+ * @param caster 施法者
+ * @param requireImmunityPurgesEffectAttribute 是否需要免疫清除效果属性
+ * @return true 免疫该效果
+ * @return false 不免疫该效果
+ *
+ * @details 特殊规则：机械生物免疫治疗效果
+ */
 bool Creature::IsImmunedToSpellEffect(SpellInfo const* spellInfo, SpellEffectInfo const& spellEffectInfo, WorldObject const* caster,
     bool requireImmunityPurgesEffectAttribute /*= false*/) const
 {
@@ -2236,6 +3075,10 @@ bool Creature::IsImmunedToSpellEffect(SpellInfo const* spellInfo, SpellEffectInf
     return Unit::IsImmunedToSpellEffect(spellInfo, spellEffectInfo, caster, requireImmunityPurgesEffectAttribute);
 }
 
+/// 检查是否为精英生物
+/// 职责：判断生物是否为精英（不包括稀有）
+/// 返回值：是精英返回true，否则返回false
+/// 注意：宠物总是返回false
 bool Creature::isElite() const
 {
     if (IsPet())
@@ -2245,6 +3088,11 @@ bool Creature::isElite() const
     return rank != CREATURE_ELITE_NORMAL && rank != CREATURE_ELITE_RARE;
 }
 
+/// 检查是否为世界Boss
+/// 职责：判断生物是否为世界Boss
+/// 返回值：是世界Boss返回true，否则返回false
+/// 判断依据：检查CREATURE_TYPE_FLAG_BOSS_MOB标志
+/// 注意：宠物总是返回false
 bool Creature::isWorldBoss() const
 {
     if (IsPet())
@@ -2253,7 +3101,13 @@ bool Creature::isWorldBoss() const
     return (GetCreatureTemplate()->type_flags & CREATURE_TYPE_FLAG_BOSS_MOB) != 0;
 }
 
-// select nearest hostile unit within the given distance (regardless of threat list).
+/// 选择最近的敌对目标
+/// 职责：在指定距离内搜索最近的敌对单位
+/// 参数：
+///   - dist: 搜索距离，0表示最大可见距离
+///   - playerOnly: 是否只搜索玩家（默认false）
+/// 返回值：最近的敌对单位指针，未找到返回nullptr
+/// 调用时机：需要快速找到附近敌人时
 Unit* Creature::SelectNearestTarget(float dist, bool playerOnly /* = false */) const
 {
     if (dist == 0.0f)
@@ -2266,7 +3120,15 @@ Unit* Creature::SelectNearestTarget(float dist, bool playerOnly /* = false */) c
     return target;
 }
 
-// select nearest hostile unit within the given attack distance (i.e. distance is ignored if > than ATTACK_DISTANCE), regardless of threat list.
+/**
+ * @brief 在攻击距离内选择最近的敌对目标
+ *
+ * @param dist 搜索距离，超过ATTACK_DISTANCE时被忽略
+ * @return Unit* 最近的敌对单位指针，未找到返回nullptr
+ *
+ * @details 与SelectNearestTarget不同，此函数在攻击距离内搜索，
+ *          忽略威胁列表，只考虑距离
+ */
 Unit* Creature::SelectNearestTargetInAttackDistance(float dist) const
 {
     if (dist > MAX_VISIBILITY_DISTANCE)
@@ -2282,6 +3144,10 @@ Unit* Creature::SelectNearestTargetInAttackDistance(float dist) const
     return target;
 }
 
+/// 发送AI反应消息
+/// 职责：向周围玩家发送AI反应提示
+/// 参数：reactionType - AI反应类型
+/// 用途：通知客户端AI的特定行为（如进入战斗）
 void Creature::SendAIReaction(AiReaction reactionType)
 {
     WorldPacket data(SMSG_AI_REACTION, 12);
@@ -2294,6 +3160,19 @@ void Creature::SendAIReaction(AiReaction reactionType)
     TC_LOG_DEBUG("network", "WORLD: Sent SMSG_AI_REACTION, type {}.", reactionType);
 }
 
+/// 呼叫援助
+/// 职责：当生物受到攻击时呼叫附近同阵营生物来协助
+/// 主要流程：
+///   1. 检查是否已经呼叫过援助
+///   2. 检查是否有受害者、不是宠物、不受魅惑
+///   3. 设置已呼叫援助标志
+///   4. 获取援助半径配置
+///   5. 在范围内搜索可以协助的生物
+///   6. 创建援助延迟事件
+///   7. 将所有协助者加入事件列表
+///   8. 根据配置延迟添加事件
+/// 调用时机：生物受到攻击时（由AI调用）
+/// 注意：使用延迟事件确保不是立即响应
 void Creature::CallAssistance()
 {
     if (!m_AlreadyCallAssistance && GetVictim() && !IsPet() && !IsCharmed())
@@ -2324,6 +3203,15 @@ void Creature::CallAssistance()
     }
 }
 
+/// 呼救
+/// 职责：在指定半径内呼叫同阵营生物帮助战斗
+/// 参数：radius - 呼救半径
+/// 主要流程：
+///   1. 验证半径有效且生物在战斗中、存活、非宠物、非魅惑
+///   2. 获取当前威胁目标
+///   3. 在半径内搜索可以协助的生物
+/// 调用时机：生物生命值低或需要帮助时
+/// 注意：与CallAssistance不同，这是寻求帮助而不是响应帮助
 void Creature::CallForHelp(float radius)
 {
     if (radius <= 0.0f || !IsEngaged() || !IsAlive() || IsPet() || IsCharmed())
@@ -2346,6 +3234,26 @@ void Creature::CallForHelp(float radius)
     Cell::VisitGridObjects(this, worker, radius);
 }
 
+/// 检查是否可以协助攻击
+/// 职责：判断当前生物是否可以协助另一个单位攻击敌人
+/// 参数：
+///   - u: 请求协助的单位
+///   - enemy: 敌人单位
+///   - checkfaction: 是否检查阵营（默认true）
+/// 返回值：可以协助返回true，否则返回false
+/// 检查条件：
+///   1. 必须是侵略性反应状态
+///   2. 必须存活
+///   3. 不能在规避模式
+///   4. 敌人不能在规避模式
+///   5. 不能是平民
+///   6. 不能是不可攻击或不可交互的
+///   7. 不能免疫NPC
+///   8. 不能已在战斗中
+///   9. 必须是自由生物（无主人）
+///   10. 必须是相同阵营或友好
+///   11. 必须对敌人敌对
+/// 调用时机：响应援助请求时
 bool Creature::CanAssistTo(Unit const* u, Unit const* enemy, bool checkfaction /*= true*/) const
 {
     // is it true?
@@ -2398,8 +3306,18 @@ bool Creature::CanAssistTo(Unit const* u, Unit const* enemy, bool checkfaction /
     return true;
 }
 
-// use this function to avoid having hostile creatures attack
-// friendlies and other mobs they shouldn't attack
+/// 检查目标是否可接受（内部函数）
+/// 职责：验证攻击目标是否符合攻击条件
+/// 参数：target - 待验证的目标
+/// 返回值：目标可接受返回true，否则返回false
+/// 检查条件：
+///   1. 不能是友方单位
+///   2. 必须可被攻击
+///   3. 不能在同一个载具上
+///   4. 如果目标已死亡：
+///      - 必须能忽略假死且目标是假死状态
+///   5. 如果已被该目标攻击或对该目标敌对，可接受
+/// 调用时机：选择攻击目标前验证
 bool Creature::_IsTargetAcceptable(Unit const* target) const
 {
     ASSERT(target);
@@ -2427,6 +3345,15 @@ bool Creature::_IsTargetAcceptable(Unit const* target) const
     return false;
 }
 
+/// 保存重生时间
+/// 职责：将生物的重生时间保存到数据库和地图
+/// 参数：forceDelay - 强制延迟时间（秒），0表示使用当前重生时间
+/// 主要流程：
+///   1. 如果是召唤物或没有spawnId，返回
+///   2. 如果生物数据没有数据库数据，返回
+///   3. 兼容模式：创建重生信息并保存到数据库
+///   4. 正常模式：保存到地图的重生系统
+/// 调用时机：生物死亡或强制消失时
 void Creature::SaveRespawnTime(uint32 forceDelay)
 {
     if (IsSummon() || !m_spawnId || (m_creatureData && !m_creatureData->dbData))
@@ -2447,6 +3374,24 @@ void Creature::SaveRespawnTime(uint32 forceDelay)
 }
 
 // this should not be called by petAI or
+/// 检查生物是否可以攻击目标
+/// 职责：验证生物是否可以攻击指定受害者
+/// 参数：
+///   - victim: 潜在的受害者
+///   - force: 是否强制攻击（未使用）
+/// 返回值：可以攻击返回true，否则返回false
+/// 检查条件：
+///   1. 必须在同一地图
+///   2. 必须是有效的攻击目标
+///   3. 受害者必须在可到达的位置
+///   4. AI必须允许攻击
+///   5. 不能在规避模式
+///   6. 受害者如果是生物，也不能在规避模式
+///   7. 如果不是玩家宠物：
+///      - 在副本中总是可以
+///      - 最近受过伤害或有嘲讽光环可以攻击
+///   8. 必须在距离限制内（考虑主人的位置或出生点位置）
+/// 调用时机：确定攻击目标时
 bool Creature::CanCreatureAttack(Unit const* victim, bool /*force*/) const
 {
     if (!victim->IsInMap(this))
@@ -2498,6 +3443,13 @@ bool Creature::CanCreatureAttack(Unit const* victim, bool /*force*/) const
     }
 }
 
+/**
+ * @brief 获取生物附加数据
+ *
+ * @return CreatureAddon const* 附加数据指针，没有返回nullptr
+ *
+ * @details 优先获取特定spawnId的附加数据，否则获取模板附加数据
+ */
 CreatureAddon const* Creature::GetCreatureAddon() const
 {
     if (m_spawnId)
@@ -2511,6 +3463,21 @@ CreatureAddon const* Creature::GetCreatureAddon() const
 }
 
 //creature_addon table
+/// 加载生物附加数据
+/// 职责：从数据库加载生物的附加属性（装备、光环、移动路径等）
+/// 返回值：成功加载返回true，无附加数据返回false
+/// 主要流程：
+///   1. 获取生物附加数据（优先spawnId特定，否则使用模板）
+///   2. 如果有坐骑模型，装备坐骑
+///   3. 设置站立状态、动画层、视觉标志
+///   4. 如果可悬停，添加悬停移动标志
+///   5. 设置武器姿态和PVP标志
+///   6. 设置表情状态
+///   7. 设置可见性距离覆盖
+///   8. 设置路径ID（巡逻路径）
+///   9. 加载所有附加光环
+/// 调用时机：生物创建或重生时
+/// 注意：这些数据来自creature_addon表
 bool Creature::LoadCreaturesAddon()
 {
     CreatureAddon const* creatureAddon = GetCreatureAddon();
@@ -2575,7 +3542,15 @@ bool Creature::LoadCreaturesAddon()
     return true;
 }
 
-/// Send a message to LocalDefense channel for players opposition team in the zone
+/**
+ * @brief 发送区域受攻击消息
+ *
+ * @param attacker 攻击者玩家
+ *
+ * @brief 职责：向对立阵营的玩家发送区域受攻击警告
+ * @details 当玩家攻击特定生物时，会通知对立阵营的玩家
+ *          该区域正在受到攻击（用于PvP区域）
+ */
 void Creature::SendZoneUnderAttackMessage(Player* attacker)
 {
     uint32 enemy_team = attacker->GetTeam();
@@ -2585,16 +3560,37 @@ void Creature::SendZoneUnderAttackMessage(Player* attacker)
     sWorld->SendGlobalMessage(&data, nullptr, (enemy_team == ALLIANCE ? HORDE : ALLIANCE));
 }
 
+/**
+ * @brief 获取盾牌格挡值
+ *
+ * @return uint32 格挡值
+ *
+ * @details 计算公式：等级/2 + 力量/20
+ */
 uint32 Creature::GetShieldBlockValue() const                  //dunno mob block value
 {
     return (GetLevel()/2 + uint32(GetStat(STAT_STRENGTH)/20));
 }
 
+/**
+ * @brief 检查生物是否拥有指定法术
+ *
+ * @param spellID 法术ID
+ * @return true 拥有该法术
+ * @return false 没有该法术
+ *
+ * @note 检查生物的默认法术列表（m_spells数组）
+ */
 bool Creature::HasSpell(uint32 spellID) const
 {
     return std::find(std::begin(m_spells), std::end(m_spells), spellID) != std::end(m_spells);
 }
 
+/**
+ * @brief 获取扩展后的重生时间
+ *
+ * @return time_t 重生时间戳（如果已过期则返回当前时间）
+ */
 time_t Creature::GetRespawnTimeEx() const
 {
     time_t now = GameTime::GetGameTime();
@@ -2604,11 +3600,28 @@ time_t Creature::GetRespawnTimeEx() const
         return now;
 }
 
+/**
+ * @brief 设置重生时间
+ *
+ * @param respawn 重生延迟（秒），0表示立即重生
+ */
 void Creature::SetRespawnTime(uint32 respawn)
 {
     m_respawnTime = respawn ? GameTime::GetGameTime() + respawn : 0;
 }
 
+/**
+ * @brief 获取重生位置
+ *
+ * @param x [out] X坐标
+ * @param y [out] Y坐标
+ * @param z [out] Z坐标
+ * @param ori [out] 可选：朝向
+ * @param dist [out] 可选：游荡距离
+ *
+ * @details 如果有生物数据，从数据库spawnPoint获取，
+ *          否则使用出生位置
+ */
 void Creature::GetRespawnPosition(float &x, float &y, float &z, float* ori, float* dist) const
 {
     if (m_creatureData)
@@ -2633,12 +3646,33 @@ void Creature::GetRespawnPosition(float &x, float &y, float &z, float* ori, floa
     }
 }
 
+/**
+ * @brief 初始化移动标志
+ *
+ * @details 目前等同于UpdateMovementFlags
+ */
 void Creature::InitializeMovementFlags()
 {
     // It does the same, for now
     UpdateMovementFlags();
 }
 
+/// 更新移动标志
+/// 职责：根据当前位置和环境更新生物的移动标志
+/// 主要流程：
+///   1. 如果被玩家控制（魅惑/载具），不更新
+///   2. 如果有NO_MOVE_FLAGS_UPDATE标志，不更新
+///   3. 获取地面高度
+///   4. 判断是否在空中（考虑悬停高度）
+///   5. 如果允许飞行且在空中：
+///      a. 根据飞行类型设置CanFly或DisableGravity
+///      b. 如果没有悬停光环，取消悬停
+///   6. 否则：
+///      a. 取消飞行和重力禁用
+///      b. 如果存活且可悬停，设置悬停
+///   7. 如果不在空中，移除下落标志
+///   8. 如果在水中且可游泳，设置游泳标志
+/// 调用时机：每次Update调用时
 void Creature::UpdateMovementFlags()
 {
     // Do not update movement flags if creature is controlled by a player (charm/vehicle)
@@ -2679,6 +3713,13 @@ void Creature::UpdateMovementFlags()
     SetSwim(CanSwim() && IsInWater());
 }
 
+/**
+ * @brief 获取移动模板
+ *
+ * @return CreatureMovementData const& 移动数据引用
+ *
+ * @details 优先返回特定spawnId的移动覆盖，否则返回模板移动数据
+ */
 CreatureMovementData const& Creature::GetMovementTemplate() const
 {
     if (CreatureMovementData const* movementOverride = sObjectMgr->GetCreatureMovementOverride(m_spawnId))
@@ -2687,6 +3728,14 @@ CreatureMovementData const& Creature::GetMovementTemplate() const
     return GetCreatureTemplate()->Movement;
 }
 
+/**
+ * @brief 检查生物是否可以游泳
+ *
+ * @return true 可以游泳
+ * @return false 不能游泳
+ *
+ * @note 宠物总是可以游泳
+ */
 bool Creature::CanSwim() const
 {
     if (Unit::CanSwim())
@@ -2698,6 +3747,12 @@ bool Creature::CanSwim() const
     return false;
 }
 
+/**
+ * @brief 检查生物是否可以进入水中
+ *
+ * @return true 可以进入水中
+ * @return false 不能进入水中
+ */
 bool Creature::CanEnterWater() const
 {
     if (CanSwim())
@@ -2706,6 +3761,13 @@ bool Creature::CanEnterWater() const
     return GetMovementTemplate().IsSwimAllowed();
 }
 
+/**
+ * @brief 刷新可游泳标志
+ *
+ * @param recheck 是否重新检查（默认false）
+ *
+ * @details 如果生物可以进入水中但缺少游泳标志，会自动添加
+ */
 void Creature::RefreshCanSwimFlag(bool recheck)
 {
     if (!_isMissingCanSwimFlagOutOfCombat || recheck)
@@ -2717,6 +3779,12 @@ void Creature::RefreshCanSwimFlag(bool recheck)
         SetUnitFlag(UNIT_FLAG_CAN_SWIM);
 }
 
+/**
+ * @brief 当所有战利品从尸体移除时调用
+ *
+ * @details 如果生物可剥皮，设置可剥皮标志；
+ *          根据服务器配置调整尸体腐烂时间
+ */
 void Creature::AllLootRemovedFromCorpse()
 {
     if (loot.loot_type != LOOT_SKINNING && !IsPet() && GetCreatureTemplate()->SkinLootId && hasLootRecipient())
@@ -2740,6 +3808,14 @@ void Creature::AllLootRemovedFromCorpse()
     m_respawnTime = std::max<time_t>(m_corpseRemoveTime + m_respawnDelay, m_respawnTime);
 }
 
+/**
+ * @brief 获取对目标的等级
+ *
+ * @param target 目标对象
+ * @return uint8 对目标的等级
+ *
+ * @details 世界Boss的等级会根据目标等级动态调整
+ */
 uint8 Creature::GetLevelForTarget(WorldObject const* target) const
 {
     if (!isWorldBoss() || !target->ToUnit())
@@ -2753,16 +3829,33 @@ uint8 Creature::GetLevelForTarget(WorldObject const* target) const
     return uint8(level);
 }
 
+/**
+ * @brief 获取AI名称
+ *
+ * @return std::string const& AI名称引用
+ */
 std::string const& Creature::GetAIName() const
 {
     return sObjectMgr->GetCreatureTemplate(GetEntry())->AIName;
 }
 
+/**
+ * @brief 获取脚本名称
+ *
+ * @return std::string 脚本名称
+ */
 std::string Creature::GetScriptName() const
 {
     return sObjectMgr->GetScriptName(GetScriptId());
 }
 
+/**
+ * @brief 获取脚本ID
+ *
+ * @return uint32 脚本ID
+ *
+ * @details 优先使用creature_data中的scriptId，否则使用模板的ScriptID
+ */
 uint32 Creature::GetScriptId() const
 {
     if (CreatureData const* creatureData = GetCreatureData())
@@ -2772,11 +3865,24 @@ uint32 Creature::GetScriptId() const
     return ASSERT_NOTNULL(sObjectMgr->GetCreatureTemplate(GetEntry()))->ScriptID;
 }
 
+/**
+ * @brief 获取商贩物品列表
+ *
+ * @return VendorItemData const* 商贩物品数据指针，没有返回nullptr
+ */
 VendorItemData const* Creature::GetVendorItems() const
 {
     return sObjectMgr->GetNpcVendorItemList(GetEntry());
 }
 
+/**
+ * @brief 获取商贩物品当前数量
+ *
+ * @param vItem 商贩物品信息
+ * @return uint32 当前可用数量
+ *
+ * @details 处理有限数量物品，如果超时会自动补充
+ */
 uint32 Creature::GetVendorItemCurrentCount(VendorItem const* vItem)
 {
     if (!vItem->maxcount)
@@ -2811,6 +3917,15 @@ uint32 Creature::GetVendorItemCurrentCount(VendorItem const* vItem)
     return vCount->count;
 }
 
+/**
+ * @brief 更新商贩物品当前数量
+ *
+ * @param vItem 商贩物品信息
+ * @param used_count 已使用数量
+ * @return uint32 更新后的数量
+ *
+ * @details 当玩家购买物品后减少数量，并开始补充计时
+ */
 uint32 Creature::UpdateVendorItemCurrentCount(VendorItem const* vItem, uint32 used_count)
 {
     if (!vItem->maxcount)
@@ -2847,7 +3962,14 @@ uint32 Creature::UpdateVendorItemCurrentCount(VendorItem const* vItem, uint32 us
     return vCount->count;
 }
 
-// overwrite WorldObject function for proper name localization
+/**
+ * @brief 获取本地化的名称
+ *
+ * @param loc_idx 语言索引
+ * @return std::string const& 本地化名称引用
+ *
+ * @details 如果有对应语言的本地化名称则返回，否则返回默认名称
+ */
 std::string const & Creature::GetNameForLocaleIdx(LocaleConstant loc_idx) const
 {
     if (loc_idx != DEFAULT_LOCALE)
@@ -2864,6 +3986,12 @@ std::string const & Creature::GetNameForLocaleIdx(LocaleConstant loc_idx) const
     return GetName();
 }
 
+/**
+ * @brief 获取宠物指定位置的自动施放法术
+ *
+ * @param pos 位置索引
+ * @return uint32 法术ID，无效位置或未启用返回0
+ */
 uint32 Creature::GetPetAutoSpellOnPos(uint8 pos) const
 {
     if (pos >= MAX_SPELL_CHARM || !m_charmInfo || m_charmInfo->GetCharmSpell(pos)->GetType() != ACT_ENABLED)
@@ -2872,6 +4000,13 @@ uint32 Creature::GetPetAutoSpellOnPos(uint8 pos) const
         return m_charmInfo->GetCharmSpell(pos)->GetAction();
 }
 
+/**
+ * @brief 获取宠物追逐距离
+ *
+ * @return float 追逐距离（码）
+ *
+ * @details 根据宠物自动施放法术的最大射程计算
+ */
 float Creature::GetPetChaseDistance() const
 {
     float range = 0.f;
@@ -2892,6 +4027,14 @@ float Creature::GetPetChaseDistance() const
     return range;
 }
 
+/**
+ * @brief 设置是否无法到达目标
+ *
+ * @param cannotReach true表示无法到达目标
+ *
+ * @details 当生物无法到达攻击目标时设置此标志，
+ *          可能会触发生命值恢复或进入规避模式
+ */
 void Creature::SetCannotReachTarget(bool cannotReach)
 {
     if (cannotReach == m_cannotReachTarget)
@@ -2903,6 +4046,15 @@ void Creature::SetCannotReachTarget(bool cannotReach)
         TC_LOG_DEBUG("entities.unit.chase", "Creature::SetCannotReachTarget() called with true. Details: {}", GetDebugInfo());
 }
 
+/**
+ * @brief 设置行走模式
+ *
+ * @param enable true为行走，false为奔跑
+ * @return true 设置成功
+ * @return false 设置失败（状态未改变）
+ *
+ * @details 向客户端发送移动模式变更数据包
+ */
 bool Creature::SetWalk(bool enable)
 {
     if (!Unit::SetWalk(enable))
@@ -2914,6 +4066,17 @@ bool Creature::SetWalk(bool enable)
     return true;
 }
 
+/**
+ * @brief 设置禁用重力
+ *
+ * @param disable true禁用重力（飞行），false启用重力
+ * @param packetOnly 是否仅发送数据包（默认false）
+ * @param updateAnimTier 是否更新动画层级（默认true）
+ * @return true 设置成功
+ * @return false 设置失败
+ *
+ * @details 禁用重力允许生物在空中停留，会自动更新动画层级
+ */
 bool Creature::SetDisableGravity(bool disable, bool packetOnly /*=false*/, bool updateAnimTier /*= true*/)
 {
     //! It's possible only a packet is sent but moveflags are not updated
@@ -2940,6 +4103,13 @@ bool Creature::SetDisableGravity(bool disable, bool packetOnly /*=false*/, bool 
     return true;
 }
 
+/**
+ * @brief 设置游泳模式
+ *
+ * @param enable true开始游泳，false停止游泳
+ * @return true 设置成功
+ * @return false 设置失败
+ */
 bool Creature::SetSwim(bool enable)
 {
     if (!Unit::SetSwim(enable))
@@ -2954,6 +4124,16 @@ bool Creature::SetSwim(bool enable)
     return true;
 }
 
+/**
+ * @brief 设置是否可以飞行
+ *
+ * @param enable true可以飞行，false不能飞行
+ * @param packetOnly 未使用的参数
+ * @return true 设置成功
+ * @return false 设置失败
+ *
+ * @details 与SetDisableGravity不同，CanFly是真正的飞行能力
+ */
 bool Creature::SetCanFly(bool enable, bool /*packetOnly = false */)
 {
     if (!Unit::SetCanFly(enable))
@@ -2968,6 +4148,14 @@ bool Creature::SetCanFly(bool enable, bool /*packetOnly = false */)
     return true;
 }
 
+/**
+ * @brief 设置水上行走
+ *
+ * @param enable true水上行走，false正常落水
+ * @param packetOnly 是否仅发送数据包（默认false）
+ * @return true 设置成功
+ * @return false 设置失败
+ */
 bool Creature::SetWaterWalking(bool enable, bool packetOnly /* = false */)
 {
     if (!packetOnly && !Unit::SetWaterWalking(enable))
@@ -2982,6 +4170,16 @@ bool Creature::SetWaterWalking(bool enable, bool packetOnly /* = false */)
     return true;
 }
 
+/**
+ * @brief 设置缓落
+ *
+ * @param enable true缓落，false正常下落
+ * @param packetOnly 是否仅发送数据包（默认false）
+ * @return true 设置成功
+ * @return false 设置失败
+ *
+ * @details 缓落允许生物缓慢下降，避免摔落伤害
+ */
 bool Creature::SetFeatherFall(bool enable, bool packetOnly /* = false */)
 {
     if (!packetOnly && !Unit::SetFeatherFall(enable))
@@ -2996,6 +4194,17 @@ bool Creature::SetFeatherFall(bool enable, bool packetOnly /* = false */)
     return true;
 }
 
+/**
+ * @brief 设置悬停
+ *
+ * @param enable true悬停，false取消悬停
+ * @param packetOnly 是否仅发送数据包（默认false）
+ * @param updateAnimTier 是否更新动画层级（默认true）
+ * @return true 设置成功
+ * @return false 设置失败
+ *
+ * @details 悬停的生物在空中静止，会更新动画层级
+ */
 bool Creature::SetHover(bool enable, bool packetOnly /*= false*/, bool updateAnimTier /*= true*/)
 {
     if (!packetOnly && !Unit::SetHover(enable, packetOnly, updateAnimTier))
@@ -3021,6 +4230,15 @@ bool Creature::SetHover(bool enable, bool packetOnly /*= false*/, bool updateAni
     return true;
 }
 
+/**
+ * @brief 获取仇恨范围
+ *
+ * @param target 目标单位
+ * @return float 仇恨范围（码）
+ *
+ * @details 用于宠物选择目标，基础仇恨半径为20码，
+ *          根据等级差调整（每级1码），考虑检测范围光环
+ */
 float Creature::GetAggroRange(Unit const* target) const
 {
     // Determines the aggro range for creatures (usually pets), used mainly for aggressive pet target selection.
@@ -3070,6 +4288,16 @@ float Creature::GetAggroRange(Unit const* target) const
     return 0.0f;
 }
 
+/**
+ * @brief 在仇恨范围内选择最近的敌对单位
+ *
+ * @param useLOS 是否使用视线检查（默认true）
+ * @param ignoreCivilians 是否忽略平民（默认false）
+ * @return Unit* 最近的敌对单位，未找到返回nullptr
+ *
+ * @details 主要用于设置为侵略性的宠物，
+ *          不会返回中立或友好目标
+ */
 Unit* Creature::SelectNearestHostileUnitInAggroRange(bool useLOS, bool ignoreCivilians) const
 {
     // Selects nearest hostile target within creature's aggro range. Used primarily by
@@ -3120,6 +4348,21 @@ void Creature::SetTarget(ObjectGuid guid)
         SetGuidValue(UNIT_FIELD_TARGET, guid);
 }
 
+/// 设置法术焦点
+/// 职责：在施法期间锁定目标面向，确保施法方向正确
+/// 参数：
+///   - focusSpell: 施放的法术
+///   - target: 焦点目标
+/// 主要流程：
+///   1. 验证参数和状态（已有焦点、死亡、假死、昏迷）
+///   2. 检查法术是否禁用焦点
+///   3. 不对载具法术使用焦点
+///   4. 瞬发非引导法术不需要焦点更新
+///   5. 保存施法前的目标和朝向
+///   6. 设置法术焦点
+///   7. 根据法术属性设置目标面向
+///   8. 如果不允许施法期间转身，设置聚焦状态
+/// 调用时机：开始施法时
 void Creature::SetSpellFocus(Spell const* focusSpell, WorldObject const* target)
 {
     // Pointer validation and checking for a already existing focus
@@ -3192,6 +4435,19 @@ bool Creature::HasSpellFocus(Spell const* focusSpell) const
         return (_spellFocusInfo.Spell || _spellFocusInfo.Delay);
 }
 
+/// 释放法术焦点
+/// 职责：施法结束后释放焦点目标，恢复原有朝向
+/// 参数：
+///   - focusSpell: 要释放的法术焦点
+///   - withDelay: 是否延迟恢复（默认用于视觉效果）
+/// 主要流程：
+///   1. 验证是否有法术焦点
+///   2. 如果指定的法术不是当前焦点，返回
+///   3. 清除聚焦状态
+///   4. 如果是宠物，立即恢复目标
+///   5. 否则设置延迟恢复（防止视觉bug）
+///   6. 清除法术焦点
+/// 调用时机：施法结束或被打断时
 void Creature::ReleaseSpellFocus(Spell const* focusSpell, bool withDelay)
 {
     if (!_spellFocusInfo.Spell)
@@ -3304,6 +4560,19 @@ bool Creature::IsEngaged() const
     return false;
 }
 
+/// 进入战斗时调用
+/// 职责：处理生物进入战斗时的初始化逻辑
+/// 参数：target - 战斗目标
+/// 主要流程：
+///   1. 调用Unit基类的AtEngage
+///   2. 如果不允许骑乘战斗，下马
+///   3. 刷新游泳标志
+///   4. 如果是宠物或守护者，更新速度
+///   5. 如果在巡逻或护送中，更新出生点位置
+///   6. 如果是载具，更新所有乘客的出生点
+///   7. 通知AI进入战斗
+///   8. 通知编队成员
+/// 调用时机：生物首次进入战斗时
 void Creature::AtEngage(Unit* target)
 {
     Unit::AtEngage(target);
@@ -3342,6 +4611,14 @@ void Creature::AtEngage(Unit* target)
         formation->MemberEngagingTarget(this, target);
 }
 
+/// 脱离战斗时调用
+/// 职责：处理生物脱离战斗时的清理逻辑
+/// 主要流程：
+///   1. 调用Unit基类的AtDisengage
+///   2. 清除攻击玩家状态
+///   3. 如果存活且被标签，恢复动态标志
+///   4. 如果是宠物或守护者，更新速度
+/// 调用时机：生物完全脱离战斗时
 void Creature::AtDisengage()
 {
     Unit::AtDisengage();

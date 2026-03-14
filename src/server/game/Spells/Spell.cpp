@@ -15,6 +15,39 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file Spell.cpp
+ * @brief 法术系统核心实现文件
+ *
+ * 本文件实现了 TrinityCore 法术系统的核心逻辑，包括：
+ *
+ * 1. Spell 类的所有方法实现
+ * 2. SpellCastTargets 类实现（法术目标管理）
+ * 3. SpellDestination 类实现（法术目标位置）
+ * 4. SpellEvent 类实现（法术事件处理）
+ *
+ * 核心功能模块：
+ *
+ * - 法术初始化和准备（prepare）
+ * - 目标选择系统（SelectSpellTargets 系列）
+ * - 施法条件检查（CheckCast 系列）
+ * - 法术效果处理（HandleEffects + 各种 Effect 函数）
+ * - 能量消耗（TakePower, TakeReagents）
+ * - 伤害和治疗计算
+ * - 光环应用和管理
+ * - 触发机制（Proc 系统）
+ * - 脚本系统集成
+ *
+ * 性能注意事项：
+ * - 法术系统是服务器性能的关键点
+ * - 目标选择使用网格查询，需要优化空间索引
+ * - 效果处理避免不必要的计算
+ * - 使用对象池管理频繁创建的 Spell 对象
+ *
+ * @see Spell.h 头文件
+ * @see SpellInfo.cpp 法术信息实现
+ */
+
 #include "Spell.h"
 #include "Battlefield.h"
 #include "BattlefieldMgr.h"
@@ -67,6 +100,15 @@
 
 extern SpellEffectHandlerFn SpellEffectHandlers[TOTAL_SPELL_EFFECTS];
 
+// ============================================================================
+// SpellDestination 实现
+// ============================================================================
+
+/**
+ * @brief 默认构造函数
+ *
+ * 初始化一个空的法术目标位置，所有坐标设为0，清空载具GUID。
+ */
 SpellDestination::SpellDestination()
 {
     _position.Relocate(0, 0, 0, 0);
@@ -74,6 +116,15 @@ SpellDestination::SpellDestination()
     _transportOffset.Relocate(0, 0, 0, 0);
 }
 
+/**
+ * @brief 使用坐标和地图ID构造法术目标位置
+ *
+ * @param x X坐标
+ * @param y Y坐标
+ * @param z Z坐标（高度）
+ * @param orientation 朝向角度
+ * @param mapId 地图ID
+ */
 SpellDestination::SpellDestination(float x, float y, float z, float orientation, uint32 mapId)
 {
     _position.Relocate(x, y, z, orientation);
@@ -82,6 +133,10 @@ SpellDestination::SpellDestination(float x, float y, float z, float orientation,
     _transportOffset.Relocate(0, 0, 0, 0);
 }
 
+/**
+ * @brief 使用Position对象构造法术目标位置
+ * @param pos 位置对象
+ */
 SpellDestination::SpellDestination(Position const& pos)
 {
     _position.Relocate(pos);
@@ -89,6 +144,13 @@ SpellDestination::SpellDestination(Position const& pos)
     _transportOffset.Relocate(0, 0, 0, 0);
 }
 
+/**
+ * @brief 使用世界对象构造法术目标位置
+ *
+ * 如果对象在载具上，会自动计算载具偏移坐标。
+ *
+ * @param wObj 世界对象（玩家、NPC、游戏对象等）
+ */
 SpellDestination::SpellDestination(WorldObject const& wObj)
 {
     _transportGUID = wObj.GetTransGUID();
@@ -96,6 +158,13 @@ SpellDestination::SpellDestination(WorldObject const& wObj)
     _position.Relocate(wObj);
 }
 
+/**
+ * @brief 重新定位目标位置
+ *
+ * 如果目标在载具上，会同时更新载具偏移坐标。
+ *
+ * @param pos 新位置
+ */
 void SpellDestination::Relocate(Position const& pos)
 {
     if (_transportGUID)
@@ -107,6 +176,10 @@ void SpellDestination::Relocate(Position const& pos)
     _position.Relocate(pos);
 }
 
+/**
+ * @brief 偏移目标位置
+ * @param offset 偏移量
+ */
 void SpellDestination::RelocateOffset(Position const& offset)
 {
     if (_transportGUID)
@@ -115,6 +188,15 @@ void SpellDestination::RelocateOffset(Position const& offset)
     _position.RelocateOffset(offset);
 }
 
+// ============================================================================
+// SpellCastTargets 实现
+// ============================================================================
+
+/**
+ * @brief 默认构造函数
+ *
+ * 初始化一个空的法术目标容器，所有目标指针设为空。
+ */
 SpellCastTargets::SpellCastTargets() : m_elevation(0), m_speed(0), m_strTarget()
 {
     m_objectTarget = nullptr;
@@ -127,21 +209,44 @@ SpellCastTargets::SpellCastTargets() : m_elevation(0), m_speed(0), m_strTarget()
 
 SpellCastTargets::~SpellCastTargets() { }
 
+/**
+ * @brief 从网络包中读取法术目标数据
+ *
+ * 此函数从客户端发送的网络包中解析法术目标信息。
+ * 目标数据格式取决于目标标志位（m_targetMask）。
+ *
+ * 支持的目标类型：
+ * - TARGET_FLAG_UNIT：单位目标（玩家、NPC）
+ * - TARGET_FLAG_GAMEOBJECT：游戏对象目标
+ * - TARGET_FLAG_ITEM：物品目标
+ * - TARGET_FLAG_SOURCE_LOCATION：源位置
+ * - TARGET_FLAG_DEST_LOCATION：目标位置
+ * - TARGET_FLAG_CORPSE：尸体目标
+ *
+ * @param data 网络数据包
+ * @param caster 施法者（用于默认位置初始化）
+ *
+ * @note 对于没有指定源/目标位置的法术，会自动使用施法者位置
+ * @note 需要处理载具坐标转换
+ */
 void SpellCastTargets::Read(ByteBuffer& data, Unit* caster)
 {
     // 寒冰箭 - TARGET_FLAG_UNIT
+    // 读取目标标志位，确定目标的类型和数量
     data >> m_targetMask;
 
     if (m_targetMask == TARGET_FLAG_NONE)
         return;
 
-    // 获取玩家鼠标选中的目标
+    // 获取玩家鼠标选中的目标（单位、游戏对象、尸体等）
     if (m_targetMask & (TARGET_FLAG_UNIT | TARGET_FLAG_UNIT_MINIPET | TARGET_FLAG_GAMEOBJECT | TARGET_FLAG_CORPSE_ENEMY | TARGET_FLAG_CORPSE_ALLY))
         data >> m_objectTargetGUID.ReadAsPacked();
 
+    // 读取物品目标GUID
     if (m_targetMask & (TARGET_FLAG_ITEM | TARGET_FLAG_TRADE_ITEM))
         data >> m_itemTargetGUID.ReadAsPacked();
 
+    // 读取源位置（用于某些区域法术）
     if (m_targetMask & TARGET_FLAG_SOURCE_LOCATION)
     {
         data >> m_src._transportGUID.ReadAsPacked();
@@ -152,6 +257,7 @@ void SpellCastTargets::Read(ByteBuffer& data, Unit* caster)
     }
     else
     {
+        // 没有指定源位置时，使用施法者位置作为源
         m_src._transportGUID = caster->GetTransGUID();
         if (m_src._transportGUID)
             m_src._transportOffset.Relocate(caster->GetTransOffsetX(), caster->GetTransOffsetY(), caster->GetTransOffsetZ(), caster->GetTransOffsetO());
@@ -159,6 +265,7 @@ void SpellCastTargets::Read(ByteBuffer& data, Unit* caster)
             m_src._position.Relocate(caster);
     }
 
+    // 读取目标位置（用于指向性区域法术、传送等）
     if (m_targetMask & TARGET_FLAG_DEST_LOCATION)
     {
         data >> m_dst._transportGUID.ReadAsPacked();
@@ -169,6 +276,7 @@ void SpellCastTargets::Read(ByteBuffer& data, Unit* caster)
     }
     else
     {
+        // 没有指定目标位置时，使用施法者位置作为目标
         m_dst._transportGUID = caster->GetTransGUID();
         if (m_dst._transportGUID)
             m_dst._transportOffset.Relocate(caster->GetTransOffsetX(), caster->GetTransOffsetY(), caster->GetTransOffsetZ(), caster->GetTransOffsetO());
@@ -176,19 +284,31 @@ void SpellCastTargets::Read(ByteBuffer& data, Unit* caster)
             m_dst._position.Relocate(caster);
     }
 
+    // 读取字符串目标（用于某些特殊法术，如召唤仪式）
     if (m_targetMask & TARGET_FLAG_STRING)
         data >> m_strTarget;
 
+    // 更新目标指针（将GUID转换为实际对象指针）
     Update(caster);
 }
 
+/**
+ * @brief 将法术目标数据写入网络包
+ *
+ * 将服务器的法术目标信息序列化为网络数据包，发送给客户端。
+ * 只写入有效的目标数据。
+ *
+ * @param data 网络数据包结构
+ */
 void SpellCastTargets::Write(WorldPackets::Spells::SpellTargetData& data)
 {
     data.Flags = m_targetMask;
 
+    // 写入单位/游戏对象/尸体目标GUID
     if (m_targetMask & (TARGET_FLAG_UNIT | TARGET_FLAG_CORPSE_ALLY | TARGET_FLAG_GAMEOBJECT | TARGET_FLAG_CORPSE_ENEMY | TARGET_FLAG_UNIT_MINIPET))
         data.Unit = m_objectTargetGUID;
 
+    // 写入物品目标GUID
     if (m_targetMask & (TARGET_FLAG_ITEM | TARGET_FLAG_TRADE_ITEM))
     {
         data.Item.emplace();
@@ -196,6 +316,7 @@ void SpellCastTargets::Write(WorldPackets::Spells::SpellTargetData& data)
             data.Item = m_itemTarget->GetGUID();
     }
 
+    // 写入源位置
     if (m_targetMask & TARGET_FLAG_SOURCE_LOCATION)
     {
         data.SrcLocation.emplace();
@@ -206,6 +327,7 @@ void SpellCastTargets::Write(WorldPackets::Spells::SpellTargetData& data)
             data.SrcLocation->Location = m_src._position;
     }
 
+    // 写入目标位置
     if (m_targetMask & TARGET_FLAG_DEST_LOCATION)
     {
         data.DstLocation.emplace();
@@ -216,6 +338,7 @@ void SpellCastTargets::Write(WorldPackets::Spells::SpellTargetData& data)
             data.DstLocation->Location = m_dst._position;
     }
 
+    // 写入字符串目标
     if (m_targetMask & TARGET_FLAG_STRING)
         data.Name = m_strTarget;
 }
@@ -479,8 +602,22 @@ void SpellCastTargets::Update(WorldObject* caster)
     }
 }
 
+// ============================================================================
+// SpellValue 实现
+// ============================================================================
+
+/**
+ * @brief SpellValue 构造函数
+ *
+ * 从法术信息初始化法术值容器。SpellValue 存储法术的可变数值，
+ * 包括效果基础点数、最大影响目标数、半径修正、光环堆叠数等。
+ * 这些值可以在法术执行过程中被修改（如通过脚本或天赋）。
+ *
+ * @param proto 法术信息指针
+ */
 SpellValue::SpellValue(SpellInfo const* proto)
 {
+    // 从每个效果中复制基础点数
     for (SpellEffectInfo const& spellEffectInfo : proto->GetEffects())
         EffectBasePoints[spellEffectInfo.EffectIndex] = spellEffectInfo.BasePoints;
     MaxAffectedTargets = proto->MaxAffectedTargets;
@@ -489,6 +626,17 @@ SpellValue::SpellValue(SpellInfo const* proto)
     CriticalChance = 0.0f;
 }
 
+// ============================================================================
+// SpellEvent 实现 - 法术事件处理器
+// ============================================================================
+
+/**
+ * @brief SpellEvent 类 - 法术事件
+ *
+ * 继承自 BasicEvent，用于在事件系统中调度法术的执行。
+ * 主要用于处理有施法时间的法术和延迟法术。
+ * 当施法时间到达时，事件系统会调用 Execute 方法完成法术施放。
+ */
 class TC_GAME_API SpellEvent : public BasicEvent
 {
 public:
@@ -645,13 +793,30 @@ Spell::~Spell()
     AssertEffectExecuteData();
 }
 
+/**
+ * @brief 初始化显式目标
+ *
+ * 此函数用于初始化和修正法术的显式目标。客户端有时不会正确发送显式目标，
+ * 因此服务器需要修正这些法术的目标。这也确保我们正确地发送显式目标给客户端。
+ *
+ * 目标选择优先级：
+ * 1. 使用客户端发送的目标（如果有效）
+ * 2. 使用玩家当前选中的目标
+ * 3. 使用 NPC 的攻击目标
+ * 4. 使用施法者自身
+ *
+ * @param targets 从客户端接收的目标数据
+ *
+ * @note 此函数会在 Spell::prepare 中调用
+ * @note 会自动修正源位置和目标位置
+ */
 void Spell::InitExplicitTargets(SpellCastTargets const& targets)
 {
     m_targets = targets;
 
-    // this function tries to correct spell explicit targets for spell
-    // client doesn't send explicit targets correctly sometimes - we need to fix such spells serverside
-    // this also makes sure that we correctly send explicit targets to client (removes redundant data)
+    // 此函数尝试修正法术的显式目标
+    // 客户端有时不会正确发送显式目标 - 我们需要在服务器端修复这些法术
+    // 这也确保我们正确地发送显式目标给客户端（移除冗余数据）
     // 寒冰箭 - TARGET_FLAG_UNIT_ENEMY
     uint32 neededTargets = m_spellInfo->GetExplicitTargetMask();
 
@@ -661,8 +826,8 @@ void Spell::InitExplicitTargets(SpellCastTargets const& targets)
 
     if (WorldObject* target = m_targets.GetObjectTarget())
     {
-        // check if object target is valid with needed target flags
-        // for unit case allow corpse target mask because player with not released corpse is a unit target
+        // 检查对象目标是否与需要的目标标志匹配
+        // 对于单位情况，允许尸体目标标志，因为未释放尸体的玩家是单位目标
         if ((target->ToUnit() && !(neededTargets & (TARGET_FLAG_UNIT_MASK | TARGET_FLAG_CORPSE_MASK)))
             || (target->ToGameObject() && !(neededTargets & TARGET_FLAG_GAMEOBJECT_MASK))
             || (target->ToCorpse() && !(neededTargets & TARGET_FLAG_CORPSE_MASK)))
@@ -670,14 +835,14 @@ void Spell::InitExplicitTargets(SpellCastTargets const& targets)
     }
     else
     {
-        // try to select correct unit target if not provided by client or by serverside cast
+        // 如果客户端或服务器端施法没有提供目标，尝试选择正确的单位目标
         if (neededTargets & (TARGET_FLAG_UNIT_MASK))
         {
             Unit* unit = nullptr;
-            // try to use player selection as a target
+            // 尝试使用玩家的选择作为目标
             if (Player* playerCaster = m_caster->ToPlayer())
             {
-                // selection has to be found and to be valid target for the spell
+                // 选择的目标必须被找到且对该法术是有效目标
                 if (Unit* selectedUnit = ObjectAccessor::GetUnit(*m_caster, playerCaster->GetTarget()))
                     if (m_spellInfo->CheckExplicitTarget(m_caster, selectedUnit) == SPELL_CAST_OK)
                         unit = selectedUnit;
@@ -3152,6 +3317,42 @@ bool Spell::UpdateChanneledTargetList()
     return channelTargetEffectMask == 0;
 }
 
+// =============================================================================
+// Spell::prepare - 施法准备
+// =============================================================================
+// 职责：准备施放法术，初始化施法状态、检查条件、计算消耗、创建施法事件
+//
+// 参数：
+//   targets: 施法目标信息（单位、物品、位置等）
+//   triggeredByAura: 触发此法术的光环效果（可为 nullptr）
+//
+// 返回值：SpellCastResult - 施法结果
+//   - SPELL_CAST_OK: 准备成功，可以开始施法
+//   - SPELL_FAILED_*: 各种失败原因
+//
+// 调用时机：由 Unit::CastSpell() 在创建 Spell 对象后调用
+//
+// 主要流程：
+//   1. 初始化物品施法信息
+//   2. 初始化显示目标
+//   3. 填充光环缩放信息
+//   4. 创建施法事件并加入事件系统
+//   5. 检查地图禁用状态
+//   6. 检查是否同时施放多个法术
+//   7. 加载技能脚本
+//   8. 计算法力消耗
+//   9. 执行 CheckCast() 检查施法条件
+//   10. 计算施法时间
+//   11. 检查移动状态
+//   12. 处理生物施法聚焦
+//   13. 移除潜行等光环
+//   14. 发送施法开始包给客户端
+//
+// 注意事项：
+//   - 此函数会设置 m_spellState 为 SPELL_STATE_PREPARING
+//   - 对于即时施法（TRIGGERED_CAST_DIRECTLY），会直接调用 cast()
+//   - 施法时间受玩家作弊模式影响
+// =============================================================================
 SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const* triggeredByAura)
 {
     // 如果技能由物品触发，则记录物品信息
@@ -3269,6 +3470,7 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
 
     // 计算施法时间（作弊模式下除外）
     // 寒冰箭 - 1.5s
+    // 暴风雪 - 0s
     if (Player* player = m_caster->ToPlayer())
     {
         if (!player->GetCommandStatus(CHEAT_CASTTIME))
@@ -3432,6 +3634,24 @@ void Spell::cancel()
     finish(false);
 }
 
+// =============================================================================
+// Spell::cast - 施法执行入口
+// =============================================================================
+// 职责：法术施放的公共入口，处理施法修改器后调用内部施法逻辑
+//
+// 参数：
+//   skipCheck: 是否跳过施法条件检查（通常为 false）
+//
+// 返回值：无
+//
+// 调用时机：
+//   - prepare() 中即时施法时调用
+//   - 施法读条完成后由 SpellEvent 触发
+//
+// 注意事项：
+//   - 此函数处理施法修改器栈，防止修改器冲突
+//   - 实际施法逻辑在 _cast() 中实现
+// =============================================================================
 void Spell::cast(bool skipCheck)
 {
     Player* modOwner = m_caster->GetSpellModOwner();
@@ -3444,12 +3664,49 @@ void Spell::cast(bool skipCheck)
     }
 
     // 寒冰箭 - skipCheck == false
+    // 暴风雪 - skipCheck == true
     _cast(skipCheck);
 
     if (lastSpellMod)
         modOwner->SetSpellModTakingSpell(lastSpellMod, true);
 }
 
+// =============================================================================
+// Spell::_cast - 施法执行核心逻辑
+// =============================================================================
+// 职责：执行法术施放的核心逻辑，包括目标验证、条件检查、消耗扣除、效果处理
+//
+// 参数：
+//   skipCheck: 是否跳过施法条件检查
+//
+// 返回值：无
+//
+// 调用时机：由 cast() 内部调用
+//
+// 主要流程：
+//   1. 更新目标指针（确保目标仍有效）
+//   2. 检查目标是否消失
+//   3. 执行技能脚本
+//   4. 宠物攻击逻辑
+//   5. 再次执行 CheckCast() 验证
+//   6. 交易物品检查
+//   7. 递减收益检查
+//   8. 选择施法目标列表
+//   9. 解散宠物（如果需要）
+//   10. 准备命中触发器
+//   11. 扣除法力/怒气/符文等资源
+//   12. 扣除施法材料
+//   13. 发送冷却时间
+//   14. 处理施法阶段效果
+//   15. 发送施法包给客户端
+//   16. 区分即时/延迟法术
+//   17. 处理技能链触发
+//   18. 处理施法触发效果
+//
+// 注意事项：
+//   - 此函数会设置 m_spellState 为 SPELL_STATE_DELAYED 或执行 handle_immediate()
+//   - 施法消耗必须在 SendSpellGo 之前扣除
+// =============================================================================
 void Spell::_cast(bool skipCheck)
 {
     if (std::find(debugSpellIds.begin(), debugSpellIds.end(), m_spellInfo->Id) != debugSpellIds.end()) {
@@ -4081,6 +4338,38 @@ void Spell::update(uint32 difftime)
     }
 }
 
+// =============================================================================
+// Spell::finish - 施法完成
+// =============================================================================
+// 职责：处理施法完成后的清理工作，包括状态更新、雕像移除、攻击计时器重置
+//
+// 参数：
+//   ok: 施法是否成功完成（true=成功，false=中断/失败）
+//
+// 返回值：无
+//
+// 调用时机：
+//   - 施法成功后由 handle_immediate() 调用
+//   - 施法失败时由各种检查函数调用
+//   - 施法取消时调用
+//
+// 主要流程：
+//   1. 检查是否已经完成（防止重复调用）
+//   2. 标记技能状态为 SPELL_STATE_FINISHED
+//   3. 更新引导法术的中断掩码
+//   4. 清除施法状态
+//   5. 处理引导法术的傀儡移除
+//   6. 释放生物施法聚焦
+//   7. 如果 ok=false，直接返回
+//   8. 处理雕像移除
+//   9. 重置自动攻击计时器
+//   10. 更新药水冷却
+//   11. 停止攻击（如果需要）
+//
+// 注意事项：
+//   - 此函数不可重复执行
+//   - 只处理成功完成的情况（ok=true）
+// =============================================================================
 void Spell::finish(bool ok)
 {
     if (m_spellState == SPELL_STATE_FINISHED)
@@ -4982,6 +5271,33 @@ void Spell::TakeCastItem()
     }
 }
 
+// =============================================================================
+// Spell::TakePower - 消耗施法资源
+// =============================================================================
+// 职责：扣除施放法术所需的资源（法力、怒气、能量、符文、生命值等）
+//
+// 参数：无
+//
+// 返回值：无
+//
+// 调用时机：在 _cast() 中，SendSpellGo 之前调用
+//
+// 主要流程：
+//   1. 检查施法者是否为 Unit（游戏对象不需要资源）
+//   2. 跳过物品施法和光环触发的法术
+//   3. 检查作弊模式（.cheat power）
+//   4. 处理怒气/能量/符文的未命中返还
+//   5. 处理符文能量（死亡骑士）
+//   6. 检查是否有消耗
+//   7. 处理生命值作为资源的情况
+//   8. 扣除对应类型的能量
+//   9. 设置法力使用时间（5秒回蓝计时器）
+//
+// 注意事项：
+//   - m_powerCost 在 prepare() 中计算
+//   - 符文有专门的处理函数 TakeRunePower()
+//   - 未命中时部分职业有资源返还机制
+// =============================================================================
 void Spell::TakePower()
 {
     // GameObjects don't use power

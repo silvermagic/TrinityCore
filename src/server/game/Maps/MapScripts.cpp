@@ -15,6 +15,49 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file MapScripts.cpp
+ * @brief 地图脚本系统实现文件
+ *
+ * 本文件实现了Map类的脚本相关功能，主要用于处理数据库驱动的脚本命令。
+ * 这些脚本命令可以触发各种游戏事件，如开门、召唤生物、施放法术等。
+ *
+ * 脚本系统架构：
+ * - ScriptsStart: 启动脚本执行队列
+ * - ScriptsProcess: 处理脚本队列中的命令
+ * - ScriptCommandStart: 启动单个脚本命令
+ *
+ * 脚本命令类型（SCRIPT_COMMAND_*）：
+ * - SCRIPT_COMMAND_TALK: NPC说话
+ * - SCRIPT_COMMAND_EMOTE: NPC做表情
+ * - SCRIPT_COMMAND_FIELD_SET: 设置字段值
+ * - SCRIPT_COMMAND_MOVE_TO: 移动到指定位置
+ * - SCRIPT_COMMAND_FLAG_SET/REMOVE: 设置/移除标志
+ * - SCRIPT_COMMAND_TELEPORT_TO: 传送
+ * - SCRIPT_COMMAND_QUEST_EXPLORED: 完成探索任务
+ * - SCRIPT_COMMAND_KILL_CREDIT: 给予击杀积分
+ * - SCRIPT_COMMAND_RESPAWN_GAMEOBJECT: 重生游戏对象
+ * - SCRIPT_COMMAND_TEMP_SUMMON_CREATURE: 临时召唤生物
+ * - SCRIPT_COMMAND_OPEN_DOOR/CLOSE_DOOR: 打开/关闭门
+ * - SCRIPT_COMMAND_ACTIVATE_OBJECT: 激活对象
+ * - SCRIPT_COMMAND_REMOVE_AURA: 移除光环
+ * - SCRIPT_COMMAND_CAST_SPELL: 施放法术
+ * - SCRIPT_COMMAND_PLAY_SOUND: 播放声音
+ * - SCRIPT_COMMAND_CREATE_ITEM: 创建物品
+ * - SCRIPT_COMMAND_DESPAWN_SELF: 自我消失
+ * - SCRIPT_COMMAND_PLAY_MOVIE: 播放电影
+ * - SCRIPT_COMMAND_MOVEMENT: 移动命令
+ * - SCRIPT_COMMAND_SET_ACTIVE_OBJECT: 设置活动对象
+ * - SCRIPT_COMMAND_START_WAYPOINTS: 开始路径点移动
+ * 等等...
+ *
+ * 使用场景：
+ * - 副本事件和Boss战斗脚本
+ * - 任务完成触发的事件
+ * - 区域触发事件
+ * - 物品使用触发的脚本
+ */
+
 #include "Map.h"
 #include "CellImpl.h"
 #include "GameTime.h"
@@ -31,22 +74,40 @@
 #include "WaypointManager.h"
 #include "World.h"
 
-/// Put scripts in the execution queue
+/**
+ * @brief 将脚本加入执行队列
+ * @param scripts 脚本映射表（包含delay到脚本信息的映射）
+ * @param id 脚本ID
+ * @param source 脚本源对象（可选）
+ * @param target 脚本目标对象（可选）
+ *
+ * 此函数将指定ID的所有脚本命令加入执行队列。
+ * 每个脚本命令有一个延迟时间（delay），用于控制执行时机。
+ *
+ * 流程：
+ * 1. 在脚本映射表中查找指定ID的脚本
+ * 2. 准备静态数据（源GUID、目标GUID、所有者GUID）
+ * 3. 遍历所有脚本命令，加入调度队列
+ * 4. 如果有立即执行的脚本（delay=0），立即处理
+ *
+ * @note 某些脚本命令可能没有源对象
+ */
 void Map::ScriptsStart(std::map<uint32, std::multimap<uint32, ScriptInfo>> const& scripts, uint32 id, Object* source, Object* target)
 {
-    ///- Find the script map
+    // 查找脚本映射
     ScriptMapMap::const_iterator s = scripts.find(id);
     if (s == scripts.end())
         return;
 
-    // prepare static data
-    ObjectGuid sourceGUID = source ? source->GetGUID() : ObjectGuid::Empty; //some script commands doesn't have source
+    // 准备静态数据（避免脚本执行时对象已失效）
+    ObjectGuid sourceGUID = source ? source->GetGUID() : ObjectGuid::Empty; // 某些脚本命令没有源对象
     ObjectGuid targetGUID = target ? target->GetGUID() : ObjectGuid::Empty;
+    // 如果源是物品，获取物品所有者的GUID
     ObjectGuid ownerGUID = [&] { if (Item* item = Object::ToItem(source)) return item->GetOwnerGUID(); return ObjectGuid::Empty; }();
 
-    ///- Schedule script execution for all scripts in the script map
+    // 将脚本映射中的所有脚本加入调度队列
     ScriptMap const* s2 = &(s->second);
-    bool immedScript = false;
+    bool immedScript = false;  // 是否有立即执行的脚本
     for (ScriptMap::const_iterator iter = s2->begin(); iter != s2->end(); ++iter)
     {
         ScriptAction sa;
@@ -55,13 +116,15 @@ void Map::ScriptsStart(std::map<uint32, std::multimap<uint32, ScriptInfo>> const
         sa.ownerGUID  = ownerGUID;
 
         sa.script = &iter->second;
+        // 计算执行时间：当前时间 + 延迟
         m_scriptSchedule.insert(ScriptScheduleMap::value_type(time_t(GameTime::GetGameTime() + iter->first), sa));
         if (iter->first == 0)
-            immedScript = true;
+            immedScript = true;  // 发现延迟为0的立即执行脚本
 
         sMapMgr->IncreaseScheduledScriptsCount();
     }
-    ///- If one of the effects should be immediate, launch the script execution
+
+    // 如果有立即执行的脚本，立即处理
     if (/*start &&*/ immedScript && !i_scriptLock)
     {
         i_scriptLock = true;
@@ -70,11 +133,22 @@ void Map::ScriptsStart(std::map<uint32, std::multimap<uint32, ScriptInfo>> const
     }
 }
 
+/**
+ * @brief 启动单个脚本命令
+ * @param script 脚本信息
+ * @param delay 延迟时间（秒）
+ * @param source 源对象
+ * @param target 目标对象
+ *
+ * 将单个脚本命令加入执行队列，带有指定的延迟时间。
+ *
+ * @note 脚本记录必须在命令执行前一直存在
+ */
 void Map::ScriptCommandStart(ScriptInfo const& script, uint32 delay, Object* source, Object* target)
 {
-    // NOTE: script record _must_ exist until command executed
+    // 注意：脚本记录必须在命令执行前一直存在
 
-    // prepare static data
+    // 准备静态数据
     ObjectGuid sourceGUID = source ? source->GetGUID() : ObjectGuid::Empty;
     ObjectGuid targetGUID = target ? target->GetGUID() : ObjectGuid::Empty;
     ObjectGuid ownerGUID = [&] { if (Item* item = Object::ToItem(source)) return item->GetOwnerGUID(); return ObjectGuid::Empty; }();
@@ -89,7 +163,7 @@ void Map::ScriptCommandStart(ScriptInfo const& script, uint32 delay, Object* sou
 
     sMapMgr->IncreaseScheduledScriptsCount();
 
-    ///- If effects should be immediate, launch the script execution
+    // 如果延迟为0，立即执行
     if (delay == 0 && !i_scriptLock)
     {
         i_scriptLock = true;
@@ -98,7 +172,17 @@ void Map::ScriptCommandStart(ScriptInfo const& script, uint32 delay, Object* sou
     }
 }
 
-// Helpers for ScriptProcess method.
+// ==================== ScriptProcess辅助函数 ====================
+
+/**
+ * @brief 从源或目标获取玩家对象
+ * @param source 源对象
+ * @param target 目标对象
+ * @param scriptInfo 脚本信息（用于日志）
+ * @return 玩家指针，如果找不到则返回nullptr
+ *
+ * 辅助函数，优先检查目标，然后检查源，返回找到的第一个玩家对象。
+ */
 inline Player* Map::_GetScriptPlayerSourceOrTarget(Object* source, Object* target, ScriptInfo const* scriptInfo) const
 {
     Player* player = nullptr;
@@ -106,7 +190,7 @@ inline Player* Map::_GetScriptPlayerSourceOrTarget(Object* source, Object* targe
         TC_LOG_ERROR("scripts", "{} source and target objects are NULL.", scriptInfo->GetDebugInfo());
     else
     {
-        // Check target first, then source.
+        // 优先检查目标，然后检查源
         if (target)
             player = target->ToPlayer();
         if (!player && source)
@@ -121,6 +205,14 @@ inline Player* Map::_GetScriptPlayerSourceOrTarget(Object* source, Object* targe
     return player;
 }
 
+/**
+ * @brief 从源或目标获取生物对象
+ * @param source 源对象
+ * @param target 目标对象
+ * @param scriptInfo 脚本信息
+ * @param bReverse 是否反向查找（先target后source）
+ * @return 生物指针，如果找不到则返回nullptr
+ */
 inline Creature* Map::_GetScriptCreatureSourceOrTarget(Object* source, Object* target, ScriptInfo const* scriptInfo, bool bReverse) const
 {
     Creature* creature = nullptr;
@@ -130,7 +222,7 @@ inline Creature* Map::_GetScriptCreatureSourceOrTarget(Object* source, Object* t
     {
         if (bReverse)
         {
-            // Check target first, then source.
+            // 反向查找：先检查目标，然后检查源
             if (target)
                 creature = target->ToCreature();
             if (!creature && source)
@@ -138,7 +230,7 @@ inline Creature* Map::_GetScriptCreatureSourceOrTarget(Object* source, Object* t
         }
         else
         {
-            // Check source first, then target.
+            // 正向查找：先检查源，然后检查目标
             if (source)
                 creature = source->ToCreature();
             if (!creature && target)
@@ -154,6 +246,14 @@ inline Creature* Map::_GetScriptCreatureSourceOrTarget(Object* source, Object* t
     return creature;
 }
 
+/**
+ * @brief 从源或目标获取游戏对象
+ * @param source 源对象
+ * @param target 目标对象
+ * @param scriptInfo 脚本信息
+ * @param bReverse 是否反向查找
+ * @return 游戏对象指针，如果找不到则返回nullptr
+ */
 inline GameObject* Map::_GetScriptGameObjectSourceOrTarget(Object* source, Object* target, ScriptInfo const* scriptInfo, bool bReverse) const
 {
     GameObject* gameobject = nullptr;
@@ -163,7 +263,7 @@ inline GameObject* Map::_GetScriptGameObjectSourceOrTarget(Object* source, Objec
     {
         if (bReverse)
         {
-            // Check target first, then source.
+            // 反向查找
             if (target)
                 gameobject = target->ToGameObject();
             if (!gameobject && source)
@@ -171,7 +271,7 @@ inline GameObject* Map::_GetScriptGameObjectSourceOrTarget(Object* source, Objec
         }
         else
         {
-            // Check source first, then target.
+            // 正向查找
             if (source)
                 gameobject = source->ToGameObject();
             if (!gameobject && target)
@@ -187,6 +287,13 @@ inline GameObject* Map::_GetScriptGameObjectSourceOrTarget(Object* source, Objec
     return gameobject;
 }
 
+/**
+ * @brief 获取单位对象
+ * @param obj 对象指针
+ * @param isSource 是否为源对象（用于日志）
+ * @param scriptInfo 脚本信息
+ * @return 单位指针，如果失败则返回nullptr
+ */
 inline Unit* Map::_GetScriptUnit(Object* obj, bool isSource, ScriptInfo const* scriptInfo) const
 {
     Unit* unit = nullptr;
@@ -205,6 +312,13 @@ inline Unit* Map::_GetScriptUnit(Object* obj, bool isSource, ScriptInfo const* s
     return unit;
 }
 
+/**
+ * @brief 获取玩家对象
+ * @param obj 对象指针
+ * @param isSource 是否为源对象
+ * @param scriptInfo 脚本信息
+ * @return 玩家指针，如果失败则返回nullptr
+ */
 inline Player* Map::_GetScriptPlayer(Object* obj, bool isSource, ScriptInfo const* scriptInfo) const
 {
     Player* player = nullptr;
@@ -220,6 +334,13 @@ inline Player* Map::_GetScriptPlayer(Object* obj, bool isSource, ScriptInfo cons
     return player;
 }
 
+/**
+ * @brief 获取生物对象
+ * @param obj 对象指针
+ * @param isSource 是否为源对象
+ * @param scriptInfo 脚本信息
+ * @return 生物指针，如果失败则返回nullptr
+ */
 inline Creature* Map::_GetScriptCreature(Object* obj, bool isSource, ScriptInfo const* scriptInfo) const
 {
     Creature* creature = nullptr;
@@ -235,6 +356,13 @@ inline Creature* Map::_GetScriptCreature(Object* obj, bool isSource, ScriptInfo 
     return creature;
 }
 
+/**
+ * @brief 获取世界对象
+ * @param obj 对象指针
+ * @param isSource 是否为源对象
+ * @param scriptInfo 脚本信息
+ * @return 世界对象指针，如果失败则返回nullptr
+ */
 inline WorldObject* Map::_GetScriptWorldObject(Object* obj, bool isSource, ScriptInfo const* scriptInfo) const
 {
     WorldObject* pWorldObject = nullptr;
@@ -251,11 +379,29 @@ inline WorldObject* Map::_GetScriptWorldObject(Object* obj, bool isSource, Scrip
     return pWorldObject;
 }
 
+/**
+ * @brief 处理门开关脚本命令
+ * @param source 源对象
+ * @param target 目标对象
+ * @param scriptInfo 脚本信息
+ *
+ * 处理 SCRIPT_COMMAND_OPEN_DOOR 和 SCRIPT_COMMAND_CLOSE_DOOR 命令。
+ * 找到指定的门游戏对象，并切换其开关状态。
+ *
+ * 流程：
+ * 1. 确定操作类型（打开/关闭）
+ * 2. 验证门GUID和源对象
+ * 3. 查找门游戏对象
+ * 4. 切换门状态
+ * 5. 如果目标是按钮，也切换按钮状态
+ */
 inline void Map::_ScriptProcessDoor(Object* source, Object* target, ScriptInfo const* scriptInfo) const
 {
     bool bOpen = false;
     ObjectGuid::LowType guid = scriptInfo->ToggleDoor.GOGuid;
     int32 nTimeToToggle = std::max(15, int32(scriptInfo->ToggleDoor.ResetDelay));
+
+    // 确定操作类型
     switch (scriptInfo->command)
     {
         case SCRIPT_COMMAND_OPEN_DOOR: bOpen = true; break;
@@ -264,6 +410,8 @@ inline void Map::_ScriptProcessDoor(Object* source, Object* target, ScriptInfo c
             TC_LOG_ERROR("scripts", "{} unknown command for _ScriptProcessDoor.", scriptInfo->GetDebugInfo());
             return;
     }
+
+    // 验证门GUID
     if (!guid)
         TC_LOG_ERROR("scripts", "{} door guid is not specified.", scriptInfo->GetDebugInfo());
     else if (!source)
@@ -273,22 +421,29 @@ inline void Map::_ScriptProcessDoor(Object* source, Object* target, ScriptInfo c
             source->GetGUID().ToString());
     else
     {
+        // 将源对象转换为世界对象（用于查找游戏对象）
         WorldObject* wSource = dynamic_cast <WorldObject*> (source);
         if (!wSource)
             TC_LOG_ERROR("scripts", "{} source object could not be cast to world object {}, skipping.",
                 scriptInfo->GetDebugInfo(), source->GetGUID().ToString());
         else
         {
+            // 查找门游戏对象
             GameObject* pDoor = _FindGameObject(wSource, guid);
             if (!pDoor)
                 TC_LOG_ERROR("scripts", "{} gameobject was not found (guid: {}).", scriptInfo->GetDebugInfo(), guid);
             else if (pDoor->GetGoType() != GAMEOBJECT_TYPE_DOOR)
                 TC_LOG_ERROR("scripts", "{} gameobject is not a door (GoType: {}, {}).",
                     scriptInfo->GetDebugInfo(), pDoor->GetGoType(), pDoor->GetGUID().ToString());
+            // 检查门状态是否需要切换
+            // bOpen == true 且门是关闭状态（GO_STATE_READY）才打开
+            // bOpen == false 且门是打开状态才关闭
             else if (bOpen == (pDoor->GetGoState() == GO_STATE_READY))
             {
+                // 切换门状态
                 pDoor->UseDoorOrButton(nTimeToToggle);
 
+                // 如果目标是按钮，也切换按钮状态
                 if (GameObject* goTarget = Object::ToGameObject(target))
                 {
                     if (goTarget && goTarget->GetGoType() == GAMEOBJECT_TYPE_BUTTON)

@@ -15,6 +15,25 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file cs_misc.cpp
+ * @brief 杂项命令模块
+ *
+ * 本模块实现了游戏内各种杂项 GM 命令,包括:
+ * - 物品添加和套装管理
+ * - 传送和召唤功能
+ * - 光环和视野绑定管理
+ * - 战斗控制和伤害处理
+ * - 玩家冻结和解冻
+ * - GPS 定位和距离测量
+ * - 技能和区域显示管理
+ * - 踢出和禁言管理
+ * - 墓地链接和复活功能
+ * - 天气控制和邮箱访问
+ *
+ * 这些命令覆盖了服务器管理的大部分常用功能。
+ */
+
 #include "ScriptMgr.h"
 #include "AccountMgr.h"
 #include "ArenaTeamMgr.h"
@@ -63,11 +82,29 @@
 
 using namespace Trinity::ChatCommands;
 
+/**
+ * @class misc_commandscript
+ * @brief 杂项命令脚本类
+ *
+ * 继承自 CommandScript,负责注册和处理所有杂项相关的 GM 命令。
+ * 提供了丰富的工作室管理和玩家管理功能。
+ */
 class misc_commandscript : public CommandScript
 {
 public:
+    /**
+     * @brief 构造函数
+     *
+     * 初始化杂项命令脚本,设置脚本名称为 "misc_commandscript"
+     */
     misc_commandscript() : CommandScript("misc_commandscript") { }
 
+    /**
+     * @brief 获取命令表
+     * @return 返回所有杂项命令的注册表
+     *
+     * 注册所有杂项命令,包括物品、传送、光环、战斗、技能等管理功能
+     */
     ChatCommandTable GetCommands() const override
     {
         static ChatCommandTable commandTable =
@@ -129,6 +166,18 @@ public:
         return commandTable;
     }
 
+    /**
+     * @brief 处理PvP统计命令
+     * @param handler 聊天处理器,用于发送消息
+     * @return true 表示命令执行成功,false 表示统计功能未启用或查询失败
+     *
+     * 调用时机: 当 GM 使用 .pvpstats 命令时
+     * 性能注意事项:
+     * - 查询角色数据库获取阵营胜负统计
+     * - 仅在 CONFIG_BATTLEGROUND_STORE_STATISTICS_ENABLE 启用时可用
+     *
+     * 输出格式: 显示联盟和部落的胜利次数
+     */
     static bool HandlePvPstatsCommand(ChatHandler* handler)
     {
         if (sWorld->getBoolConfig(CONFIG_BATTLEGROUND_STORE_STATISTICS_ENABLE))
@@ -158,6 +207,19 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理开发者模式切换命令
+     * @param handler 聊天处理器,用于发送消息和获取会话信息
+     * @param enableArg 可选参数,用于开启/关闭开发者模式,不提供则查询当前状态
+     * @return true 表示命令执行成功
+     *
+     * 调用时机: 当 GM 使用 .dev 命令时
+     * 性能注意事项: 仅修改玩家标志位,性能开销极小
+     *
+     * 功能说明:
+     * - 开发者模式用于测试和调试
+     * - 无参数时显示当前开发者模式状态
+     */
     static bool HandleDevCommand(ChatHandler* handler, Optional<bool> enableArg)
     {
         Player* player = handler->GetSession()->GetPlayer();
@@ -182,6 +244,26 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理GPS定位命令
+     * @param handler 聊天处理器,用于发送消息和获取会话信息
+     * @param args 可选参数,包含目标对象的GUID链接,不提供则使用选中对象
+     * @return true 表示命令执行成功,false 表示参数错误或对象未找到
+     *
+     * 调用时机: 当 GM 使用 .gps 命令时
+     * 性能注意事项:
+     * - 需要查询地图、区域、单元格等多种数据
+     * - 检查地图文件存在性(Map/VMap/MMap)
+     * - 计算液体状态和高度信息
+     *
+     * 输出信息包括:
+     * - 地图ID、名称、区域ID和名称
+     * - 坐标(X/Y/Z/O)、相位掩码
+     * - 单元格和网格坐标
+     * - 地面高度、地板高度、最低高度
+     * - 地图文件存在性标记
+     * - 液体状态(如果有)
+     */
     static bool HandleGPSCommand(ChatHandler* handler, char const* args)
     {
         WorldObject* object = nullptr;
@@ -303,6 +385,19 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理光环添加命令
+     * @param handler 聊天处理器,用于发送消息和获取会话信息
+     * @param spell 要添加的光环法术信息
+     * @return true 表示命令执行成功,false 表示未选中目标或法术无效
+     *
+     * 调用时机: 当 GM 使用 .aura 命令时
+     * 性能注意事项:
+     * - 创建光环对象并添加到目标
+     * - 性能开销取决于光环的复杂度
+     *
+     * 功能说明: 为选中的单位添加指定的光环效果
+     */
     static bool HandleAuraCommand(ChatHandler* handler, SpellInfo const* spell)
     {
         Unit* target = handler->getSelectedUnit();
@@ -324,6 +419,21 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理光环移除命令
+     * @param handler 聊天处理器,用于发送消息和获取会话信息
+     * @param spellArg 光环参数,可以是法术信息或"all"字符串
+     * @return true 表示命令执行成功,false 表示未选中目标
+     *
+     * 调用时机: 当 GM 使用 .unaura 命令时
+     * 性能注意事项:
+     * - 移除所有光环时需遍历所有光环
+     * - 移除单个光环时按法术ID查找
+     *
+     * 功能说明:
+     * - ".unaura all" 移除目标所有光环
+     * - ".unaura <spellid>" 移除指定光环
+     */
     static bool HandleUnAuraCommand(ChatHandler* handler, Variant<SpellInfo const*, EXACT_SEQUENCE("all")> spellArg)
     {
         Unit* target = handler->getSelectedUnit();
@@ -349,6 +459,28 @@ public:
         return false;
     }
 
+    /**
+     * @brief 处理传送到玩家命令
+     * @param handler 聊天处理器,用于发送消息和获取会话信息
+     * @param args 玩家名称或GUID
+     * @return true 表示命令执行成功,false 表示参数错误或权限不足
+     *
+     * 调用时机: 当 GM 使用 .appear 命令时
+     * 性能注意事项:
+     * - 需要查找目标玩家,可能涉及数据库查询(离线玩家)
+     * - 传送操作需要保存回程位置
+     *
+     * 权限检查:
+     * - 不能传送到自己
+     * - 需要检查安全等级
+     * - 传送到战场/竞技场需要GM模式
+     * - 传送到副本需要符合组队规则或GM模式
+     *
+     * 特殊处理:
+     * - 自动绑定副本进度
+     * - 同步难度设置
+     * - 设置相位掩码
+     */
     // Teleport to Player
     static bool HandleAppearCommand(ChatHandler* handler, char const* args)
     {
@@ -490,6 +622,28 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理召唤玩家命令
+     * @param handler 聊天处理器,用于发送消息和获取会话信息
+     * @param args 玩家名称或GUID
+     * @return true 表示命令执行成功,false 表示参数错误或权限不足
+     *
+     * 调用时机: 当 GM 使用 .summon 命令时
+     * 性能注意事项:
+     * - 需要查找目标玩家,可能涉及数据库查询(离线玩家)
+     * - 传送操作需要保存回程位置
+     *
+     * 权限检查:
+     * - 不能召唤自己
+     * - 需要检查安全等级
+     * - 召唤到战场/竞技场需要GM模式
+     * - 召唤到副本有严格限制
+     *
+     * 特殊处理:
+     * - 目标正在传送时不能召唤
+     * - 处理副本和战场逻辑
+     * - 同步相位掩码
+     */
     // Summon Player
     static bool HandleSummonCommand(ChatHandler* handler, char const* args)
     {
@@ -2646,6 +2800,12 @@ public:
     }
 };
 
+/**
+ * @brief 注册杂项命令脚本
+ *
+ * 此函数由脚本系统在启动时调用,用于创建并注册 misc_commandscript 实例。
+ * 使杂项命令在游戏中可用。
+ */
 void AddSC_misc_commandscript()
 {
     new misc_commandscript();

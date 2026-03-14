@@ -15,6 +15,28 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file instance_serpent_shrine.cpp
+ * @brief 毒蛇神殿副本实例脚本
+ *
+ * 本文件实现了毒蛇神殿副本的实例管理逻辑，包括：
+ * - BOSS战斗状态管理（6个BOSS）
+ * - 副本内游戏对象管理（控制台、桥梁）
+ * - 水面状态管理（沸腾水/鱼人群）
+ * - 瓦斯琪BOSS战护盾发生器状态追踪
+ * - 副本小怪击杀计数
+ *
+ * 副本BOSS列表：
+ * 0 - 不稳定的海度斯（Hydross The Unstable）
+ * 1 - 盲眼者莱欧瑟拉斯（Leotheras The Blind）
+ * 2 - 潜伏者（The Lurker Below）
+ * 3 - 深水领主卡拉瑟雷斯（Fathom-Lord Karathress）
+ * 4 - 莫洛格里·踏潮者（Morogrim Tidewalker）
+ * 5 - 瓦斯琪女士（Lady Vashj）
+ *
+ * @see serpent_shrine.h 副本相关定义头文件
+ */
+
 /* ScriptData
 SDName: Instance_Serpent_Shrine
 SD%Complete: 100
@@ -32,25 +54,32 @@ EndScriptData */
 #include "serpent_shrine.h"
 #include "TemporarySummon.h"
 
+// 副本中BOSS遭遇战数量
 #define MAX_ENCOUNTER 6
 
+/**
+ * @brief 副本杂项枚举定义
+ */
 enum Misc
 {
-    // Spells
-    SPELL_SCALDINGWATER             = 37284,
+    // 法术ID
+    SPELL_SCALDINGWATER             = 37284,  // 沸腾水法术（对水中玩家造成伤害）
 
-    // Creatures
-    NPC_COILFANG_FRENZY             = 21508,
-    NPC_COILFANG_PRIESTESS          = 21220,
-    NPC_COILFANG_SHATTERER          = 21301,
+    // 生物ID
+    NPC_COILFANG_FRENZY             = 21508,  // 盘牙狂鱼（水中生成的攻击性鱼群）
+    NPC_COILFANG_PRIESTESS          = 21220,  // 盘牙女祭司（平台上的小怪）
+    NPC_COILFANG_SHATTERER          = 21301,  // 盘牙粉碎者（平台上的小怪）
 
-    // Misc
-    MIN_KILLS                       = 30
+    // 杂项
+    MIN_KILLS                       = 30      // 最小击杀数量（激活沸腾水需要击杀的平台小怪数）
 };
 
-//NOTE: there are 6 platforms
-//there should be 3 shatterers and 2 priestess on all platforms, total of 30 elites, else it won't work!
-//delete all other elites not on platforms! these mobs should only be on those platforms nowhere else.
+/**
+ * 平台小怪说明：
+ * 副本中有6个平台，每个平台有3个粉碎者和2个女祭司，总共30个精英怪
+ * 击杀全部30个平台小怪后，水中的鱼群将停止生成，水面变为沸腾状态
+ * 只计算平台上的小怪，其他位置的小怪不计入
+ */
 
 /* Serpentshrine cavern encounters:
 0 - Hydross The Unstable event

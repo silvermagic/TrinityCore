@@ -15,174 +15,266 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file UpdateFields.h
+ * @brief 游戏对象更新字段定义
+ *
+ * 本文件定义了所有游戏对象的更新字段枚举,用于服务器与客户端之间的状态同步。
+ * 这些字段采用偏移量方式组织,支持继承式的字段布局:
+ * - Object: 所有对象的基类字段
+ * - Item: 继承 Object,物品对象字段
+ * - Container: 继承 Item,容器对象字段
+ * - Unit: 继承 Object,单位对象字段(Player/Creature)
+ * - GameObject: 继承 Object,游戏对象字段
+ * - DynamicObject: 继承 Object,动态对象字段
+ * - Corpse: 继承 Object,尸体对象字段
+ *
+ * 字段属性说明:
+ * - Size: 字段占用的 32 位字数量
+ * - Type: 数据类型(LONG/INT/FLOAT/BYTES/TWO_SHORT)
+ * - Flags: 可见性标志(PUBLIC/PRIVATE/OWNER/DYNAMIC 等)
+ *
+ * @note 此文件为自动生成,对应客户端版本 3.3.5 (12340)
+ */
+
 #ifndef _UPDATEFIELDS_AUTO_H
 #define _UPDATEFIELDS_AUTO_H
 
 // Auto generated for version 3, 3, 5, 12340
 
+/**
+ * @brief 基础对象字段枚举
+ *
+ * 所有游戏对象的基类字段,定义了对象的基本属性。
+ * 所有其他对象类型(Item/Unit/GameObject等)都从这些字段开始继承。
+ */
 enum EObjectFields
 {
-    OBJECT_FIELD_GUID                         = 0x0000, // Size: 2, Type: LONG, Flags: PUBLIC
-    OBJECT_FIELD_TYPE                         = 0x0002, // Size: 1, Type: INT, Flags: PUBLIC
-    OBJECT_FIELD_ENTRY                        = 0x0003, // Size: 1, Type: INT, Flags: PUBLIC
-    OBJECT_FIELD_SCALE_X                      = 0x0004, // Size: 1, Type: FLOAT, Flags: PUBLIC
-    OBJECT_FIELD_PADDING                      = 0x0005, // Size: 1, Type: INT, Flags: NONE
-    OBJECT_END                                = 0x0006
+    OBJECT_FIELD_GUID                         = 0x0000, ///< 对象的全局唯一标识符 (Size: 2, Type: LONG, Flags: PUBLIC)
+    OBJECT_FIELD_TYPE                         = 0x0002, ///< 对象类型掩码,标识对象的具体类型 (Size: 1, Type: INT, Flags: PUBLIC)
+    OBJECT_FIELD_ENTRY                        = 0x0003, ///< 模板 ID,对应数据库中的模板条目 (Size: 1, Type: INT, Flags: PUBLIC)
+    OBJECT_FIELD_SCALE_X                      = 0x0004, ///< 对象的缩放比例,1.0 为正常大小 (Size: 1, Type: FLOAT, Flags: PUBLIC)
+    OBJECT_FIELD_PADDING                      = 0x0005, ///< 对齐填充字段,未使用 (Size: 1, Type: INT, Flags: NONE)
+    OBJECT_END                                = 0x0006  ///< Object 字段结束标记,子类从此偏移开始
 };
 
+/**
+ * @brief 物品对象字段枚举
+ *
+ * 继承自 Object 字段,定义了所有物品(装备/消耗品等)的公共属性。
+ * 包含物品的所有者、附魔、耐久度、堆叠数量等信息。
+ */
 enum EItemFields
 {
-    ITEM_FIELD_OWNER                          = OBJECT_END + 0x0000, // Size: 2, Type: LONG, Flags: PUBLIC
-    ITEM_FIELD_CONTAINED                      = OBJECT_END + 0x0002, // Size: 2, Type: LONG, Flags: PUBLIC
-    ITEM_FIELD_CREATOR                        = OBJECT_END + 0x0004, // Size: 2, Type: LONG, Flags: PUBLIC
-    ITEM_FIELD_GIFTCREATOR                    = OBJECT_END + 0x0006, // Size: 2, Type: LONG, Flags: PUBLIC
-    ITEM_FIELD_STACK_COUNT                    = OBJECT_END + 0x0008, // Size: 1, Type: INT, Flags: OWNER, ITEM_OWNER
-    ITEM_FIELD_DURATION                       = OBJECT_END + 0x0009, // Size: 1, Type: INT, Flags: OWNER, ITEM_OWNER
-    ITEM_FIELD_SPELL_CHARGES                  = OBJECT_END + 0x000A, // Size: 5, Type: INT, Flags: OWNER, ITEM_OWNER
-    ITEM_FIELD_FLAGS                          = OBJECT_END + 0x000F, // Size: 1, Type: INT, Flags: PUBLIC
-    ITEM_FIELD_ENCHANTMENT_1_1                = OBJECT_END + 0x0010, // Size: 2, Type: INT, Flags: PUBLIC
-    ITEM_FIELD_ENCHANTMENT_1_3                = OBJECT_END + 0x0012, // Size: 1, Type: TWO_SHORT, Flags: PUBLIC
-    ITEM_FIELD_ENCHANTMENT_2_1                = OBJECT_END + 0x0013, // Size: 2, Type: INT, Flags: PUBLIC
-    ITEM_FIELD_ENCHANTMENT_2_3                = OBJECT_END + 0x0015, // Size: 1, Type: TWO_SHORT, Flags: PUBLIC
-    ITEM_FIELD_ENCHANTMENT_3_1                = OBJECT_END + 0x0016, // Size: 2, Type: INT, Flags: PUBLIC
-    ITEM_FIELD_ENCHANTMENT_3_3                = OBJECT_END + 0x0018, // Size: 1, Type: TWO_SHORT, Flags: PUBLIC
-    ITEM_FIELD_ENCHANTMENT_4_1                = OBJECT_END + 0x0019, // Size: 2, Type: INT, Flags: PUBLIC
-    ITEM_FIELD_ENCHANTMENT_4_3                = OBJECT_END + 0x001B, // Size: 1, Type: TWO_SHORT, Flags: PUBLIC
-    ITEM_FIELD_ENCHANTMENT_5_1                = OBJECT_END + 0x001C, // Size: 2, Type: INT, Flags: PUBLIC
-    ITEM_FIELD_ENCHANTMENT_5_3                = OBJECT_END + 0x001E, // Size: 1, Type: TWO_SHORT, Flags: PUBLIC
-    ITEM_FIELD_ENCHANTMENT_6_1                = OBJECT_END + 0x001F, // Size: 2, Type: INT, Flags: PUBLIC
-    ITEM_FIELD_ENCHANTMENT_6_3                = OBJECT_END + 0x0021, // Size: 1, Type: TWO_SHORT, Flags: PUBLIC
-    ITEM_FIELD_ENCHANTMENT_7_1                = OBJECT_END + 0x0022, // Size: 2, Type: INT, Flags: PUBLIC
-    ITEM_FIELD_ENCHANTMENT_7_3                = OBJECT_END + 0x0024, // Size: 1, Type: TWO_SHORT, Flags: PUBLIC
-    ITEM_FIELD_ENCHANTMENT_8_1                = OBJECT_END + 0x0025, // Size: 2, Type: INT, Flags: PUBLIC
-    ITEM_FIELD_ENCHANTMENT_8_3                = OBJECT_END + 0x0027, // Size: 1, Type: TWO_SHORT, Flags: PUBLIC
-    ITEM_FIELD_ENCHANTMENT_9_1                = OBJECT_END + 0x0028, // Size: 2, Type: INT, Flags: PUBLIC
-    ITEM_FIELD_ENCHANTMENT_9_3                = OBJECT_END + 0x002A, // Size: 1, Type: TWO_SHORT, Flags: PUBLIC
-    ITEM_FIELD_ENCHANTMENT_10_1               = OBJECT_END + 0x002B, // Size: 2, Type: INT, Flags: PUBLIC
-    ITEM_FIELD_ENCHANTMENT_10_3               = OBJECT_END + 0x002D, // Size: 1, Type: TWO_SHORT, Flags: PUBLIC
-    ITEM_FIELD_ENCHANTMENT_11_1               = OBJECT_END + 0x002E, // Size: 2, Type: INT, Flags: PUBLIC
-    ITEM_FIELD_ENCHANTMENT_11_3               = OBJECT_END + 0x0030, // Size: 1, Type: TWO_SHORT, Flags: PUBLIC
-    ITEM_FIELD_ENCHANTMENT_12_1               = OBJECT_END + 0x0031, // Size: 2, Type: INT, Flags: PUBLIC
-    ITEM_FIELD_ENCHANTMENT_12_3               = OBJECT_END + 0x0033, // Size: 1, Type: TWO_SHORT, Flags: PUBLIC
-    ITEM_FIELD_PROPERTY_SEED                  = OBJECT_END + 0x0034, // Size: 1, Type: INT, Flags: PUBLIC
-    ITEM_FIELD_RANDOM_PROPERTIES_ID           = OBJECT_END + 0x0035, // Size: 1, Type: INT, Flags: PUBLIC
-    ITEM_FIELD_DURABILITY                     = OBJECT_END + 0x0036, // Size: 1, Type: INT, Flags: OWNER, ITEM_OWNER
-    ITEM_FIELD_MAXDURABILITY                  = OBJECT_END + 0x0037, // Size: 1, Type: INT, Flags: OWNER, ITEM_OWNER
-    ITEM_FIELD_CREATE_PLAYED_TIME             = OBJECT_END + 0x0038, // Size: 1, Type: INT, Flags: PUBLIC
-    ITEM_FIELD_PAD                            = OBJECT_END + 0x0039, // Size: 1, Type: INT, Flags: NONE
-    ITEM_END                                  = OBJECT_END + 0x003A
+    ITEM_FIELD_OWNER                          = OBJECT_END + 0x0000, ///< 物品所有者的 GUID (Size: 2, Type: LONG, Flags: PUBLIC)
+    ITEM_FIELD_CONTAINED                      = OBJECT_END + 0x0002, ///< 包含此物品的容器 GUID (Size: 2, Type: LONG, Flags: PUBLIC)
+    ITEM_FIELD_CREATOR                        = OBJECT_END + 0x0004, ///< 创建此物品的玩家 GUID (Size: 2, Type: LONG, Flags: PUBLIC)
+    ITEM_FIELD_GIFTCREATOR                    = OBJECT_END + 0x0006, ///< 赠送此物品的玩家 GUID (Size: 2, Type: LONG, Flags: PUBLIC)
+    ITEM_FIELD_STACK_COUNT                    = OBJECT_END + 0x0008, ///< 堆叠数量 (Size: 1, Type: INT, Flags: OWNER, ITEM_OWNER)
+    ITEM_FIELD_DURATION                       = OBJECT_END + 0x0009, ///< 物品持续时间(秒),0 表示永久 (Size: 1, Type: INT, Flags: OWNER, ITEM_OWNER)
+    ITEM_FIELD_SPELL_CHARGES                  = OBJECT_END + 0x000A, ///< 物品法术充能数量数组[5] (Size: 5, Type: INT, Flags: OWNER, ITEM_OWNER)
+    ITEM_FIELD_FLAGS                          = OBJECT_END + 0x000F, ///< 物品标志位 (Size: 1, Type: INT, Flags: PUBLIC)
+    ITEM_FIELD_ENCHANTMENT_1_1                = OBJECT_END + 0x0010, ///< 附魔槽 1: 附魔 ID (Size: 2, Type: INT, Flags: PUBLIC)
+    ITEM_FIELD_ENCHANTMENT_1_3                = OBJECT_END + 0x0012, ///< 附魔槽 1: 持续时间和 charges (Size: 1, Type: TWO_SHORT, Flags: PUBLIC)
+    ITEM_FIELD_ENCHANTMENT_2_1                = OBJECT_END + 0x0013, ///< 附魔槽 2: 附魔 ID (Size: 2, Type: INT, Flags: PUBLIC)
+    ITEM_FIELD_ENCHANTMENT_2_3                = OBJECT_END + 0x0015, ///< 附魔槽 2: 持续时间和 charges (Size: 1, Type: TWO_SHORT, Flags: PUBLIC)
+    ITEM_FIELD_ENCHANTMENT_3_1                = OBJECT_END + 0x0016, ///< 附魔槽 3: 附魔 ID (Size: 2, Type: INT, Flags: PUBLIC)
+    ITEM_FIELD_ENCHANTMENT_3_3                = OBJECT_END + 0x0018, ///< 附魔槽 3: 持续时间和 charges (Size: 1, Type: TWO_SHORT, Flags: PUBLIC)
+    ITEM_FIELD_ENCHANTMENT_4_1                = OBJECT_END + 0x0019, ///< 附魔槽 4: 附魔 ID (Size: 2, Type: INT, Flags: PUBLIC)
+    ITEM_FIELD_ENCHANTMENT_4_3                = OBJECT_END + 0x001B, ///< 附魔槽 4: 持续时间和 charges (Size: 1, Type: TWO_SHORT, Flags: PUBLIC)
+    ITEM_FIELD_ENCHANTMENT_5_1                = OBJECT_END + 0x001C, ///< 附魔槽 5: 附魔 ID (Size: 2, Type: INT, Flags: PUBLIC)
+    ITEM_FIELD_ENCHANTMENT_5_3                = OBJECT_END + 0x001E, ///< 附魔槽 5: 持续时间和 charges (Size: 1, Type: TWO_SHORT, Flags: PUBLIC)
+    ITEM_FIELD_ENCHANTMENT_6_1                = OBJECT_END + 0x001F, ///< 附魔槽 6: 附魔 ID (Size: 2, Type: INT, Flags: PUBLIC)
+    ITEM_FIELD_ENCHANTMENT_6_3                = OBJECT_END + 0x0021, ///< 附魔槽 6: 持续时间和 charges (Size: 1, Type: TWO_SHORT, Flags: PUBLIC)
+    ITEM_FIELD_ENCHANTMENT_7_1                = OBJECT_END + 0x0022, ///< 附魔槽 7: 附魔 ID (Size: 2, Type: INT, Flags: PUBLIC)
+    ITEM_FIELD_ENCHANTMENT_7_3                = OBJECT_END + 0x0024, ///< 附魔槽 7: 持续时间和 charges (Size: 1, Type: TWO_SHORT, Flags: PUBLIC)
+    ITEM_FIELD_ENCHANTMENT_8_1                = OBJECT_END + 0x0025, ///< 附魔槽 8: 附魔 ID (Size: 2, Type: INT, Flags: PUBLIC)
+    ITEM_FIELD_ENCHANTMENT_8_3                = OBJECT_END + 0x0027, ///< 附魔槽 8: 持续时间和 charges (Size: 1, Type: TWO_SHORT, Flags: PUBLIC)
+    ITEM_FIELD_ENCHANTMENT_9_1                = OBJECT_END + 0x0028, ///< 附魔槽 9: 附魔 ID (Size: 2, Type: INT, Flags: PUBLIC)
+    ITEM_FIELD_ENCHANTMENT_9_3                = OBJECT_END + 0x002A, ///< 附魔槽 9: 持续时间和 charges (Size: 1, Type: TWO_SHORT, Flags: PUBLIC)
+    ITEM_FIELD_ENCHANTMENT_10_1               = OBJECT_END + 0x002B, ///< 附魔槽 10: 附魔 ID (Size: 2, Type: INT, Flags: PUBLIC)
+    ITEM_FIELD_ENCHANTMENT_10_3               = OBJECT_END + 0x002D, ///< 附魔槽 10: 持续时间和 charges (Size: 1, Type: TWO_SHORT, Flags: PUBLIC)
+    ITEM_FIELD_ENCHANTMENT_11_1               = OBJECT_END + 0x002E, ///< 附魔槽 11: 附魔 ID (Size: 2, Type: INT, Flags: PUBLIC)
+    ITEM_FIELD_ENCHANTMENT_11_3               = OBJECT_END + 0x0030, ///< 附魔槽 11: 持续时间和 charges (Size: 1, Type: TWO_SHORT, Flags: PUBLIC)
+    ITEM_FIELD_ENCHANTMENT_12_1               = OBJECT_END + 0x0031, ///< 附魔槽 12: 附魔 ID (Size: 2, Type: INT, Flags: PUBLIC)
+    ITEM_FIELD_ENCHANTMENT_12_3               = OBJECT_END + 0x0033, ///< 附魔槽 12: 持续时间和 charges (Size: 1, Type: TWO_SHORT, Flags: PUBLIC)
+    ITEM_FIELD_PROPERTY_SEED                  = OBJECT_END + 0x0034, ///< 属性随机种子,用于生成随机属性 (Size: 1, Type: INT, Flags: PUBLIC)
+    ITEM_FIELD_RANDOM_PROPERTIES_ID           = OBJECT_END + 0x0035, ///< 随机属性 ID (Size: 1, Type: INT, Flags: PUBLIC)
+    ITEM_FIELD_DURABILITY                     = OBJECT_END + 0x0036, ///< 当前耐久度 (Size: 1, Type: INT, Flags: OWNER, ITEM_OWNER)
+    ITEM_FIELD_MAXDURABILITY                  = OBJECT_END + 0x0037, ///< 最大耐久度 (Size: 1, Type: INT, Flags: OWNER, ITEM_OWNER)
+    ITEM_FIELD_CREATE_PLAYED_TIME             = OBJECT_END + 0x0038, ///< 创建者的游戏时间 (Size: 1, Type: INT, Flags: PUBLIC)
+    ITEM_FIELD_PAD                            = OBJECT_END + 0x0039, ///< 对齐填充字段 (Size: 1, Type: INT, Flags: NONE)
+    ITEM_END                                  = OBJECT_END + 0x003A  ///< Item 字段结束标记
 };
 
+/**
+ * @brief 容器对象字段枚举
+ *
+ * 继承自 Item 字段,定义了背包/银行袋等容器的属性。
+ * 包含容器槽数量和各槽位中的物品 GUID 列表。
+ */
 enum EContainerFields
 {
-    CONTAINER_FIELD_NUM_SLOTS                 = ITEM_END + 0x0000, // Size: 1, Type: INT, Flags: PUBLIC
-    CONTAINER_ALIGN_PAD                       = ITEM_END + 0x0001, // Size: 1, Type: BYTES, Flags: NONE
-    CONTAINER_FIELD_SLOT_1                    = ITEM_END + 0x0002, // Size: 72, Type: LONG, Flags: PUBLIC
-    CONTAINER_END                             = ITEM_END + 0x004A
+    CONTAINER_FIELD_NUM_SLOTS                 = ITEM_END + 0x0000, ///< 容器可容纳的物品槽位数量 (Size: 1, Type: INT, Flags: PUBLIC)
+    CONTAINER_ALIGN_PAD                       = ITEM_END + 0x0001, ///< 对齐填充字段 (Size: 1, Type: BYTES, Flags: NONE)
+    CONTAINER_FIELD_SLOT_1                    = ITEM_END + 0x0002, ///< 容器槽位数组,存储每个槽位中物品的 GUID (Size: 72, Type: LONG, Flags: PUBLIC)
+    CONTAINER_END                             = ITEM_END + 0x004A  ///< Container 字段结束标记
 };
 
+/**
+ * @brief 单位对象字段枚举
+ *
+ * 继承自 Object 字段,定义了所有单位(Player/Creature/Pet)的公共属性。
+ * 包含生命值、法力值、属性、抗性、战斗属性等核心数据。
+ *
+ * 注意:此枚举同时包含 Player 字段定义,从 UNIT_END 开始延伸。
+ */
 enum EUnitFields
 {
-    UNIT_FIELD_CHARM                          = OBJECT_END + 0x0000, // Size: 2, Type: LONG, Flags: PUBLIC
-    UNIT_FIELD_SUMMON                         = OBJECT_END + 0x0002, // Size: 2, Type: LONG, Flags: PUBLIC
-    UNIT_FIELD_CRITTER                        = OBJECT_END + 0x0004, // Size: 2, Type: LONG, Flags: PRIVATE
-    UNIT_FIELD_CHARMEDBY                      = OBJECT_END + 0x0006, // Size: 2, Type: LONG, Flags: PUBLIC
-    UNIT_FIELD_SUMMONEDBY                     = OBJECT_END + 0x0008, // Size: 2, Type: LONG, Flags: PUBLIC
-    UNIT_FIELD_CREATEDBY                      = OBJECT_END + 0x000A, // Size: 2, Type: LONG, Flags: PUBLIC
-    UNIT_FIELD_TARGET                         = OBJECT_END + 0x000C, // Size: 2, Type: LONG, Flags: PUBLIC
-    UNIT_FIELD_CHANNEL_OBJECT                 = OBJECT_END + 0x000E, // Size: 2, Type: LONG, Flags: PUBLIC
-    UNIT_CHANNEL_SPELL                        = OBJECT_END + 0x0010, // Size: 1, Type: INT, Flags: PUBLIC
-    UNIT_FIELD_BYTES_0                        = OBJECT_END + 0x0011, // Size: 1, Type: BYTES, Flags: PUBLIC
-    UNIT_FIELD_HEALTH                         = OBJECT_END + 0x0012, // Size: 1, Type: INT, Flags: PUBLIC
-    UNIT_FIELD_POWER1                         = OBJECT_END + 0x0013, // Size: 1, Type: INT, Flags: PUBLIC
-    UNIT_FIELD_POWER2                         = OBJECT_END + 0x0014, // Size: 1, Type: INT, Flags: PUBLIC
-    UNIT_FIELD_POWER3                         = OBJECT_END + 0x0015, // Size: 1, Type: INT, Flags: PUBLIC
-    UNIT_FIELD_POWER4                         = OBJECT_END + 0x0016, // Size: 1, Type: INT, Flags: PUBLIC
-    UNIT_FIELD_POWER5                         = OBJECT_END + 0x0017, // Size: 1, Type: INT, Flags: PUBLIC
-    UNIT_FIELD_POWER6                         = OBJECT_END + 0x0018, // Size: 1, Type: INT, Flags: PUBLIC
-    UNIT_FIELD_POWER7                         = OBJECT_END + 0x0019, // Size: 1, Type: INT, Flags: PUBLIC
-    UNIT_FIELD_MAXHEALTH                      = OBJECT_END + 0x001A, // Size: 1, Type: INT, Flags: PUBLIC
-    UNIT_FIELD_MAXPOWER1                      = OBJECT_END + 0x001B, // Size: 1, Type: INT, Flags: PUBLIC
-    UNIT_FIELD_MAXPOWER2                      = OBJECT_END + 0x001C, // Size: 1, Type: INT, Flags: PUBLIC
-    UNIT_FIELD_MAXPOWER3                      = OBJECT_END + 0x001D, // Size: 1, Type: INT, Flags: PUBLIC
-    UNIT_FIELD_MAXPOWER4                      = OBJECT_END + 0x001E, // Size: 1, Type: INT, Flags: PUBLIC
-    UNIT_FIELD_MAXPOWER5                      = OBJECT_END + 0x001F, // Size: 1, Type: INT, Flags: PUBLIC
-    UNIT_FIELD_MAXPOWER6                      = OBJECT_END + 0x0020, // Size: 1, Type: INT, Flags: PUBLIC
-    UNIT_FIELD_MAXPOWER7                      = OBJECT_END + 0x0021, // Size: 1, Type: INT, Flags: PUBLIC
-    UNIT_FIELD_POWER_REGEN_FLAT_MODIFIER      = OBJECT_END + 0x0022, // Size: 7, Type: FLOAT, Flags: PRIVATE, OWNER
-    UNIT_FIELD_POWER_REGEN_INTERRUPTED_FLAT_MODIFIER = OBJECT_END + 0x0029, // Size: 7, Type: FLOAT, Flags: PRIVATE, OWNER
-    UNIT_FIELD_LEVEL                          = OBJECT_END + 0x0030, // Size: 1, Type: INT, Flags: PUBLIC
-    UNIT_FIELD_FACTIONTEMPLATE                = OBJECT_END + 0x0031, // Size: 1, Type: INT, Flags: PUBLIC
-    UNIT_VIRTUAL_ITEM_SLOT_ID                 = OBJECT_END + 0x0032, // Size: 3, Type: INT, Flags: PUBLIC
-    UNIT_FIELD_FLAGS                          = OBJECT_END + 0x0035, // Size: 1, Type: INT, Flags: PUBLIC
-    UNIT_FIELD_FLAGS_2                        = OBJECT_END + 0x0036, // Size: 1, Type: INT, Flags: PUBLIC
-    UNIT_FIELD_AURASTATE                      = OBJECT_END + 0x0037, // Size: 1, Type: INT, Flags: PUBLIC
-    UNIT_FIELD_BASEATTACKTIME                 = OBJECT_END + 0x0038, // Size: 2, Type: INT, Flags: PUBLIC
-    UNIT_FIELD_RANGEDATTACKTIME               = OBJECT_END + 0x003A, // Size: 1, Type: INT, Flags: PRIVATE
-    UNIT_FIELD_BOUNDINGRADIUS                 = OBJECT_END + 0x003B, // Size: 1, Type: FLOAT, Flags: PUBLIC
-    UNIT_FIELD_COMBATREACH                    = OBJECT_END + 0x003C, // Size: 1, Type: FLOAT, Flags: PUBLIC
-    UNIT_FIELD_DISPLAYID                      = OBJECT_END + 0x003D, // Size: 1, Type: INT, Flags: PUBLIC
-    UNIT_FIELD_NATIVEDISPLAYID                = OBJECT_END + 0x003E, // Size: 1, Type: INT, Flags: PUBLIC
-    UNIT_FIELD_MOUNTDISPLAYID                 = OBJECT_END + 0x003F, // Size: 1, Type: INT, Flags: PUBLIC
-    UNIT_FIELD_MINDAMAGE                      = OBJECT_END + 0x0040, // Size: 1, Type: FLOAT, Flags: PRIVATE, OWNER, PARTY_LEADER
-    UNIT_FIELD_MAXDAMAGE                      = OBJECT_END + 0x0041, // Size: 1, Type: FLOAT, Flags: PRIVATE, OWNER, PARTY_LEADER
-    UNIT_FIELD_MINOFFHANDDAMAGE               = OBJECT_END + 0x0042, // Size: 1, Type: FLOAT, Flags: PRIVATE, OWNER, PARTY_LEADER
-    UNIT_FIELD_MAXOFFHANDDAMAGE               = OBJECT_END + 0x0043, // Size: 1, Type: FLOAT, Flags: PRIVATE, OWNER, PARTY_LEADER
-    UNIT_FIELD_BYTES_1                        = OBJECT_END + 0x0044, // Size: 1, Type: BYTES, Flags: PUBLIC
-    UNIT_FIELD_PETNUMBER                      = OBJECT_END + 0x0045, // Size: 1, Type: INT, Flags: PUBLIC
-    UNIT_FIELD_PET_NAME_TIMESTAMP             = OBJECT_END + 0x0046, // Size: 1, Type: INT, Flags: PUBLIC
-    UNIT_FIELD_PETEXPERIENCE                  = OBJECT_END + 0x0047, // Size: 1, Type: INT, Flags: OWNER
-    UNIT_FIELD_PETNEXTLEVELEXP                = OBJECT_END + 0x0048, // Size: 1, Type: INT, Flags: OWNER
-    UNIT_DYNAMIC_FLAGS                        = OBJECT_END + 0x0049, // Size: 1, Type: INT, Flags: DYNAMIC
-    UNIT_MOD_CAST_SPEED                       = OBJECT_END + 0x004A, // Size: 1, Type: FLOAT, Flags: PUBLIC
-    UNIT_CREATED_BY_SPELL                     = OBJECT_END + 0x004B, // Size: 1, Type: INT, Flags: PUBLIC
-    UNIT_NPC_FLAGS                            = OBJECT_END + 0x004C, // Size: 1, Type: INT, Flags: DYNAMIC
-    UNIT_NPC_EMOTESTATE                       = OBJECT_END + 0x004D, // Size: 1, Type: INT, Flags: PUBLIC
-    UNIT_FIELD_STAT0                          = OBJECT_END + 0x004E, // Size: 1, Type: INT, Flags: PRIVATE, OWNER
-    UNIT_FIELD_STAT1                          = OBJECT_END + 0x004F, // Size: 1, Type: INT, Flags: PRIVATE, OWNER
-    UNIT_FIELD_STAT2                          = OBJECT_END + 0x0050, // Size: 1, Type: INT, Flags: PRIVATE, OWNER
-    UNIT_FIELD_STAT3                          = OBJECT_END + 0x0051, // Size: 1, Type: INT, Flags: PRIVATE, OWNER
-    UNIT_FIELD_STAT4                          = OBJECT_END + 0x0052, // Size: 1, Type: INT, Flags: PRIVATE, OWNER
-    UNIT_FIELD_POSSTAT0                       = OBJECT_END + 0x0053, // Size: 1, Type: INT, Flags: PRIVATE, OWNER
-    UNIT_FIELD_POSSTAT1                       = OBJECT_END + 0x0054, // Size: 1, Type: INT, Flags: PRIVATE, OWNER
-    UNIT_FIELD_POSSTAT2                       = OBJECT_END + 0x0055, // Size: 1, Type: INT, Flags: PRIVATE, OWNER
-    UNIT_FIELD_POSSTAT3                       = OBJECT_END + 0x0056, // Size: 1, Type: INT, Flags: PRIVATE, OWNER
-    UNIT_FIELD_POSSTAT4                       = OBJECT_END + 0x0057, // Size: 1, Type: INT, Flags: PRIVATE, OWNER
-    UNIT_FIELD_NEGSTAT0                       = OBJECT_END + 0x0058, // Size: 1, Type: INT, Flags: PRIVATE, OWNER
-    UNIT_FIELD_NEGSTAT1                       = OBJECT_END + 0x0059, // Size: 1, Type: INT, Flags: PRIVATE, OWNER
-    UNIT_FIELD_NEGSTAT2                       = OBJECT_END + 0x005A, // Size: 1, Type: INT, Flags: PRIVATE, OWNER
-    UNIT_FIELD_NEGSTAT3                       = OBJECT_END + 0x005B, // Size: 1, Type: INT, Flags: PRIVATE, OWNER
-    UNIT_FIELD_NEGSTAT4                       = OBJECT_END + 0x005C, // Size: 1, Type: INT, Flags: PRIVATE, OWNER
-    UNIT_FIELD_RESISTANCES                    = OBJECT_END + 0x005D, // Size: 7, Type: INT, Flags: PRIVATE, OWNER, PARTY_LEADER
-    UNIT_FIELD_RESISTANCEBUFFMODSPOSITIVE     = OBJECT_END + 0x0064, // Size: 7, Type: INT, Flags: PRIVATE, OWNER
-    UNIT_FIELD_RESISTANCEBUFFMODSNEGATIVE     = OBJECT_END + 0x006B, // Size: 7, Type: INT, Flags: PRIVATE, OWNER
-    UNIT_FIELD_BASE_MANA                      = OBJECT_END + 0x0072, // Size: 1, Type: INT, Flags: PUBLIC
-    UNIT_FIELD_BASE_HEALTH                    = OBJECT_END + 0x0073, // Size: 1, Type: INT, Flags: PRIVATE, OWNER
-    UNIT_FIELD_BYTES_2                        = OBJECT_END + 0x0074, // Size: 1, Type: BYTES, Flags: PUBLIC
-    UNIT_FIELD_ATTACK_POWER                   = OBJECT_END + 0x0075, // Size: 1, Type: INT, Flags: PRIVATE, OWNER
-    UNIT_FIELD_ATTACK_POWER_MODS              = OBJECT_END + 0x0076, // Size: 1, Type: TWO_SHORT, Flags: PRIVATE, OWNER
-    UNIT_FIELD_ATTACK_POWER_MULTIPLIER        = OBJECT_END + 0x0077, // Size: 1, Type: FLOAT, Flags: PRIVATE, OWNER
-    UNIT_FIELD_RANGED_ATTACK_POWER            = OBJECT_END + 0x0078, // Size: 1, Type: INT, Flags: PRIVATE, OWNER
-    UNIT_FIELD_RANGED_ATTACK_POWER_MODS       = OBJECT_END + 0x0079, // Size: 1, Type: TWO_SHORT, Flags: PRIVATE, OWNER
-    UNIT_FIELD_RANGED_ATTACK_POWER_MULTIPLIER = OBJECT_END + 0x007A, // Size: 1, Type: FLOAT, Flags: PRIVATE, OWNER
-    UNIT_FIELD_MINRANGEDDAMAGE                = OBJECT_END + 0x007B, // Size: 1, Type: FLOAT, Flags: PRIVATE, OWNER
-    UNIT_FIELD_MAXRANGEDDAMAGE                = OBJECT_END + 0x007C, // Size: 1, Type: FLOAT, Flags: PRIVATE, OWNER
-    UNIT_FIELD_POWER_COST_MODIFIER            = OBJECT_END + 0x007D, // Size: 7, Type: INT, Flags: PRIVATE, OWNER
-    UNIT_FIELD_POWER_COST_MULTIPLIER          = OBJECT_END + 0x0084, // Size: 7, Type: FLOAT, Flags: PRIVATE, OWNER
-    UNIT_FIELD_MAXHEALTHMODIFIER              = OBJECT_END + 0x008B, // Size: 1, Type: FLOAT, Flags: PRIVATE, OWNER
-    UNIT_FIELD_HOVERHEIGHT                    = OBJECT_END + 0x008C, // Size: 1, Type: FLOAT, Flags: PUBLIC
-    UNIT_FIELD_PADDING                        = OBJECT_END + 0x008D, // Size: 1, Type: INT, Flags: NONE
-    UNIT_END                                  = OBJECT_END + 0x008E,
+    // ==================== 控制关系字段 ====================
+    UNIT_FIELD_CHARM                          = OBJECT_END + 0x0000, ///< 被魅惑目标的 GUID (Size: 2, Type: LONG, Flags: PUBLIC)
+    UNIT_FIELD_SUMMON                         = OBJECT_END + 0x0002, ///< 召唤单位 GUID (Size: 2, Type: LONG, Flags: PUBLIC)
+    UNIT_FIELD_CRITTER                        = OBJECT_END + 0x0004, ///< 小宠物 GUID (Size: 2, Type: LONG, Flags: PRIVATE)
+    UNIT_FIELD_CHARMEDBY                      = OBJECT_END + 0x0006, ///< 魅惑者的 GUID (Size: 2, Type: LONG, Flags: PUBLIC)
+    UNIT_FIELD_SUMMONEDBY                     = OBJECT_END + 0x0008, ///< 召唤者的 GUID (Size: 2, Type: LONG, Flags: PUBLIC)
+    UNIT_FIELD_CREATEDBY                      = OBJECT_END + 0x000A, ///< 创建者的 GUID (Size: 2, Type: LONG, Flags: PUBLIC)
+    UNIT_FIELD_TARGET                         = OBJECT_END + 0x000C, ///< 当前目标 GUID (Size: 2, Type: LONG, Flags: PUBLIC)
+    UNIT_FIELD_CHANNEL_OBJECT                 = OBJECT_END + 0x000E, ///< 引导法术的目标对象 GUID (Size: 2, Type: LONG, Flags: PUBLIC)
 
-    PLAYER_DUEL_ARBITER                       = UNIT_END + 0x0000, // Size: 2, Type: LONG, Flags: PUBLIC
-    PLAYER_FLAGS                              = UNIT_END + 0x0002, // Size: 1, Type: INT, Flags: PUBLIC
-    PLAYER_GUILDID                            = UNIT_END + 0x0003, // Size: 1, Type: INT, Flags: PUBLIC
-    PLAYER_GUILDRANK                          = UNIT_END + 0x0004, // Size: 1, Type: INT, Flags: PUBLIC
-    PLAYER_BYTES                              = UNIT_END + 0x0005, // Size: 1, Type: BYTES, Flags: PUBLIC
-    PLAYER_BYTES_2                            = UNIT_END + 0x0006, // Size: 1, Type: BYTES, Flags: PUBLIC
-    PLAYER_BYTES_3                            = UNIT_END + 0x0007, // Size: 1, Type: BYTES, Flags: PUBLIC
-    PLAYER_DUEL_TEAM                          = UNIT_END + 0x0008, // Size: 1, Type: INT, Flags: PUBLIC
-    PLAYER_GUILD_TIMESTAMP                    = UNIT_END + 0x0009, // Size: 1, Type: INT, Flags: PUBLIC
+    // ==================== 法术和基础属性 ====================
+    UNIT_CHANNEL_SPELL                        = OBJECT_END + 0x0010, ///< 正在引导的法术 ID (Size: 1, Type: INT, Flags: PUBLIC)
+    UNIT_FIELD_BYTES_0                        = OBJECT_END + 0x0011, ///< 字节数据: 种族/职业/性别/能量类型 (Size: 1, Type: BYTES, Flags: PUBLIC)
+    UNIT_FIELD_HEALTH                         = OBJECT_END + 0x0012, ///< 当前生命值 (Size: 1, Type: INT, Flags: PUBLIC)
+    UNIT_FIELD_POWER1                         = OBJECT_END + 0x0013, ///< 能量值 1: 法力 (Size: 1, Type: INT, Flags: PUBLIC)
+    UNIT_FIELD_POWER2                         = OBJECT_END + 0x0014, ///< 能量值 2: 怒气 (Size: 1, Type: INT, Flags: PUBLIC)
+    UNIT_FIELD_POWER3                         = OBJECT_END + 0x0015, ///< 能量值 3: 专注 (Size: 1, Type: INT, Flags: PUBLIC)
+    UNIT_FIELD_POWER4                         = OBJECT_END + 0x0016, ///< 能量值 4: 能量 (Size: 1, Type: INT, Flags: PUBLIC)
+    UNIT_FIELD_POWER5                         = OBJECT_END + 0x0017, ///< 能量值 5: 幸福度 (Size: 1, Type: INT, Flags: PUBLIC)
+    UNIT_FIELD_POWER6                         = OBJECT_END + 0x0018, ///< 能量值 6: 符文 (Size: 1, Type: INT, Flags: PUBLIC)
+    UNIT_FIELD_POWER7                         = OBJECT_END + 0x0019, ///< 能量值 7: 符文 (Size: 1, Type: INT, Flags: PUBLIC)
+    UNIT_FIELD_MAXHEALTH                      = OBJECT_END + 0x001A, ///< 最大生命值 (Size: 1, Type: INT, Flags: PUBLIC)
+    UNIT_FIELD_MAXPOWER1                      = OBJECT_END + 0x001B, ///< 最大能量值 1: 法力 (Size: 1, Type: INT, Flags: PUBLIC)
+    UNIT_FIELD_MAXPOWER2                      = OBJECT_END + 0x001C, ///< 最大能量值 2: 怒气 (Size: 1, Type: INT, Flags: PUBLIC)
+    UNIT_FIELD_MAXPOWER3                      = OBJECT_END + 0x001D, ///< 最大能量值 3: 专注 (Size: 1, Type: INT, Flags: PUBLIC)
+    UNIT_FIELD_MAXPOWER4                      = OBJECT_END + 0x001E, ///< 最大能量值 4: 能量 (Size: 1, Type: INT, Flags: PUBLIC)
+    UNIT_FIELD_MAXPOWER5                      = OBJECT_END + 0x001F, ///< 最大能量值 5: 幸福度 (Size: 1, Type: INT, Flags: PUBLIC)
+    UNIT_FIELD_MAXPOWER6                      = OBJECT_END + 0x0020, ///< 最大能量值 6: 符文 (Size: 1, Type: INT, Flags: PUBLIC)
+    UNIT_FIELD_MAXPOWER7                      = OBJECT_END + 0x0021, ///< 最大能量值 7: 符文 (Size: 1, Type: INT, Flags: PUBLIC)
+
+    // ==================== 能量回复 ====================
+    UNIT_FIELD_POWER_REGEN_FLAT_MODIFIER      = OBJECT_END + 0x0022, ///< 能量回复修正数组[7] (Size: 7, Type: FLOAT, Flags: PRIVATE, OWNER)
+    UNIT_FIELD_POWER_REGEN_INTERRUPTED_FLAT_MODIFIER = OBJECT_END + 0x0029, ///< 受打断的能量回复修正数组[7] (Size: 7, Type: FLOAT, Flags: PRIVATE, OWNER)
+
+    // ==================== 等级和阵营 ====================
+    UNIT_FIELD_LEVEL                          = OBJECT_END + 0x0030, ///< 等级 (Size: 1, Type: INT, Flags: PUBLIC)
+    UNIT_FIELD_FACTIONTEMPLATE                = OBJECT_END + 0x0031, ///< 阵营模板 ID (Size: 1, Type: INT, Flags: PUBLIC)
+
+    // ==================== 虚拟物品和标志 ====================
+    UNIT_VIRTUAL_ITEM_SLOT_ID                 = OBJECT_END + 0x0032, ///< 虚拟物品槽位数组[3],用于显示装备 (Size: 3, Type: INT, Flags: PUBLIC)
+    UNIT_FIELD_FLAGS                          = OBJECT_END + 0x0035, ///< 单位标志位 (Size: 1, Type: INT, Flags: PUBLIC)
+    UNIT_FIELD_FLAGS_2                        = OBJECT_END + 0x0036, ///< 单位标志位 2 (Size: 1, Type: INT, Flags: PUBLIC)
+    UNIT_FIELD_AURASTATE                      = OBJECT_END + 0x0037, ///< 光环状态标志 (Size: 1, Type: INT, Flags: PUBLIC)
+
+    // ==================== 攻击和碰撞 ====================
+    UNIT_FIELD_BASEATTACKTIME                 = OBJECT_END + 0x0038, ///< 基础攻击速度数组[2]: 主手/副手 (Size: 2, Type: INT, Flags: PUBLIC)
+    UNIT_FIELD_RANGEDATTACKTIME               = OBJECT_END + 0x003A, ///< 远程攻击速度 (Size: 1, Type: INT, Flags: PRIVATE)
+    UNIT_FIELD_BOUNDINGRADIUS                 = OBJECT_END + 0x003B, ///< 碰撞半径 (Size: 1, Type: FLOAT, Flags: PUBLIC)
+    UNIT_FIELD_COMBATREACH                    = OBJECT_END + 0x003C, ///< 战斗触及距离 (Size: 1, Type: FLOAT, Flags: PUBLIC)
+
+    // ==================== 显示和坐骑 ====================
+    UNIT_FIELD_DISPLAYID                      = OBJECT_END + 0x003D, ///< 当前显示模型 ID (Size: 1, Type: INT, Flags: PUBLIC)
+    UNIT_FIELD_NATIVEDISPLAYID                = OBJECT_END + 0x003E, ///< 原始显示模型 ID (Size: 1, Type: INT, Flags: PUBLIC)
+    UNIT_FIELD_MOUNTDISPLAYID                 = OBJECT_END + 0x003F, ///< 坐骑显示模型 ID (Size: 1, Type: INT, Flags: PUBLIC)
+
+    // ==================== 伤害范围 ====================
+    UNIT_FIELD_MINDAMAGE                      = OBJECT_END + 0x0040, ///< 主手最小伤害 (Size: 1, Type: FLOAT, Flags: PRIVATE, OWNER, PARTY_LEADER)
+    UNIT_FIELD_MAXDAMAGE                      = OBJECT_END + 0x0041, ///< 主手最大伤害 (Size: 1, Type: FLOAT, Flags: PRIVATE, OWNER, PARTY_LEADER)
+    UNIT_FIELD_MINOFFHANDDAMAGE               = OBJECT_END + 0x0042, ///< 副手最小伤害 (Size: 1, Type: FLOAT, Flags: PRIVATE, OWNER, PARTY_LEADER)
+    UNIT_FIELD_MAXOFFHANDDAMAGE               = OBJECT_END + 0x0043, ///< 副手最大伤害 (Size: 1, Type: FLOAT, Flags: PRIVATE, OWNER, PARTY_LEADER)
+
+    // ==================== 字节数据和宠物信息 ====================
+    UNIT_FIELD_BYTES_1                        = OBJECT_END + 0x0044, ///< 字节数据: 站立状态/变形形态/可见性/宠物类型 (Size: 1, Type: BYTES, Flags: PUBLIC)
+    UNIT_FIELD_PETNUMBER                      = OBJECT_END + 0x0045, ///< 宠物编号 (Size: 1, Type: INT, Flags: PUBLIC)
+    UNIT_FIELD_PET_NAME_TIMESTAMP             = OBJECT_END + 0x0046, ///< 宠物命名时间戳 (Size: 1, Type: INT, Flags: PUBLIC)
+    UNIT_FIELD_PETEXPERIENCE                  = OBJECT_END + 0x0047, ///< 宠物经验值 (Size: 1, Type: INT, Flags: OWNER)
+    UNIT_FIELD_PETNEXTLEVELEXP                = OBJECT_END + 0x0048, ///< 宠物升级所需经验值 (Size: 1, Type: INT, Flags: OWNER)
+
+    // ==================== 动态标志和施法 ====================
+    UNIT_DYNAMIC_FLAGS                        = OBJECT_END + 0x0049, ///< 动态标志位(拾取/标签等) (Size: 1, Type: INT, Flags: DYNAMIC)
+    UNIT_MOD_CAST_SPEED                       = OBJECT_END + 0x004A, ///< 施法速度修正(1.0=正常) (Size: 1, Type: FLOAT, Flags: PUBLIC)
+    UNIT_CREATED_BY_SPELL                     = OBJECT_END + 0x004B, ///< 创建此单位的法术 ID (Size: 1, Type: INT, Flags: PUBLIC)
+
+    // ==================== NPC 属性 ====================
+    UNIT_NPC_FLAGS                            = OBJECT_END + 0x004C, ///< NPC 功能标志(商人/任务等) (Size: 1, Type: INT, Flags: DYNAMIC)
+    UNIT_NPC_EMOTESTATE                       = OBJECT_END + 0x004D, ///< NPC 表情状态 (Size: 1, Type: INT, Flags: PUBLIC)
+
+    // ==================== 基础属性(力量/敏捷等) ====================
+    UNIT_FIELD_STAT0                          = OBJECT_END + 0x004E, ///< 基础属性 0: 力量 (Size: 1, Type: INT, Flags: PRIVATE, OWNER)
+    UNIT_FIELD_STAT1                          = OBJECT_END + 0x004F, ///< 基础属性 1: 敏捷 (Size: 1, Type: INT, Flags: PRIVATE, OWNER)
+    UNIT_FIELD_STAT2                          = OBJECT_END + 0x0050, ///< 基础属性 2: 耐力 (Size: 1, Type: INT, Flags: PRIVATE, OWNER)
+    UNIT_FIELD_STAT3                          = OBJECT_END + 0x0051, ///< 基础属性 3: 智力 (Size: 1, Type: INT, Flags: PRIVATE, OWNER)
+    UNIT_FIELD_STAT4                          = OBJECT_END + 0x0052, ///< 基础属性 4: 精神 (Size: 1, Type: INT, Flags: PRIVATE, OWNER)
+
+    // ==================== 属性修正(正面) ====================
+    UNIT_FIELD_POSSTAT0                       = OBJECT_END + 0x0053, ///< 力量正面修正 (Size: 1, Type: INT, Flags: PRIVATE, OWNER)
+    UNIT_FIELD_POSSTAT1                       = OBJECT_END + 0x0054, ///< 敏捷正面修正 (Size: 1, Type: INT, Flags: PRIVATE, OWNER)
+    UNIT_FIELD_POSSTAT2                       = OBJECT_END + 0x0055, ///< 耐力正面修正 (Size: 1, Type: INT, Flags: PRIVATE, OWNER)
+    UNIT_FIELD_POSSTAT3                       = OBJECT_END + 0x0056, ///< 智力正面修正 (Size: 1, Type: INT, Flags: PRIVATE, OWNER)
+    UNIT_FIELD_POSSTAT4                       = OBJECT_END + 0x0057, ///< 精神正面修正 (Size: 1, Type: INT, Flags: PRIVATE, OWNER)
+
+    // ==================== 属性修正(负面) ====================
+    UNIT_FIELD_NEGSTAT0                       = OBJECT_END + 0x0058, ///< 力量负面修正 (Size: 1, Type: INT, Flags: PRIVATE, OWNER)
+    UNIT_FIELD_NEGSTAT1                       = OBJECT_END + 0x0059, ///< 敏捷负面修正 (Size: 1, Type: INT, Flags: PRIVATE, OWNER)
+    UNIT_FIELD_NEGSTAT2                       = OBJECT_END + 0x005A, ///< 耐力负面修正 (Size: 1, Type: INT, Flags: PRIVATE, OWNER)
+    UNIT_FIELD_NEGSTAT3                       = OBJECT_END + 0x005B, ///< 智力负面修正 (Size: 1, Type: INT, Flags: PRIVATE, OWNER)
+    UNIT_FIELD_NEGSTAT4                       = OBJECT_END + 0x005C, ///< 精神负面修正 (Size: 1, Type: INT, Flags: PRIVATE, OWNER)
+
+    // ==================== 抗性 ====================
+    UNIT_FIELD_RESISTANCES                    = OBJECT_END + 0x005D, ///< 抗性数组[7]: 物理/神圣/火焰/自然/冰霜/暗影/奥术 (Size: 7, Type: INT, Flags: PRIVATE, OWNER, PARTY_LEADER)
+    UNIT_FIELD_RESISTANCEBUFFMODSPOSITIVE     = OBJECT_END + 0x0064, ///< 正面抗性修正数组[7] (Size: 7, Type: INT, Flags: PRIVATE, OWNER)
+    UNIT_FIELD_RESISTANCEBUFFMODSNEGATIVE     = OBJECT_END + 0x006B, ///< 负面抗性修正数组[7] (Size: 7, Type: INT, Flags: PRIVATE, OWNER)
+
+    // ==================== 基础属性 ====================
+    UNIT_FIELD_BASE_MANA                      = OBJECT_END + 0x0072, ///< 基础法力值 (Size: 1, Type: INT, Flags: PUBLIC)
+    UNIT_FIELD_BASE_HEALTH                    = OBJECT_END + 0x0073, ///< 基础生命值 (Size: 1, Type: INT, Flags: PRIVATE, OWNER)
+    UNIT_FIELD_BYTES_2                        = OBJECT_END + 0x0074, ///< 字节数据: 姿态/剪切标志/宠物标志/变形标志 (Size: 1, Type: BYTES, Flags: PUBLIC)
+
+    // ==================== 攻击强度 ====================
+    UNIT_FIELD_ATTACK_POWER                   = OBJECT_END + 0x0075, ///< 攻击强度 (Size: 1, Type: INT, Flags: PRIVATE, OWNER)
+    UNIT_FIELD_ATTACK_POWER_MODS              = OBJECT_END + 0x0076, ///< 攻击强度修正(基础+临时) (Size: 1, Type: TWO_SHORT, Flags: PRIVATE, OWNER)
+    UNIT_FIELD_ATTACK_POWER_MULTIPLIER        = OBJECT_END + 0x0077, ///< 攻击强度乘数 (Size: 1, Type: FLOAT, Flags: PRIVATE, OWNER)
+
+    // ==================== 远程攻击强度 ====================
+    UNIT_FIELD_RANGED_ATTACK_POWER            = OBJECT_END + 0x0078, ///< 远程攻击强度 (Size: 1, Type: INT, Flags: PRIVATE, OWNER)
+    UNIT_FIELD_RANGED_ATTACK_POWER_MODS       = OBJECT_END + 0x0079, ///< 远程攻击强度修正 (Size: 1, Type: TWO_SHORT, Flags: PRIVATE, OWNER)
+    UNIT_FIELD_RANGED_ATTACK_POWER_MULTIPLIER = OBJECT_END + 0x007A, ///< 远程攻击强度乘数 (Size: 1, Type: FLOAT, Flags: PRIVATE, OWNER)
+
+    // ==================== 远程伤害范围 ====================
+    UNIT_FIELD_MINRANGEDDAMAGE                = OBJECT_END + 0x007B, ///< 远程最小伤害 (Size: 1, Type: FLOAT, Flags: PRIVATE, OWNER)
+    UNIT_FIELD_MAXRANGEDDAMAGE                = OBJECT_END + 0x007C, ///< 远程最大伤害 (Size: 1, Type: FLOAT, Flags: PRIVATE, OWNER)
+
+    // ==================== 法术消耗修正 ====================
+    UNIT_FIELD_POWER_COST_MODIFIER            = OBJECT_END + 0x007D, ///< 能量消耗修正数组[7] (Size: 7, Type: INT, Flags: PRIVATE, OWNER)
+    UNIT_FIELD_POWER_COST_MULTIPLIER          = OBJECT_END + 0x0084, ///< 能量消耗乘数数组[7] (Size: 7, Type: FLOAT, Flags: PRIVATE, OWNER)
+
+    // ==================== 其他修正 ====================
+    UNIT_FIELD_MAXHEALTHMODIFIER              = OBJECT_END + 0x008B, ///< 最大生命值修正乘数 (Size: 1, Type: FLOAT, Flags: PRIVATE, OWNER)
+    UNIT_FIELD_HOVERHEIGHT                    = OBJECT_END + 0x008C, ///< 悬停高度 (Size: 1, Type: FLOAT, Flags: PUBLIC)
+    UNIT_FIELD_PADDING                        = OBJECT_END + 0x008D, ///< 对齐填充字段 (Size: 1, Type: INT, Flags: NONE)
+    UNIT_END                                  = OBJECT_END + 0x008E, ///< Unit 字段结束标记(不包含 Player)
+
+    // ==================== Player 特有字段 ====================
+    // 以下字段继承自 Unit,仅适用于玩家对象
+
+    PLAYER_DUEL_ARBITER                       = UNIT_END + 0x0000, ///< 决斗仲裁者 GUID (Size: 2, Type: LONG, Flags: PUBLIC)
+    PLAYER_FLAGS                              = UNIT_END + 0x0002, ///< 玩家标志位 (Size: 1, Type: INT, Flags: PUBLIC)
+    PLAYER_GUILDID                            = UNIT_END + 0x0003, ///< 公会 ID (Size: 1, Type: INT, Flags: PUBLIC)
+    PLAYER_GUILDRANK                          = UNIT_END + 0x0004, ///< 公会等级 (Size: 1, Type: INT, Flags: PUBLIC)
+    PLAYER_BYTES                              = UNIT_END + 0x0005, ///< 字节数据: 发型/发色/面部/肤色 (Size: 1, Type: BYTES, Flags: PUBLIC)
+    PLAYER_BYTES_2                            = UNIT_END + 0x0006, ///< 字节数据: 纹身风格/纹身颜色/面部特征/银行槽位数 (Size: 1, Type: BYTES, Flags: PUBLIC)
+    PLAYER_BYTES_3                            = UNIT_END + 0x0007, ///< 字节数据: 性别/醉酒等级/荣誉等级 (Size: 1, Type: BYTES, Flags: PUBLIC)
+    PLAYER_DUEL_TEAM                          = UNIT_END + 0x0008, ///< 决斗队伍 (Size: 1, Type: INT, Flags: PUBLIC)
+    PLAYER_GUILD_TIMESTAMP                    = UNIT_END + 0x0009, ///< 加入公会的时间戳 (Size: 1, Type: INT, Flags: PUBLIC)
     PLAYER_QUEST_LOG_1_1                      = UNIT_END + 0x000A, // Size: 1, Type: INT, Flags: PARTY_MEMBER
     PLAYER_QUEST_LOG_1_2                      = UNIT_END + 0x000B, // Size: 1, Type: INT, Flags: PRIVATE
     PLAYER_QUEST_LOG_1_3                      = UNIT_END + 0x000C, // Size: 2, Type: TWO_SHORT, Flags: PRIVATE

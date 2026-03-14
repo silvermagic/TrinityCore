@@ -15,6 +15,56 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file SpellInfo.cpp
+ * @brief 法术信息实现文件
+ *
+ * 本文件实现了 SpellInfo 类及其相关类的所有方法。主要功能包括：
+ *
+ * 1. 数据初始化：
+ *    - 从 DBC 数据构造 SpellInfo 对象
+ *    - 初始化效果信息（SpellEffectInfo）
+ *    - 加载隐式目标条件
+ *    - 计算递减收益信息
+ *    - 设置免疫机制
+ *
+ * 2. 属性计算：
+ *    - 施法时间计算（考虑天赋和光环加成）
+ *    - 施法范围计算（考虑种族、天赋等）
+ *    - 能量消耗计算（考虑节能、减耗等）
+ *    - 持续时间计算
+ *    - 伤害/治疗效果计算
+ *
+ * 3. 条件检查：
+ *    - CheckShapeshift：检查变形形态限制
+ *    - CheckLocation：检查施法地点限制
+ *    - CheckTarget：检查目标有效性
+ *    - CheckExplicitTarget：检查显式目标
+ *    - CheckVehicle：检查载具限制
+ *
+ * 4. 法术特性判断：
+ *    - IsPositive：判断法术是增益还是减益
+ *    - IsPassive：是否为被动法术
+ *    - IsChanneled：是否为引导法术
+ *    - IsStackable：是否可叠加
+ *
+ * 5. 目标选择：
+ *    - GetExplicitTargetMask：获取显式目标掩码
+ *    - 目标类型转换和查询
+ *
+ * 6. 递减收益（DR）：
+ *    - GetDiminishingReturnsGroupForSpell：获取 DR 分组
+ *    - 递减等级和持续时间计算
+ *
+ * 性能优化：
+ * - 缓存频繁计算的结果
+ * - 使用查找表替代复杂计算
+ * - 避免字符串操作
+ *
+ * @see SpellInfo.h 头文件定义
+ * @see SpellMgr.cpp 法术管理器
+ */
+
 #include "SpellInfo.h"
 #include "Battleground.h"
 #include "Corpse.h"
@@ -32,6 +82,24 @@
 #include "SpellMgr.h"
 #include "Vehicle.h"
 
+// ============================================================================
+// 全局辅助函数
+// ============================================================================
+
+/**
+ * @brief 获取目标标志掩码
+ *
+ * 将目标对象类型转换为对应的目标标志掩码。这个掩码用于
+ * 确定法术需要哪些目标信息（单位、位置、游戏对象等）。
+ *
+ * @param objType 目标对象类型枚举
+ * @return 对应的目标标志掩码
+ *
+ * @example
+ * - TARGET_OBJECT_TYPE_UNIT -> TARGET_FLAG_UNIT
+ * - TARGET_OBJECT_TYPE_DEST -> TARGET_FLAG_DEST_LOCATION
+ * - TARGET_OBJECT_TYPE_GOBJ -> TARGET_FLAG_GAMEOBJECT
+ */
 uint32 GetTargetFlagMask(SpellTargetObjectTypes objType)
 {
     // 寒冰箭 - {TARGET_OBJECT_TYPE_UNIT, TARGET_REFERENCE_TYPE_TARGET, TARGET_SELECT_CATEGORY_DEFAULT, TARGET_CHECK_ENEMY,    TARGET_DIR_NONE},        // 6 TARGET_UNIT_TARGET_ENEMY
@@ -62,41 +130,80 @@ uint32 GetTargetFlagMask(SpellTargetObjectTypes objType)
     }
 }
 
+// ============================================================================
+// SpellImplicitTargetInfo 实现
+// ============================================================================
+
+/**
+ * @brief 构造函数
+ * @param target 目标类型ID
+ */
 SpellImplicitTargetInfo::SpellImplicitTargetInfo(uint32 target)
 {
     _target = Targets(target);
 }
 
+/**
+ * @brief 检查是否为区域目标
+ * @return 如果是区域或锥形目标选择，返回 true
+ */
 bool SpellImplicitTargetInfo::IsArea() const
 {
     return GetSelectionCategory() == TARGET_SELECT_CATEGORY_AREA || GetSelectionCategory() == TARGET_SELECT_CATEGORY_CONE;
 }
 
+/**
+ * @brief 获取目标选择类别
+ * @return 目标选择类别（默认、附近、锥形、区域等）
+ */
 SpellTargetSelectionCategories SpellImplicitTargetInfo::GetSelectionCategory() const
 {
     return _data[_target].SelectionCategory;
 }
 
+/**
+ * @brief 获取引用类型
+ * @return 引用类型（施法者、目标、源、目的地等）
+ */
 SpellTargetReferenceTypes SpellImplicitTargetInfo::GetReferenceType() const
 {
     return _data[_target].ReferenceType;
 }
 
+/**
+ * @brief 获取对象类型
+ * @return 对象类型（单位、游戏对象、物品、位置等）
+ */
 SpellTargetObjectTypes SpellImplicitTargetInfo::GetObjectType() const
 {
     return _data[_target].ObjectType;
 }
 
+/**
+ * @brief 获取检查类型
+ * @return 检查类型（敌方、友方、队伍、团队等）
+ */
 SpellTargetCheckTypes SpellImplicitTargetInfo::GetCheckType() const
 {
     return _data[_target].SelectionCheckType;
 }
 
+/**
+ * @brief 获取方向类型
+ * @return 方向类型（前方、后方、左侧、右侧等）
+ */
 SpellTargetDirectionTypes SpellImplicitTargetInfo::GetDirectionType() const
 {
     return _data[_target].DirectionType;
 }
 
+/**
+ * @brief 计算方向角度
+ *
+ * 将方向类型转换为弧度角度值，用于锥形范围法术的目标选择。
+ *
+ * @return 弧度角度值（0 = 前方，PI/2 = 左侧，PI = 后方，-PI/2 = 右侧）
+ */
 float SpellImplicitTargetInfo::CalcDirectionAngle() const
 {
     switch (GetDirectionType())
@@ -124,11 +231,29 @@ float SpellImplicitTargetInfo::CalcDirectionAngle() const
     }
 }
 
+/**
+ * @brief 获取目标类型
+ * @return 目标类型枚举值
+ */
 Targets SpellImplicitTargetInfo::GetTarget() const
 {
     return _target;
 }
 
+/**
+ * @brief 获取显式目标掩码
+ *
+ * 计算此隐式目标需要的显式目标标志。这个掩码用于确定客户端
+ * 需要发送哪些目标数据给服务器。
+ *
+ * @param srcSet [in/out] 源位置是否已设置
+ * @param dstSet [in/out] 目标位置是否已设置
+ * @return 显式目标标志掩码
+ *
+ * @example
+ * - TARGET_UNIT_TARGET_ENEMY 需要 TARGET_FLAG_UNIT_ENEMY
+ * - TARGET_DEST_DEST 需要目标位置
+ */
 uint32 SpellImplicitTargetInfo::GetExplicitTargetMask(bool& srcSet, bool& dstSet) const
 {
     // 寒冰箭 - {TARGET_OBJECT_TYPE_UNIT, TARGET_REFERENCE_TYPE_TARGET, TARGET_SELECT_CATEGORY_DEFAULT, TARGET_CHECK_ENEMY,    TARGET_DIR_NONE},        // 6 TARGET_UNIT_TARGET_ENEMY

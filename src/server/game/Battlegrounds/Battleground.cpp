@@ -15,6 +15,19 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file Battleground.cpp
+ * @brief 战场基类实现文件
+ *
+ * 实现了战场系统的核心功能，包括：
+ * - 战场生命周期管理（创建、启动、运行、结束）
+ * - 玩家管理（加入、离开、复活）
+ * - 战场事件处理（击杀、占领、得分）
+ * - 战场对象管理（游戏对象、生物）
+ * - 战场通信（消息、音效、世界状态）
+ * - 奖励计算和发放
+ */
+
 #include "Battleground.h"
 #include "ArenaScore.h"
 #include "BattlegroundMgr.h"
@@ -56,6 +69,12 @@ void BattlegroundScore::AppendToPacket(WorldPacket& data)
     BuildObjectivesBlock(data);
 }
 
+/**
+ * @brief 广播工作者模板函数
+ * @param _do 操作符对象
+ *
+ * 对战场中的所有玩家执行指定操作
+ */
 template<class Do>
 void Battleground::BroadcastWorker(Do& _do)
 {
@@ -64,40 +83,45 @@ void Battleground::BroadcastWorker(Do& _do)
             _do(player);
 }
 
+/**
+ * @brief 构造函数
+ *
+ * 初始化战场对象的所有成员变量为默认值
+ */
 Battleground::Battleground()
 {
-    m_TypeID            = BATTLEGROUND_TYPE_NONE;
-    m_RandomTypeID      = BATTLEGROUND_TYPE_NONE;
-    m_InstanceID        = 0;
-    m_Status            = STATUS_NONE;
-    m_ClientInstanceID  = 0;
-    m_EndTime           = 0;
-    m_LastResurrectTime = 0;
-    m_BracketId         = BG_BRACKET_ID_FIRST;
-    m_InvitedAlliance   = 0;
-    m_InvitedHorde      = 0;
-    m_ArenaType         = 0;
-    m_IsArena           = false;
-    _winnerTeamId       = PVP_TEAM_NEUTRAL;
-    m_StartTime         = 0;
-    m_ResetStatTimer    = 0;
-    m_ValidStartPositionTimer = 0;
-    m_Events            = 0;
-    m_StartDelayTime    = 0;
-    m_IsRated           = false;
-    m_BuffChange        = false;
-    m_IsRandom          = false;
-    m_LevelMin          = 0;
-    m_LevelMax          = 0;
-    m_InBGFreeSlotQueue = false;
-    m_SetDeleteThis     = false;
+    m_TypeID            = BATTLEGROUND_TYPE_NONE;       // 战场类型ID
+    m_RandomTypeID      = BATTLEGROUND_TYPE_NONE;       // 随机战场类型ID
+    m_InstanceID        = 0;                            // 实例ID
+    m_Status            = STATUS_NONE;                  // 状态
+    m_ClientInstanceID  = 0;                            // 客户端实例ID
+    m_EndTime           = 0;                            // 结束时间
+    m_LastResurrectTime = 0;                            // 上次复活时间
+    m_BracketId         = BG_BRACKET_ID_FIRST;          // 分段ID
+    m_InvitedAlliance   = 0;                            // 已邀请联盟玩家数
+    m_InvitedHorde      = 0;                            // 已邀请部落玩家数
+    m_ArenaType         = 0;                            // 竞技场类型
+    m_IsArena           = false;                        // 是否为竞技场
+    _winnerTeamId       = PVP_TEAM_NEUTRAL;             // 获胜方
+    m_StartTime         = 0;                            // 开始时间
+    m_ResetStatTimer    = 0;                            // 重置统计计时器
+    m_ValidStartPositionTimer = 0;                      // 有效起始位置计时器
+    m_Events            = 0;                            // 事件标志
+    m_StartDelayTime    = 0;                            // 开始延迟时间
+    m_IsRated           = false;                        // 是否为评级比赛
+    m_BuffChange        = false;                        // Buff是否改变
+    m_IsRandom          = false;                        // 是否为随机战场
+    m_LevelMin          = 0;                            // 最低等级
+    m_LevelMax          = 0;                            // 最高等级
+    m_InBGFreeSlotQueue = false;                        // 是否在空闲槽位队列中
+    m_SetDeleteThis     = false;                        // 是否设置删除标志
 
-    m_MaxPlayersPerTeam = 0;
-    m_MaxPlayers        = 0;
-    m_MinPlayersPerTeam = 0;
-    m_MinPlayers        = 0;
+    m_MaxPlayersPerTeam = 0;                            // 每队最大玩家数
+    m_MaxPlayers        = 0;                            // 最大玩家总数
+    m_MinPlayersPerTeam = 0;                            // 每队最小玩家数
+    m_MinPlayers        = 0;                            // 最小玩家总数
 
-    m_MapId             = 0;
+    m_MapId             = 0;                            // 地图ID
     m_Map               = nullptr;
     m_StartMaxDist      = 0.0f;
     ScriptId            = 0;

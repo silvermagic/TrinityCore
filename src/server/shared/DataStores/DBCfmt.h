@@ -15,6 +15,30 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file    DBCfmt.h
+ * @brief   DBC文件格式字符串定义模块
+ *
+ * @details 本文件定义了所有DBC(Database Client)文件的格式字符串，用于解析DBC二进制数据。
+ *          格式字符串说明了每行数据的字段类型和顺序，类似于scanf/printf的格式字符串。
+ *
+ *          格式字符说明：
+ *          - 'n': uint32类型的ID字段（索引字段，必须唯一）
+ *          - 'i': int32类型（有符号32位整数）
+ *          - 'u': uint32类型（无符号32位整数）
+ *          - 'f': float类型（32位浮点数）
+ *          - 's': 字符串字段（指向字符串表的偏移量）
+ *          - 'x': 忽略的字段（跳过不读取）
+ *          - 'd': uint32类型的ID字段（有索引但非主键）
+ *          - 'b': uint8类型（无符号8位字节）
+ *          - 'p': 用于自定义格式的特殊字段
+ *          - 'a': 用于自定义格式的数组字段
+ *
+ * @note    这些格式字符串必须与DBC文件的实际结构完全匹配，否则会导致解析错误
+ * @see     DBCFileLoader - 使用这些格式字符串加载DBC文件
+ * @see     DBCStructure.h - 定义DBC数据结构
+ */
+
 #ifndef TRINITY_DBCSFRM_H
 #define TRINITY_DBCSFRM_H
 

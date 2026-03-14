@@ -22,6 +22,25 @@ Comment: All wp related commands
 Category: commandscripts
 EndScriptData */
 
+/**
+ * @file cs_wp.cpp
+ * @brief 路径点(Waypoint)管理命令模块
+ *
+ * 本模块实现了所有与NPC路径点管理相关的GM命令,包括:
+ * - 添加路径点(.wp add)
+ * - 加载路径(.wp load)
+ * - 卸载路径(.wp unload)
+ * - 重新加载路径(.wp reload)
+ * - 修改路径点(.wp modify)
+ * - 显示路径点(.wp show)
+ * - 路径点事件管理(.wp event)
+ *
+ * 路径点系统用于定义NPC的移动路径,NPC会按照预定义的路径点循环移动。
+ * 这在制作巡逻NPC、任务NPC等场景中非常有用。
+ *
+ * 路径点数据存储在waypoint_data表中,路径点脚本存储在waypoint_scripts表中。
+ */
+
 #include "ScriptMgr.h"
 #include "Chat.h"
 #include "Creature.h"
@@ -39,11 +58,36 @@ EndScriptData */
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #endif
 
+/**
+ * @class wp_commandscript
+ * @brief 路径点管理命令脚本类
+ *
+ * 继承自CommandScript,提供路径点管理相关的所有GM命令处理函数。
+ * 包括路径点的创建、修改、删除、显示等完整功能。
+ */
 class wp_commandscript : public CommandScript
 {
 public:
+    /**
+     * @brief 构造函数
+     *
+     * 初始化路径点命令脚本,注册脚本名称为"wp_commandscript"
+     */
     wp_commandscript() : CommandScript("wp_commandscript") { }
 
+    /**
+     * @brief 获取命令表
+     * @return 返回路径点命令表结构
+     *
+     * 构建并返回所有路径点相关命令的层次结构,包括:
+     * - wp add: 添加路径点
+     * - wp load: 加载路径到生物
+     * - wp unload: 卸载生物的路径
+     * - wp reload: 重新加载路径
+     * - wp modify: 修改路径点属性
+     * - wp show: 显示路径点(可视化)
+     * - wp event: 管理路径点事件脚本
+     */
     std::vector<ChatCommand> GetCommands() const override
     {
         static std::vector<ChatCommand> wpCommandTable =
@@ -62,29 +106,35 @@ public:
         };
         return commandTable;
     }
+
     /**
-    * Add a waypoint to a creature.
+    * @brief 添加路径点到生物
+    * @param handler 聊天处理器指针
+    * @param args 命令参数,格式: [pathId]
+    * @return true 命令执行成功, false 参数错误
     *
-    * The user can either select an npc or provide its GUID.
+    * @par 调用时机:
+    * 当GM执行.wp add [pathId]命令时调用
     *
-    * The user can even select a visual waypoint - then the new waypoint
-    * is placed *after* the selected one - this makes insertion of new
-    * waypoints possible.
+    * @par 功能说明:
+    * 在玩家当前位置添加一个新的路径点。
+    * 用户可以选择一个NPC或提供其GUID。
+    * 用户甚至可以选择一个可视化路径点,然后在选中的路径点之后插入新路径点。
     *
-    * eg:
+    * @par 使用示例:
     * .wp add 12345
-    * -> adds a waypoint to the npc with the GUID 12345
+    * -> 添加路径点到GUID为12345的NPC的路径中
     *
     * .wp add
-    * -> adds a waypoint to the currently selected creature
+    * -> 添加路径点到当前选中生物的路径中
     *
+    * @param args 如果用户没有提供路径ID,则为NULL
     *
-    * @param args if the user did not provide a GUID, it is NULL
-    *
-    * @return true - command did succeed, false - something went wrong
+    * @return true - 命令执行成功, false - 出现错误
     */
     static bool HandleWpAddCommand(ChatHandler* handler, char const* args)
     {
+        // 可选参数:路径ID
         // optional
         char* path_number = nullptr;
         uint32 pathid = 0;
@@ -95,12 +145,14 @@ public:
         uint32 point = 0;
         Creature* target = handler->getSelectedCreature();
 
+        // 如果没有提供路径ID,使用选中生物的路径或创建新路径
         if (!path_number)
         {
             if (target)
                 pathid = target->GetWaypointPath();
             else
             {
+                // 查询数据库获取最大路径ID,创建新路径
                 WorldDatabasePreparedStatement* stmt = WorldDatabase.GetPreparedStatement(WORLD_SEL_WAYPOINT_DATA_MAX_ID);
 
                 PreparedQueryResult result = WorldDatabase.Query(stmt);
@@ -113,6 +165,8 @@ public:
         else
             pathid = atoi(path_number);
 
+        // path_id -> 路径ID
+        // point   -> 路径点编号(如果不为0)
         // path_id -> ID of the Path
         // point   -> number of the waypoint (if not 0)
 
@@ -122,6 +176,7 @@ public:
             return true;
         }
 
+        // 查询当前路径的最大路径点编号
         WorldDatabasePreparedStatement* stmt = WorldDatabase.GetPreparedStatement(WORLD_SEL_WAYPOINT_DATA_MAX_POINT);
         stmt->setUInt32(0, pathid);
         PreparedQueryResult result = WorldDatabase.Query(stmt);
@@ -132,6 +187,7 @@ public:
         Player* player = handler->GetSession()->GetPlayer();
         //Map* map = player->GetMap();
 
+        // 插入新路径点到数据库
         stmt = WorldDatabase.GetPreparedStatement(WORLD_INS_WAYPOINT_DATA);
 
         stmt->setUInt32(0, pathid);
@@ -147,11 +203,21 @@ public:
         return true;
     }                                                           // HandleWpAddCommand
 
+    /**
+     * @brief 加载路径到生物
+     * @param handler 聊天处理器指针
+     * @param args 命令参数,格式: <pathId>
+     * @return true 命令执行成功, false 参数错误
+     *
+     * @par 功能说明:
+     * 将指定路径加载到选中的生物上,使生物按照该路径移动
+     */
     static bool HandleWpLoadCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
             return false;
 
+        // 可选参数
         // optional
         char* path_number = nullptr;
 
@@ -162,6 +228,7 @@ public:
         ObjectGuid::LowType guidLow = 0;
         Creature* target = handler->getSelectedCreature();
 
+        // 必须提供路径ID
         // Did player provide a path_id?
         if (!path_number)
             return false;
@@ -173,6 +240,7 @@ public:
             return false;
         }
 
+        // 不能给可视化路径点加载路径
         if (target->GetEntry() == 1)
         {
             handler->PSendSysMessage("%s%s|r", "|cffff33ff", "You want to load path to a waypoint? Aren't you?");
@@ -190,6 +258,7 @@ public:
 
         guidLow = target->GetSpawnId();
 
+        // 检查生物是否已有addon数据
         WorldDatabasePreparedStatement* stmt = WorldDatabase.GetPreparedStatement(WORLD_SEL_CREATURE_ADDON_BY_GUID);
 
         stmt->setUInt32(0, guidLow);
@@ -198,6 +267,7 @@ public:
 
         if (result)
         {
+            // 更新现有addon记录
             stmt = WorldDatabase.GetPreparedStatement(WORLD_UPD_CREATURE_ADDON_PATH);
 
             stmt->setUInt32(0, pathid);
@@ -205,6 +275,7 @@ public:
         }
         else
         {
+            // 创建新的addon记录
             stmt = WorldDatabase.GetPreparedStatement(WORLD_INS_CREATURE_ADDON);
 
             stmt->setUInt32(0, guidLow);
@@ -213,6 +284,7 @@ public:
 
         WorldDatabase.Execute(stmt);
 
+        // 更新生物的移动类型为路径点移动
         stmt = WorldDatabase.GetPreparedStatement(WORLD_UPD_CREATURE_MOVEMENT_TYPE);
 
         stmt->setUInt8(0, uint8(WAYPOINT_MOTION_TYPE));
@@ -220,6 +292,7 @@ public:
 
         WorldDatabase.Execute(stmt);
 
+        // 加载路径并初始化移动
         target->LoadPath(pathid);
         target->SetDefaultMovementType(WAYPOINT_MOTION_TYPE);
         target->GetMotionMaster()->Initialize();
@@ -228,6 +301,15 @@ public:
         return true;
     }
 
+    /**
+     * @brief 重新加载路径
+     * @param handler 聊天处理器指针
+     * @param args 命令参数,格式: <pathId>
+     * @return true 命令执行成功, false 参数错误
+     *
+     * @par 功能说明:
+     * 从数据库重新加载指定路径的数据
+     */
     static bool HandleWpReloadCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
@@ -243,6 +325,15 @@ public:
         return true;
     }
 
+    /**
+     * @brief 卸载生物的路径
+     * @param handler 聊天处理器指针
+     * @param args 命令参数(未使用)
+     * @return true 命令执行成功
+     *
+     * @par 功能说明:
+     * 移除选中生物的路径点移动,恢复为静止状态
+     */
     static bool HandleWpUnLoadCommand(ChatHandler* handler, char const* /*args*/)
     {
 
@@ -285,6 +376,15 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理路径点事件命令
+     * @param handler 聊天处理器指针
+     * @param args 命令参数,格式: <add|mod|del|listid> [id] [args...]
+     * @return true 命令执行成功, false 参数错误
+     *
+     * @par 功能说明:
+     * 管理路径点事件脚本,包括添加、修改、删除和列出事件脚本
+     */
     static bool HandleWpEventCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
@@ -294,6 +394,7 @@ public:
         std::string show = show_str;
         WorldDatabasePreparedStatement* stmt = nullptr;
 
+        // 检查命令有效性
         // Check
         if ((show != "add") && (show != "mod") && (show != "del") && (show != "listid"))
             return false;
@@ -538,11 +639,22 @@ public:
         return true;
     }
 
+    /**
+     * @brief 修改路径点属性
+     * @param handler 聊天处理器指针
+     * @param args 命令参数,格式: <delay|action|action_chance|move_type|del|move> [value]
+     * @return true 命令执行成功, false 参数错误
+     *
+     * @par 功能说明:
+     * 修改选中路径点的属性,包括延迟、动作、移动类型等
+     * 必须选中可视化路径点才能执行
+     */
     static bool HandleWpModifyCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
             return false;
 
+        // 第一个参数: delay|action|action_chance|move_type|del|move
         // first arg: add del text emote spell waittime move
         char* show_str = strtok((char*)args, " ");
         if (!show_str)
@@ -551,6 +663,7 @@ public:
         }
 
         std::string show = show_str;
+        // 检查参数有效性 - show也必须是数据库列名
         // Check
         // Remember: "show" must also be the name of a column!
         if ((show != "delay") && (show != "action") && (show != "action_chance")
@@ -722,16 +835,34 @@ public:
         return true;
     }
 
+    /**
+     * @brief 显示路径点
+     * @param handler 聊天处理器指针
+     * @param args 命令参数,格式: <on|off|first|last|info> [pathId]
+     * @return true 命令执行成功, false 参数错误
+     *
+     * @par 功能说明:
+     * 可视化显示路径点:
+     * - on: 显示所有路径点
+     * - off: 隐藏所有路径点
+     * - first: 显示第一个路径点
+     * - last: 显示最后一个路径点
+     * - info: 显示路径点详细信息
+     *
+     * 可视化路径点使用特殊的生物(entry=1)来表示路径点位置
+     */
     static bool HandleWpShowCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
             return false;
 
+        // 第一个参数: on, off, first, last, info
         // first arg: on, off, first, last
         char* show_str = strtok((char*)args, " ");
         if (!show_str)
             return false;
 
+        // 第二个参数: GUID (可选,如果选中了生物)
         // second arg: GUID (optional, if a creature is selected)
         char* guid_str = strtok((char*)nullptr, " ");
 
@@ -739,10 +870,12 @@ public:
         Creature* target = handler->getSelectedCreature();
         WorldDatabasePreparedStatement* stmt = nullptr;
 
+        // 检查是否提供了路径ID
         // Did player provide a PathID?
 
         if (!guid_str)
         {
+            // 没有提供路径ID,必须选中一个生物
             // No PathID provided
             // -> Player must have selected a creature
 
@@ -757,6 +890,8 @@ public:
         }
         else
         {
+            // 提供了路径ID
+            // 如果同时选中了生物,会忽略生物选择
             // PathID provided
             // Warn if player also selected a creature
             // -> Creature selection is ignored <-
@@ -1058,6 +1193,12 @@ public:
     }
 };
 
+/**
+ * @brief 注册路径点命令脚本
+ *
+ * 此函数在服务器启动时被脚本系统调用,用于注册路径点命令脚本。
+ * 创建wp_commandscript实例并将其添加到命令处理系统中。
+ */
 void AddSC_wp_commandscript()
 {
     new wp_commandscript();

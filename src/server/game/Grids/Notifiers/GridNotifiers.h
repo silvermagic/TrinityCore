@@ -15,6 +15,32 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file GridNotifiers.h
+ * @brief 网格通知器模块 - 提供网格对象访问和操作的核心通知器实现
+ *
+ * 本文件定义了 TrinityCore 网格系统中的通知器（Notifier）类族，用于：
+ * - 遍历网格中的对象并执行特定操作
+ * - 处理玩家可见性更新和对象重定位通知
+ * - 实现消息广播和距离检测
+ * - 提供各种对象搜索器和检查器
+ *
+ * 设计模式：
+ * - 访问者模式（Visitor Pattern）：通过 Visit() 方法遍历网格对象
+ * - 策略模式（Strategy Pattern）：通过模板参数定制检查和操作逻辑
+ *
+ * 核心类型：
+ * - 可见性通知器：处理对象可见性变化
+ * - 重定位通知器：处理对象移动事件
+ * - 消息投递器：广播网络消息
+ * - 对象搜索器：查找满足条件的对象
+ * - 条件检查器：提供各种筛选条件
+ *
+ * @see GridRefManager
+ * @see Cell
+ * @see Map
+ */
+
 #ifndef TRINITY_GRIDNOTIFIERS_H
 #define TRINITY_GRIDNOTIFIERS_H
 
@@ -30,77 +56,208 @@
 #include "UnitAI.h"
 #include "UpdateData.h"
 
+/**
+ * @namespace Trinity
+ * @brief TrinityCore 核心命名空间，包含游戏核心功能的实现
+ */
 namespace Trinity
 {
+    /**
+     * @struct VisibleNotifier
+     * @brief 可见性通知器 - 处理玩家视野范围内的对象可见性更新
+     *
+     * 当玩家移动或网格中的对象状态变化时，需要更新玩家客户端的对象可见性列表。
+     * 此通知器负责：
+     * - 检测新进入玩家视野的对象
+     * - 移除离开玩家视野的对象
+     * - 生成更新数据包发送给客户端
+     *
+     * 工作流程：
+     * 1. Visit() 遍历网格中的对象，检查是否在玩家视野内
+     * 2. 更新 vis_guids 集合，记录当前可见对象
+     * 3. SendToSelf() 将更新数据发送给玩家
+     *
+     * @note 性能关键路径，每帧每个移动的玩家都会调用
+     */
     struct TC_GAME_API VisibleNotifier
     {
-        Player &i_player;
-        UpdateData i_data;
-        std::set<Unit*> i_visibleNow;
-        GuidUnorderedSet vis_guids;
+        Player &i_player;                   ///< 需要更新可见性的玩家引用
+        UpdateData i_data;                  ///< 累积的更新数据包
+        std::set<Unit*> i_visibleNow;       ///< 当前帧新可见的单位集合
+        GuidUnorderedSet vis_guids;         ///< 当前可见对象的 GUID 集合（用于比对变化）
 
+        /**
+         * @brief 构造可见性通知器
+         * @param player 需要更新可见性的玩家
+         * @note 初始化 vis_guids 为玩家当前的客户端 GUID 列表
+         */
         VisibleNotifier(Player &player) : i_player(player), vis_guids(player.m_clientGUIDs) { }
+
+        /**
+         * @brief 访问网格对象管理器，检查可见性
+         * @tparam T 对象类型（Player, Creature, GameObject 等）
+         * @param m 网格对象引用管理器
+         */
         template<class T> void Visit(GridRefManager<T> &m);
+
+        /**
+         * @brief 将累积的更新数据发送给玩家自己
+         */
         void SendToSelf(void);
     };
 
+    /**
+     * @struct VisibleChangesNotifier
+     * @brief 可见性变化通知器 - 通知周围对象某对象发生了可见性相关变化
+     *
+     * 当一个 WorldObject 的外观或状态发生变化时（如装备变更、变形等），
+     * 需要通知周围能看见它的玩家更新显示。
+     *
+     * 与 VisibleNotifier 的区别：
+     * - VisibleNotifier：玩家移动时更新自己看到什么
+     * - VisibleChangesNotifier：对象变化时通知别人看到什么
+     */
     struct VisibleChangesNotifier
     {
-        WorldObject &i_object;
+        WorldObject &i_object;              ///< 发生变化的对象
 
+        /**
+         * @brief 构造可见性变化通知器
+         * @param object 发生变化的世界对象
+         */
         explicit VisibleChangesNotifier(WorldObject &object) : i_object(object) { }
+
         template<class T> void Visit(GridRefManager<T> &) { }
-        void Visit(PlayerMapType &);
-        void Visit(CreatureMapType &);
-        void Visit(DynamicObjectMapType &);
+        void Visit(PlayerMapType &);        ///< 访问玩家集合，通知变化
+        void Visit(CreatureMapType &);      ///< 访问生物集合，通知变化
+        void Visit(DynamicObjectMapType &); ///< 访问动态对象集合，通知变化
     };
 
+    /**
+     * @struct PlayerRelocationNotifier
+     * @brief 玩家重定位通知器 - 处理玩家移动时的通知逻辑
+     *
+     * 继承自 VisibleNotifier，在玩家位置更新时触发：
+     * 1. 父类的可见性更新（新进入/离开视野的对象）
+     * 2. 额外的生物和玩家交互检测（如 agro 范围检测）
+     *
+     * @see VisibleNotifier
+     */
     struct TC_GAME_API PlayerRelocationNotifier : public VisibleNotifier
     {
+        /**
+         * @brief 构造玩家重定位通知器
+         * @param player 移动的玩家
+         */
         PlayerRelocationNotifier(Player &player) : VisibleNotifier(player) { }
 
         template<class T> void Visit(GridRefManager<T> &m) { VisibleNotifier::Visit(m); }
-        void Visit(CreatureMapType &);
-        void Visit(PlayerMapType &);
+        void Visit(CreatureMapType &);      ///< 处理与生物的交互（如进入 agro 范围）
+        void Visit(PlayerMapType &);        ///< 处理与其他玩家的交互
     };
 
+    /**
+     * @struct CreatureRelocationNotifier
+     * @brief 生物重定位通知器 - 处理生物移动时的通知逻辑
+     *
+     * 当生物位置变化时，需要通知周围能看见它的玩家。
+     * 同时可能触发 AI 相关的位置感知逻辑。
+     */
     struct TC_GAME_API CreatureRelocationNotifier
     {
-        Creature &i_creature;
+        Creature &i_creature;               ///< 移动的生物
+
+        /**
+         * @brief 构造生物重定位通知器
+         * @param c 移动的生物
+         */
         CreatureRelocationNotifier(Creature &c) : i_creature(c) { }
+
         template<class T> void Visit(GridRefManager<T> &) { }
-        void Visit(CreatureMapType &);
-        void Visit(PlayerMapType &);
+        void Visit(CreatureMapType &);      ///< 通知周围生物
+        void Visit(PlayerMapType &);        ///< 通知周围玩家
     };
 
+    /**
+     * @struct DelayedUnitRelocation
+     * @brief 延迟单位重定位处理器 - 处理延迟的单位位置更新
+     *
+     * 某些情况下，单位的位置更新需要延迟处理以避免在同一帧内
+     * 多次更新导致的性能问题或逻辑冲突。
+     * 此通知器在下一帧处理累积的重定位请求。
+     */
     struct TC_GAME_API DelayedUnitRelocation
     {
-        Map &i_map;
-        Cell &cell;
-        CellCoord &p;
-        const float i_radius;
+        Map &i_map;                         ///< 当前地图实例
+        Cell &cell;                         ///< 当前单元格
+        CellCoord &p;                       ///< 单元格坐标
+        const float i_radius;               ///< 搜索半径
+
+        /**
+         * @brief 构造延迟重定位处理器
+         * @param c 单元格引用
+         * @param pair 单元格坐标
+         * @param map 地图实例
+         * @param radius 搜索半径
+         */
         DelayedUnitRelocation(Cell &c, CellCoord &pair, Map &map, float radius) :
             i_map(map), cell(c), p(pair), i_radius(radius) { }
+
         template<class T> void Visit(GridRefManager<T> &) { }
-        void Visit(CreatureMapType &);
-        void Visit(PlayerMapType   &);
+        void Visit(CreatureMapType &);      ///< 处理延迟的生物重定位
+        void Visit(PlayerMapType   &);      ///< 处理延迟的玩家重定位
     };
 
+    /**
+     * @struct AIRelocationNotifier
+     * @brief AI 重定位通知器 - 在单位移动时触发 AI 逻辑
+     *
+     * 当单位移动时，需要通知 AI 系统进行相应的处理：
+     * - 检测新进入感知范围的目标
+     * - 更新巡逻路径
+     * - 触发移动相关的 AI 事件
+     */
     struct TC_GAME_API AIRelocationNotifier
     {
-        Unit &i_unit;
-        bool isCreature;
+        Unit &i_unit;                       ///< 移动的单位
+        bool isCreature;                    ///< 是否为生物（非玩家）
+
+        /**
+         * @brief 构造 AI 重定位通知器
+         * @param unit 移动的单位
+         */
         explicit AIRelocationNotifier(Unit &unit) : i_unit(unit), isCreature(unit.GetTypeId() == TYPEID_UNIT)  { }
+
         template<class T> void Visit(GridRefManager<T> &) { }
-        void Visit(CreatureMapType &);
+        void Visit(CreatureMapType &);      ///< 通知生物 AI 处理移动
     };
 
+    /**
+     * @struct GridUpdater
+     * @brief 网格更新器 - 对网格中的所有对象执行 Update() 调用
+     *
+     * 每个游戏循环中，需要对网格中的所有活动对象调用 Update() 方法，
+     * 让对象执行自己的更新逻辑（如 AI 思考、定时器处理等）。
+     *
+     * @note 此更新器不更新玩家和尸体（它们有独立的更新流程）
+     */
     struct GridUpdater
     {
-        GridType &i_grid;
-        uint32 i_timeDiff;
+        GridType &i_grid;                   ///< 要更新的网格
+        uint32 i_timeDiff;                  ///< 自上次更新以来经过的时间（毫秒）
+
+        /**
+         * @brief 构造网格更新器
+         * @param grid 要更新的网格
+         * @param diff 时间差（毫秒）
+         */
         GridUpdater(GridType &grid, uint32 diff) : i_grid(grid), i_timeDiff(diff) { }
 
+        /**
+         * @brief 更新对象管理器中的所有对象
+         * @tparam T 对象类型
+         * @param m 对象引用管理器
+         */
         template<class T> void updateObjects(GridRefManager<T> &m)
         {
             for (typename GridRefManager<T>::iterator iter = m.begin(); iter != m.end(); ++iter)
@@ -114,21 +271,48 @@ namespace Trinity
         void Visit(CorpseMapType &m) { updateObjects<Corpse>(m); }
     };
 
+    /**
+     * @struct MessageDistDeliverer
+     * @brief 消息距离投递器 - 向指定范围内的玩家广播消息
+     *
+     * 用于向源对象周围一定距离内的玩家发送网络消息包。
+     * 支持多种过滤条件：
+     * - 距离限制
+     * - 阵营过滤（仅同阵营）
+     * - 跳过特定接收者
+     * - 2D/3D 距离计算选择
+     *
+     * 典型用途：
+     * - 广播聊天消息
+     * - 广播表情和动画
+     * - 广播环境音效
+     */
     struct TC_GAME_API MessageDistDeliverer
     {
-        WorldObject const* i_source;
-        WorldPacket const* i_message;
-        uint32 i_phaseMask;
-        float i_distSq;
-        uint32 team;
-        Player const* skipped_receiver;
-        bool required3dDist;
+        WorldObject const* i_source;        ///< 消息源对象
+        WorldPacket const* i_message;       ///< 要发送的消息包
+        uint32 i_phaseMask;                 ///< 相位掩码（用于相位检测）
+        float i_distSq;                     ///< 距离的平方（避免开方运算）
+        uint32 team;                        ///< 阵营 ID（0 表示不过滤阵营）
+        Player const* skipped_receiver;     ///< 要跳过的接收者（通常是发送者自己）
+        bool required3dDist;                ///< 是否使用 3D 距离（否则使用 2D）
+
+        /**
+         * @brief 构造消息距离投递器
+         * @param src 消息源对象
+         * @param msg 要发送的消息包
+         * @param dist 最大距离
+         * @param own_team_only 是否仅发送给同阵营玩家
+         * @param skipped 要跳过的接收者
+         * @param req3dDist 是否使用 3D 距离检测
+         */
         MessageDistDeliverer(WorldObject const* src, WorldPacket const* msg, float dist, bool own_team_only = false, Player const* skipped = nullptr, bool req3dDist = false)
             : i_source(src), i_message(msg), i_phaseMask(src->GetPhaseMask()), i_distSq(dist * dist)
             , team(0)
             , skipped_receiver(skipped)
             , required3dDist(req3dDist)
         {
+            // 如果仅发送给同阵营，获取源对象的阵营
             if (own_team_only)
                 if (Player const* player = src->ToPlayer())
                     team = player->GetTeam();
@@ -139,6 +323,16 @@ namespace Trinity
         void Visit(DynamicObjectMapType &m);
         template<class SKIP> void Visit(GridRefManager<SKIP> &) { }
 
+        /**
+         * @brief 向单个玩家发送消息
+         * @param player 目标玩家
+         *
+         * 过滤条件：
+         * - 不发送给自己
+         * - 阵营检查
+         * - 跳过指定接收者
+         * - 必须能看见源对象
+         */
         void SendPacket(Player* player)
         {
             // never send packet to self
@@ -152,13 +346,28 @@ namespace Trinity
         }
     };
 
+    /**
+     * @struct MessageDistDelivererToHostile
+     * @brief 敌对消息投递器 - 向敌对阵营玩家广播消息
+     *
+     * 专门用于向源对象的敌对目标发送消息。
+     * 典型用途：
+     * - PVP 战斗消息
+     * - 敌对阵营特定事件通知
+     */
     struct TC_GAME_API MessageDistDelivererToHostile
     {
-        Unit* i_source;
-        WorldPacket const* i_message;
-        uint32 i_phaseMask;
-        float i_distSq;
+        Unit* i_source;                     ///< 消息源单位
+        WorldPacket const* i_message;       ///< 要发送的消息包
+        uint32 i_phaseMask;                 ///< 相位掩码
+        float i_distSq;                     ///< 距离的平方
 
+        /**
+         * @brief 构造敌对消息投递器
+         * @param src 源单位
+         * @param msg 消息包
+         * @param dist 最大距离
+         */
         MessageDistDelivererToHostile(Unit* src, WorldPacket const* msg, float dist)
             : i_source(src), i_message(msg), i_phaseMask(src->GetPhaseMask()), i_distSq(dist * dist)
         {
@@ -169,6 +378,15 @@ namespace Trinity
         void Visit(DynamicObjectMapType &m);
         template<class SKIP> void Visit(GridRefManager<SKIP> &) { }
 
+        /**
+         * @brief 向敌对玩家发送消息
+         * @param player 目标玩家
+         *
+         * 过滤条件：
+         * - 不发送给自己
+         * - 必须能看见源对象
+         * - 必须是敌对关系
+         */
         void SendPacket(Player* player)
         {
             // never send packet to self
@@ -179,32 +397,61 @@ namespace Trinity
         }
     };
 
+    /**
+     * @struct ObjectUpdater
+     * @brief 对象更新器 - 对网格中的非玩家对象执行更新
+     *
+     * 与 GridUpdater 类似，但专门用于更新非玩家对象。
+     * 玩家和尸体有独立的更新流程，不由此更新器处理。
+     */
     struct ObjectUpdater
     {
-        uint32 i_timeDiff;
+        uint32 i_timeDiff;                  ///< 时间差（毫秒）
+
+        /**
+         * @brief 构造对象更新器
+         * @param diff 时间差（毫秒）
+         */
         explicit ObjectUpdater(const uint32 diff) : i_timeDiff(diff) { }
+
         template<class T> void Visit(GridRefManager<T> &m);
-        void Visit(PlayerMapType &) { }
-        void Visit(CorpseMapType &) { }
+        void Visit(PlayerMapType &) { }     ///< 空实现 - 玩家有独立更新流程
+        void Visit(CorpseMapType &) { }     ///< 空实现 - 尸体有独立更新流程
     };
 
-    // SEARCHERS & LIST SEARCHERS & WORKERS
+    // ============================================================================
+    // 搜索器、列表搜索器和执行器
+    // ============================================================================
 
-    // WorldObject searchers & workers
+    // ------------------------- WorldObject 搜索器和执行器 -------------------------
 
-    // Generic base class to insert elements into arbitrary containers using push_back
+    /**
+     * @class ContainerInserter
+     * @brief 容器插入器基类 - 提供向任意容器插入元素的通用接口
+     *
+     * 使用类型擦除技术，允许 ListSearcher 类模板支持各种容器类型
+     * （std::vector, std::list 等）而无需在基类中暴露容器类型。
+     *
+     * @tparam Type 要插入的元素类型
+     */
     template<typename Type>
     class ContainerInserter
     {
-        using InserterType = void(*)(void*, Type&&);
+        using InserterType = void(*)(void*, Type&&); ///< 插入函数指针类型
 
-        void* ref;
-        InserterType inserter;
+        void* ref;                         ///< 容器指针（类型擦除）
+        InserterType inserter;             ///< 插入函数指针
 
     protected:
+        /**
+         * @brief 构造容器插入器
+         * @tparam T 容器类型
+         * @param ref_ 容器引用
+         */
         template<typename T>
         ContainerInserter(T& ref_) : ref(&ref_)
         {
+            // 使用 lambda 生成类型擦除的插入函数
             inserter = [](void* containerRaw, Type&& object)
             {
                 T* container = reinterpret_cast<T*>(containerRaw);
@@ -212,20 +459,40 @@ namespace Trinity
             };
         }
 
+        /**
+         * @brief 向容器插入元素
+         * @param object 要插入的对象
+         */
         void Insert(Type object)
         {
             inserter(ref, std::move(object));
         }
     };
 
+    /**
+     * @struct WorldObjectSearcher
+     * @brief 世界对象搜索器 - 查找第一个满足条件的世界对象
+     *
+     * 遍历网格中的对象，找到第一个通过检查条件的对象后立即停止。
+     * 用于快速查找单个对象。
+     *
+     * @tparam Check 检查条件类型（可调用对象）
+     */
     template<class Check>
     struct WorldObjectSearcher
     {
-        uint32 i_mapTypeMask;
-        uint32 i_phaseMask;
-        WorldObject* &i_object;
-        Check &i_check;
+        uint32 i_mapTypeMask;               ///< 对象类型掩码（过滤要搜索的对象类型）
+        uint32 i_phaseMask;                 ///< 相位掩码（用于相位检测）
+        WorldObject* &i_object;             ///< 输出参数：找到的对象
+        Check &i_check;                     ///< 检查条件
 
+        /**
+         * @brief 构造世界对象搜索器
+         * @param searcher 搜索源对象（用于获取相位掩码）
+         * @param result 输出参数：找到的对象引用
+         * @param check 检查条件
+         * @param mapTypeMask 对象类型掩码，默认搜索所有类型
+         */
         WorldObjectSearcher(WorldObject const* searcher, WorldObject* & result, Check& check, uint32 mapTypeMask = GRID_MAP_TYPE_MASK_ALL)
             : i_mapTypeMask(mapTypeMask), i_phaseMask(searcher->GetPhaseMask()), i_object(result), i_check(check) { }
 
@@ -238,14 +505,30 @@ namespace Trinity
         template<class NOT_INTERESTED> void Visit(GridRefManager<NOT_INTERESTED> &) { }
     };
 
+    /**
+     * @struct WorldObjectLastSearcher
+     * @brief 世界对象最后搜索器 - 查找最后一个满足条件的世界对象
+     *
+     * 与 WorldObjectSearcher 类似，但遍历所有对象，返回最后一个满足条件的。
+     * 用于需要找"最近"对象的场景（配合距离递减检查条件）。
+     *
+     * @tparam Check 检查条件类型
+     */
     template<class Check>
     struct WorldObjectLastSearcher
     {
-        uint32 i_mapTypeMask;
-        uint32 i_phaseMask;
-        WorldObject* &i_object;
-        Check &i_check;
+        uint32 i_mapTypeMask;               ///< 对象类型掩码
+        uint32 i_phaseMask;                 ///< 相位掩码
+        WorldObject* &i_object;             ///< 输出参数：找到的对象
+        Check &i_check;                     ///< 检查条件
 
+        /**
+         * @brief 构造世界对象最后搜索器
+         * @param searcher 搜索源对象
+         * @param result 输出参数
+         * @param check 检查条件
+         * @param mapTypeMask 对象类型掩码
+         */
         WorldObjectLastSearcher(WorldObject const* searcher, WorldObject* & result, Check& check, uint32 mapTypeMask = GRID_MAP_TYPE_MASK_ALL)
             :  i_mapTypeMask(mapTypeMask), i_phaseMask(searcher->GetPhaseMask()), i_object(result), i_check(check) { }
 
@@ -258,13 +541,30 @@ namespace Trinity
         template<class NOT_INTERESTED> void Visit(GridRefManager<NOT_INTERESTED> &) { }
     };
 
+    /**
+     * @struct WorldObjectListSearcher
+     * @brief 世界对象列表搜索器 - 收集所有满足条件的世界对象
+     *
+     * 遍历网格中的所有对象，将满足条件的对象收集到容器中。
+     * 用于批量查询场景。
+     *
+     * @tparam Check 检查条件类型
+     */
     template<class Check>
     struct WorldObjectListSearcher : ContainerInserter<WorldObject*>
     {
-        uint32 i_mapTypeMask;
-        uint32 i_phaseMask;
-        Check& i_check;
+        uint32 i_mapTypeMask;               ///< 对象类型掩码
+        uint32 i_phaseMask;                 ///< 相位掩码
+        Check& i_check;                     ///< 检查条件
 
+        /**
+         * @brief 构造世界对象列表搜索器
+         * @tparam Container 容器类型
+         * @param searcher 搜索源对象
+         * @param container 存储结果的容器
+         * @param check 检查条件
+         * @param mapTypeMask 对象类型掩码
+         */
         template<typename Container>
         WorldObjectListSearcher(WorldObject const* searcher, Container& container, Check & check, uint32 mapTypeMask = GRID_MAP_TYPE_MASK_ALL)
             : ContainerInserter<WorldObject*>(container),
@@ -279,16 +579,35 @@ namespace Trinity
         template<class NOT_INTERESTED> void Visit(GridRefManager<NOT_INTERESTED> &) { }
     };
 
+    /**
+     * @struct WorldObjectWorker
+     * @brief 世界对象执行器 - 对网格中的每个对象执行操作
+     *
+     * 不收集对象，而是对每个满足条件的对象执行指定操作。
+     * 用于批量处理场景（如广播消息、批量更新等）。
+     *
+     * @tparam Do 操作类型（可调用对象）
+     */
     template<class Do>
     struct WorldObjectWorker
     {
-        uint32 i_mapTypeMask;
-        uint32 i_phaseMask;
-        Do const& i_do;
+        uint32 i_mapTypeMask;               ///< 对象类型掩码
+        uint32 i_phaseMask;                 ///< 相位掩码
+        Do const& i_do;                     ///< 要执行的操作
 
+        /**
+         * @brief 构造世界对象执行器
+         * @param searcher 搜索源对象
+         * @param _do 要执行的操作
+         * @param mapTypeMask 对象类型掩码
+         */
         WorldObjectWorker(WorldObject const* searcher, Do const& _do, uint32 mapTypeMask = GRID_MAP_TYPE_MASK_ALL)
             : i_mapTypeMask(mapTypeMask), i_phaseMask(searcher->GetPhaseMask()), i_do(_do) { }
 
+        /**
+         * @brief 访问游戏对象并执行操作
+         * @param m 游戏对象管理器
+         */
         void Visit(GameObjectMapType &m)
         {
             if (!(i_mapTypeMask & GRID_MAP_TYPE_MASK_GAMEOBJECT))
@@ -298,6 +617,10 @@ namespace Trinity
                     i_do(itr->GetSource());
         }
 
+        /**
+         * @brief 访问玩家并执行操作
+         * @param m 玩家管理器
+         */
         void Visit(PlayerMapType &m)
         {
             if (!(i_mapTypeMask & GRID_MAP_TYPE_MASK_PLAYER))
@@ -306,6 +629,11 @@ namespace Trinity
                 if (itr->GetSource()->InSamePhase(i_phaseMask))
                     i_do(itr->GetSource());
         }
+
+        /**
+         * @brief 访问生物并执行操作
+         * @param m 生物管理器
+         */
         void Visit(CreatureMapType &m)
         {
             if (!(i_mapTypeMask & GRID_MAP_TYPE_MASK_CREATURE))
@@ -315,6 +643,10 @@ namespace Trinity
                     i_do(itr->GetSource());
         }
 
+        /**
+         * @brief 访问尸体并执行操作
+         * @param m 尸体管理器
+         */
         void Visit(CorpseMapType &m)
         {
             if (!(i_mapTypeMask & GRID_MAP_TYPE_MASK_CORPSE))
@@ -324,6 +656,10 @@ namespace Trinity
                     i_do(itr->GetSource());
         }
 
+        /**
+         * @brief 访问动态对象并执行操作
+         * @param m 动态对象管理器
+         */
         void Visit(DynamicObjectMapType &m)
         {
             if (!(i_mapTypeMask & GRID_MAP_TYPE_MASK_DYNAMICOBJECT))
@@ -336,15 +672,29 @@ namespace Trinity
         template<class NOT_INTERESTED> void Visit(GridRefManager<NOT_INTERESTED> &) { }
     };
 
-    // Gameobject searchers
+    // ------------------------- GameObject 搜索器 -------------------------
 
+    /**
+     * @struct GameObjectSearcher
+     * @brief 游戏对象搜索器 - 查找第一个满足条件的游戏对象
+     *
+     * 专门用于搜索 GameObject 类型对象，忽略其他类型。
+     *
+     * @tparam Check 检查条件类型
+     */
     template<class Check>
     struct GameObjectSearcher
     {
-        uint32 i_phaseMask;
-        GameObject* &i_object;
-        Check &i_check;
+        uint32 i_phaseMask;                 ///< 相位掩码
+        GameObject* &i_object;              ///< 输出参数：找到的游戏对象
+        Check &i_check;                     ///< 检查条件
 
+        /**
+         * @brief 构造游戏对象搜索器
+         * @param searcher 搜索源对象
+         * @param result 输出参数
+         * @param check 检查条件
+         */
         GameObjectSearcher(WorldObject const* searcher, GameObject* & result, Check& check)
             : i_phaseMask(searcher->GetPhaseMask()), i_object(result), i_check(check) { }
 
@@ -353,14 +703,28 @@ namespace Trinity
         template<class NOT_INTERESTED> void Visit(GridRefManager<NOT_INTERESTED> &) { }
     };
 
-    // Last accepted by Check GO if any (Check can change requirements at each call)
+    /**
+     * @struct GameObjectLastSearcher
+     * @brief 游戏对象最后搜索器 - 查找最后一个满足条件的游戏对象
+     *
+     * 遍历所有游戏对象，返回最后一个满足检查条件的对象。
+     * 检查条件可以在每次调用时改变要求（如逐步缩小距离）。
+     *
+     * @tparam Check 检查条件类型
+     */
     template<class Check>
     struct GameObjectLastSearcher
     {
-        uint32 i_phaseMask;
-        GameObject* &i_object;
-        Check& i_check;
+        uint32 i_phaseMask;                 ///< 相位掩码
+        GameObject* &i_object;              ///< 输出参数：找到的游戏对象
+        Check& i_check;                     ///< 检查条件
 
+        /**
+         * @brief 构造游戏对象最后搜索器
+         * @param searcher 搜索源对象
+         * @param result 输出参数
+         * @param check 检查条件
+         */
         GameObjectLastSearcher(WorldObject const* searcher, GameObject* & result, Check& check)
             : i_phaseMask(searcher->GetPhaseMask()), i_object(result), i_check(check) { }
 
@@ -369,12 +733,25 @@ namespace Trinity
         template<class NOT_INTERESTED> void Visit(GridRefManager<NOT_INTERESTED> &) { }
     };
 
+    /**
+     * @struct GameObjectListSearcher
+     * @brief 游戏对象列表搜索器 - 收集所有满足条件的游戏对象
+     *
+     * @tparam Check 检查条件类型
+     */
     template<class Check>
     struct GameObjectListSearcher : ContainerInserter<GameObject*>
     {
-        uint32 i_phaseMask;
-        Check& i_check;
+        uint32 i_phaseMask;                 ///< 相位掩码
+        Check& i_check;                     ///< 检查条件
 
+        /**
+         * @brief 构造游戏对象列表搜索器
+         * @tparam Container 容器类型
+         * @param searcher 搜索源对象
+         * @param container 存储结果的容器
+         * @param check 检查条件
+         */
         template<typename Container>
         GameObjectListSearcher(WorldObject const* searcher, Container& container, Check & check)
             : ContainerInserter<GameObject*>(container),
@@ -385,12 +762,27 @@ namespace Trinity
         template<class NOT_INTERESTED> void Visit(GridRefManager<NOT_INTERESTED> &) { }
     };
 
+    /**
+     * @struct GameObjectWorker
+     * @brief 游戏对象执行器 - 对每个游戏对象执行操作
+     *
+     * @tparam Functor 操作类型（可调用对象）
+     */
     template<class Functor>
     struct GameObjectWorker
     {
+        /**
+         * @brief 构造游戏对象执行器
+         * @param searcher 搜索源对象
+         * @param func 要执行的函数对象
+         */
         GameObjectWorker(WorldObject const* searcher, Functor& func)
             : _func(func), _phaseMask(searcher->GetPhaseMask()) { }
 
+        /**
+         * @brief 访问游戏对象并执行操作
+         * @param m 游戏对象管理器
+         */
         void Visit(GameObjectMapType& m)
         {
             for (GameObjectMapType::iterator itr = m.begin(); itr != m.end(); ++itr)
@@ -401,20 +793,33 @@ namespace Trinity
         template<class NOT_INTERESTED> void Visit(GridRefManager<NOT_INTERESTED> &) { }
 
     private:
-        Functor& _func;
-        uint32 _phaseMask;
+        Functor& _func;                     ///< 要执行的函数对象
+        uint32 _phaseMask;                  ///< 相位掩码
     };
 
-    // Unit searchers
+    // ------------------------- Unit 搜索器 -------------------------
 
-    // First accepted by Check Unit if any
+    /**
+     * @struct UnitSearcher
+     * @brief 单位搜索器 - 查找第一个满足条件的单位（生物或玩家）
+     *
+     * 搜索 Creature 和 Player 类型对象。
+     *
+     * @tparam Check 检查条件类型
+     */
     template<class Check>
     struct UnitSearcher
     {
-        uint32 i_phaseMask;
-        Unit* &i_object;
-        Check & i_check;
+        uint32 i_phaseMask;                 ///< 相位掩码
+        Unit* &i_object;                    ///< 输出参数：找到的单位
+        Check & i_check;                    ///< 检查条件
 
+        /**
+         * @brief 构造单位搜索器
+         * @param searcher 搜索源对象
+         * @param result 输出参数
+         * @param check 检查条件
+         */
         UnitSearcher(WorldObject const* searcher, Unit* & result, Check & check)
             : i_phaseMask(searcher->GetPhaseMask()), i_object(result), i_check(check) { }
 
@@ -424,14 +829,27 @@ namespace Trinity
         template<class NOT_INTERESTED> void Visit(GridRefManager<NOT_INTERESTED> &) { }
     };
 
-    // Last accepted by Check Unit if any (Check can change requirements at each call)
+    /**
+     * @struct UnitLastSearcher
+     * @brief 单位最后搜索器 - 查找最后一个满足条件的单位
+     *
+     * 检查条件可以在每次调用时改变要求。
+     *
+     * @tparam Check 检查条件类型
+     */
     template<class Check>
     struct UnitLastSearcher
     {
-        uint32 i_phaseMask;
-        Unit* &i_object;
-        Check & i_check;
+        uint32 i_phaseMask;                 ///< 相位掩码
+        Unit* &i_object;                    ///< 输出参数：找到的单位
+        Check & i_check;                    ///< 检查条件
 
+        /**
+         * @brief 构造单位最后搜索器
+         * @param searcher 搜索源对象
+         * @param result 输出参数
+         * @param check 检查条件
+         */
         UnitLastSearcher(WorldObject const* searcher, Unit* & result, Check & check)
             : i_phaseMask(searcher->GetPhaseMask()), i_object(result), i_check(check) { }
 
@@ -441,13 +859,25 @@ namespace Trinity
         template<class NOT_INTERESTED> void Visit(GridRefManager<NOT_INTERESTED> &) { }
     };
 
-    // All accepted by Check units if any
+    /**
+     * @struct UnitListSearcher
+     * @brief 单位列表搜索器 - 收集所有满足条件的单位
+     *
+     * @tparam Check 检查条件类型
+     */
     template<class Check>
     struct UnitListSearcher : ContainerInserter<Unit*>
     {
-        uint32 i_phaseMask;
-        Check& i_check;
+        uint32 i_phaseMask;                 ///< 相位掩码
+        Check& i_check;                     ///< 检查条件
 
+        /**
+         * @brief 构造单位列表搜索器
+         * @tparam Container 容器类型
+         * @param searcher 搜索源对象
+         * @param container 存储结果的容器
+         * @param check 检查条件
+         */
         template<typename Container>
         UnitListSearcher(WorldObject const* searcher, Container& container, Check& check)
             : ContainerInserter<Unit*>(container),
@@ -459,15 +889,29 @@ namespace Trinity
         template<class NOT_INTERESTED> void Visit(GridRefManager<NOT_INTERESTED> &) { }
     };
 
-    // Creature searchers
+    // ------------------------- Creature 搜索器 -------------------------
 
+    /**
+     * @struct CreatureSearcher
+     * @brief 生物搜索器 - 查找第一个满足条件的生物
+     *
+     * 仅搜索 Creature 类型对象，不包括玩家。
+     *
+     * @tparam Check 检查条件类型
+     */
     template<class Check>
     struct CreatureSearcher
     {
-        uint32 i_phaseMask;
-        Creature* &i_object;
-        Check & i_check;
+        uint32 i_phaseMask;                 ///< 相位掩码
+        Creature* &i_object;                ///< 输出参数：找到的生物
+        Check & i_check;                    ///< 检查条件
 
+        /**
+         * @brief 构造生物搜索器
+         * @param searcher 搜索源对象
+         * @param result 输出参数
+         * @param check 检查条件
+         */
         CreatureSearcher(WorldObject const* searcher, Creature* & result, Check & check)
             : i_phaseMask(searcher->GetPhaseMask()), i_object(result), i_check(check) { }
 
@@ -476,14 +920,27 @@ namespace Trinity
         template<class NOT_INTERESTED> void Visit(GridRefManager<NOT_INTERESTED> &) { }
     };
 
-    // Last accepted by Check Creature if any (Check can change requirements at each call)
+    /**
+     * @struct CreatureLastSearcher
+     * @brief 生物最后搜索器 - 查找最后一个满足条件的生物
+     *
+     * 检查条件可以在每次调用时改变要求。
+     *
+     * @tparam Check 检查条件类型
+     */
     template<class Check>
     struct CreatureLastSearcher
     {
-        uint32 i_phaseMask;
-        Creature* &i_object;
-        Check & i_check;
+        uint32 i_phaseMask;                 ///< 相位掩码
+        Creature* &i_object;                ///< 输出参数：找到的生物
+        Check & i_check;                    ///< 检查条件
 
+        /**
+         * @brief 构造生物最后搜索器
+         * @param searcher 搜索源对象
+         * @param result 输出参数
+         * @param check 检查条件
+         */
         CreatureLastSearcher(WorldObject const* searcher, Creature* & result, Check & check)
             : i_phaseMask(searcher->GetPhaseMask()), i_object(result), i_check(check) { }
 
@@ -492,11 +949,17 @@ namespace Trinity
         template<class NOT_INTERESTED> void Visit(GridRefManager<NOT_INTERESTED> &) { }
     };
 
+    /**
+     * @struct CreatureListSearcher
+     * @brief 生物列表搜索器 - 收集所有满足条件的生物
+     *
+     * @tparam Check 检查条件类型
+     */
     template<class Check>
     struct CreatureListSearcher : ContainerInserter<Creature*>
     {
-        uint32 i_phaseMask;
-        Check& i_check;
+        uint32 i_phaseMask;                 ///< 相位掩码
+        Check& i_check;                     ///< 检查条件
 
         template<typename Container>
         CreatureListSearcher(WorldObject const* searcher, Container& container, Check & check)

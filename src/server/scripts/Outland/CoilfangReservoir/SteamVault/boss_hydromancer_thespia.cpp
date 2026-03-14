@@ -15,30 +15,58 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file boss_hydromancer_thespia.cpp
+ * @brief 海度斯曼·瑟斯皮亚BOSS战AI脚本
+ *
+ * 本文件实现了蒸汽地窖副本中第一个BOSS海度斯曼·瑟斯皮亚的战斗AI。
+ *
+ * BOSS技能：
+ * - 闪电云：在目标位置生成闪电云，造成自然伤害
+ * - 肺部爆裂：对随机目标施放，造成伤害
+ * - 包裹之风：对随机目标施放，眩晕目标
+ * - 英雄模式下会施放两次闪电云和包裹之风
+ *
+ * 战斗机制：
+ * - BOSS会召唤盘牙水元素协助战斗（由副本脚本控制）
+ * - 在英雄模式下技能施放更频繁
+ *
+ * @see steam_vault.h 关联的副本定义头文件
+ */
+
 #include "ScriptMgr.h"
 #include "ScriptedCreature.h"
 #include "steam_vault.h"
 
+/**
+ * @brief BOSS对话文本枚举
+ */
 enum Yells
 {
-    SAY_SUMMON                  = 0,
-    SAY_AGGRO                   = 1,
-    SAY_SLAY                    = 2,
-    SAY_DEAD                    = 3,
+    SAY_SUMMON                  = 0,  // 召唤对话
+    SAY_AGGRO                   = 1,  // 开战对话
+    SAY_SLAY                    = 2,  // 击杀玩家对话
+    SAY_DEAD                    = 3,  // 死亡对话
 };
 
+/**
+ * @brief BOSS技能枚举
+ */
 enum Spells
 {
-    SPELL_LIGHTNING_CLOUD       = 25033,
-    SPELL_LUNG_BURST            = 31481,
-    SPELL_ENVELOPING_WINDS      = 31718
+    SPELL_LIGHTNING_CLOUD       = 25033,  // 闪电云：在目标位置生成闪电云，造成自然伤害
+    SPELL_LUNG_BURST            = 31481,  // 肺部爆裂：对目标造成伤害
+    SPELL_ENVELOPING_WINDS      = 31718   // 包裹之风：眩晕目标
 };
 
+/**
+ * @brief 事件枚举
+ */
 enum Events
 {
-    EVENT_LIGHTNING_CLOUD       = 1,
-    EVENT_LUNG_BURST,
-    EVENT_ENVELOPING_WINDS
+    EVENT_LIGHTNING_CLOUD       = 1,  // 闪电云事件
+    EVENT_LUNG_BURST,                 // 肺部爆裂事件
+    EVENT_ENVELOPING_WINDS            // 包裹之风事件
 };
 
 class boss_hydromancer_thespia : public CreatureScript

@@ -147,6 +147,15 @@ void WorldSocket::OnClose()
     }
 }
 
+// ============================================================================
+// 网络包读取处理器
+// ============================================================================
+// 职责：异步读取并处理客户端发送的网络包
+// 参数：无
+// 返回值：无
+// 调用时机：网络线程中，有数据可读时
+// 注意：使用异步 I/O，非阻塞
+// ============================================================================
 void WorldSocket::ReadHandler()
 {
     if (!IsOpen())
@@ -414,6 +423,15 @@ void WorldSocket::SendPacketAndLogOpcode(WorldPacket const& packet)
     SendPacket(packet);
 }
 
+// ============================================================================
+// 发送网络包
+// ============================================================================
+// 职责：向客户端发送网络数据包
+// 参数：
+//   packet - 要发送的数据包
+// 返回值：无
+// 调用时机：任何需要通知客户端的时候
+// ============================================================================
 void WorldSocket::SendPacket(WorldPacket const& packet)
 {
     if (!IsOpen())
@@ -425,6 +443,16 @@ void WorldSocket::SendPacket(WorldPacket const& packet)
     _bufferQueue.Enqueue(new EncryptablePacket(packet, _authCrypt.IsInitialized()));
 }
 
+// ============================================================================
+// 处理认证会话
+// ============================================================================
+// 职责：验证客户端的登录请求，创建玩家会话
+// 参数：
+//   authSession - 认证包数据
+// 返回值：无
+// 调用时机：客户端发送认证包时
+// 流程：验证 Session Key -> 创建 WorldSession -> 加载角色
+// ============================================================================
 void WorldSocket::HandleAuthSession(WorldPacket& recvPacket)
 {
     std::shared_ptr<AuthSession> authSession = std::make_shared<AuthSession>();
@@ -632,6 +660,16 @@ void WorldSocket::LoadSessionPermissionsCallback(PreparedQueryResult result)
     sWorld->AddSession(_worldSession);
 }
 
+// ============================================================================
+// 发送认证响应
+// ============================================================================
+// 职责：向客户端发送认证结果
+// 参数：
+//   code      - 认证结果代码
+//   queued    - 是否在排队中
+// 返回值：无
+// 调用时机：认证成功或失败后
+// ============================================================================
 void WorldSocket::SendAuthResponseError(uint8 code)
 {
     WorldPacket packet(SMSG_AUTH_RESPONSE, 1);

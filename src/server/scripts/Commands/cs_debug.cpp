@@ -15,6 +15,33 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file cs_debug.cpp
+ * @brief 调试命令模块
+ *
+ * 本模块提供了丰富的调试和测试命令，用于服务器开发和问题排查，包括：
+ * - 威胁列表和战斗状态查看
+ * - 对象属性值读取和修改
+ * - 网络数据包发送测试
+ * - 媒体播放（电影、音乐、音效）
+ * - 实体动画和状态测试
+ * - 战场和竞技场调试
+ * - 物品状态查询
+ * - Warden反作弊系统测试
+ *
+ * 主要命令分类：
+ * - .debug threat - 威胁相关调试
+ * - .debug combat - 战斗相关调试
+ * - .debug getvalue - 获取对象属性值
+ * - .debug play - 播放媒体
+ * - .debug send - 发送测试数据包
+ * - .debug anim - 播放动画
+ * - .debug bg - 战场调试
+ * - .debug arena - 竞技场调试
+ *
+ * @note 这些命令仅供开发和调试使用，生产环境应限制访问权限
+ */
+
 /* ScriptData
 Name: debug_commandscript
 %Complete: 100
@@ -53,11 +80,32 @@ EndScriptData */
 
 using namespace Trinity::ChatCommands;
 
+/**
+ * @class debug_commandscript
+ * @brief 调试命令脚本类
+ *
+ * 该类继承自CommandScript，负责注册和处理所有调试相关的GM命令。
+ * 提供服务器底层调试功能，用于开发、测试和问题排查。
+ *
+ * @warning 这些命令涉及服务器底层机制，仅限开发和高级GM使用
+ */
 class debug_commandscript : public CommandScript
 {
 public:
+    /**
+     * @brief 构造函数
+     *
+     * 初始化调试命令脚本，注册脚本名称为"debug_commandscript"
+     */
     debug_commandscript() : CommandScript("debug_commandscript") { }
 
+    /**
+     * @brief 获取命令表
+     *
+     * 注册所有调试相关的命令及其处理函数
+     *
+     * @return ChatCommandTable 返回命令表，包含所有注册的命令
+     */
     ChatCommandTable GetCommands() const override
     {
         static ChatCommandTable debugPlayCommandTable =

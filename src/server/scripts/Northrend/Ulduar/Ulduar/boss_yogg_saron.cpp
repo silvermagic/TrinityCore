@@ -15,6 +15,29 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file boss_yogg_saron.cpp
+ * @brief 尤格-萨隆Boss战斗脚本模块
+ *
+ * 本模块实现了奥杜尔副本中尤格-萨隆Boss战斗的完整逻辑，包括：
+ * - 尤格-萨隆及其关联实体的AI行为
+ * - 战斗阶段转换机制
+ * - 触手召唤和管理
+ * - 幻象房间机制
+ * - 理智值系统
+ * - 守护者协助机制
+ *
+ * 战斗概述：
+ * - 第一阶段：玩家与萨拉战斗，击杀守护者
+ * - 转换阶段：萨拉死亡后，尤格-萨隆出现
+ * - 第二阶段：击杀触手，进入幻象房间攻击大脑
+ * - 第三阶段：直接攻击尤格-萨隆本体
+ *
+ * 难度模式：
+ * - 玩家可选择不激活守护者来增加难度
+ * - 激活的守护者数量越少，奖励越丰厚
+ */
+
 #include "ScriptMgr.h"
 #include "CreatureTextMgr.h"
 #include "GridNotifiers.h"
@@ -33,383 +56,499 @@
 #include "TemporarySummon.h"
 #include "ulduar.h"
 
+/**
+ * @enum Yells
+ * @brief NPC台词和喊话枚举
+ *
+ * 定义了战斗过程中各个NPC的台词索引，包括：
+ * - 萨拉的各种喊话
+ * - 尤格-萨隆的战斗台词
+ * - 尤格-萨隆之声的低语
+ * - 大脑的喊话
+ * - 不祥之云的提示
+ * - 守护者的台词
+ * - 各种幻象中的角色扮演台词
+ */
 enum Yells
 {
-    // Sara
-    SAY_SARA_ULDUAR_SCREAM_1                = 0,  // screams randomly in a whole instance, unused on retail
-    SAY_SARA_ULDUAR_SCREAM_2                = 1,  // screams randomly in a whole instance, unused on retail
-    SAY_SARA_AGGRO                          = 2,
-    SAY_SARA_FERVOR_HIT                     = 3,
-    SAY_SARA_BLESSING_HIT                   = 4,
-    SAY_SARA_KILL                           = 5,
-    SAY_SARA_TRANSFORM_1                    = 6,
-    SAY_SARA_TRANSFORM_2                    = 7,
-    SAY_SARA_TRANSFORM_3                    = 8,
-    SAY_SARA_TRANSFORM_4                    = 9,
-    SAY_SARA_DEATH_RAY                      = 10,
-    SAY_SARA_PSYCHOSIS_HIT                  = 11,
+    // Sara - 萨拉相关台词
+    SAY_SARA_ULDUAR_SCREAM_1                = 0,  // 在整个副本中随机尖叫，正式服未使用
+    SAY_SARA_ULDUAR_SCREAM_2                = 1,  // 在整个副本中随机尖叫，正式服未使用
+    SAY_SARA_AGGRO                          = 2,  // 开战喊话
+    SAY_SARA_FERVOR_HIT                     = 3,  // 萨拉的狂热命中时喊话
+    SAY_SARA_BLESSING_HIT                   = 4,  // 萨拉的祝福命中时喊话
+    SAY_SARA_KILL                           = 5,  // 击杀玩家时喊话
+    SAY_SARA_TRANSFORM_1                    = 6,  // 转换阶段台词1
+    SAY_SARA_TRANSFORM_2                    = 7,  // 转换阶段台词2
+    SAY_SARA_TRANSFORM_3                    = 8,  // 转换阶段台词3
+    SAY_SARA_TRANSFORM_4                    = 9,  // 转换阶段台词4
+    SAY_SARA_DEATH_RAY                      = 10, // 死亡射线喊话
+    SAY_SARA_PSYCHOSIS_HIT                  = 11, // 精神病命中时喊话
 
-    // Yogg-Saron
-    SAY_YOGG_SARON_SPAWN                    = 0,
-    SAY_YOGG_SARON_MADNESS                  = 1,
-    EMOTE_YOGG_SARON_MADNESS                = 2,
-    SAY_YOGG_SARON_PHASE_3                  = 3,
-    SAY_YOGG_SARON_DEAFENING_ROAR           = 4,
-    EMOTE_YOGG_SARON_DEAFENING_ROAR         = 5,
-    SAY_YOGG_SARON_DEATH                    = 6,
-    EMOTE_YOGG_SARON_EMPOWERING_SHADOWS     = 7,
-    EMOTE_YOGG_SARON_EXTINGUISH_ALL_LIFE    = 8,
+    // Yogg-Saron - 尤格-萨隆相关台词
+    SAY_YOGG_SARON_SPAWN                    = 0,  // 出现时喊话
+    SAY_YOGG_SARON_MADNESS                  = 1,  // 诱导疯狂喊话
+    EMOTE_YOGG_SARON_MADNESS                = 2,  // 诱导疯狂表情
+    SAY_YOGG_SARON_PHASE_3                  = 3,  // 第三阶段喊话
+    SAY_YOGG_SARON_DEAFENING_ROAR           = 4,  // 震耳咆哮喊话
+    EMOTE_YOGG_SARON_DEAFENING_ROAR         = 5,  // 震耳咆哮表情
+    SAY_YOGG_SARON_DEATH                    = 6,  // 死亡喊话
+    EMOTE_YOGG_SARON_EMPOWERING_SHADOWS     = 7,  // 赋能之影表情
+    EMOTE_YOGG_SARON_EXTINGUISH_ALL_LIFE    = 8,  // 熄灭所有生命表情（狂暴）
 
-    // Voice of Yogg-Saron
-    WHISPER_VOICE_PHASE_1_WIPE              = 0,
-    WHISPER_VOICE_INSANE                    = 1,
+    // Voice of Yogg-Saron - 尤格-萨隆之声相关台词
+    WHISPER_VOICE_PHASE_1_WIPE              = 0,  // 第一阶段团灭时的低语
+    WHISPER_VOICE_INSANE                    = 1,  // 玩家疯狂时的低语
 
-    // Brain of Yogg-Saron
-    EMOTE_BRAIN_ILLUSION_SHATTERED          = 0,
+    // Brain of Yogg-Saron - 尤格-萨隆大脑相关台词
+    EMOTE_BRAIN_ILLUSION_SHATTERED          = 0,  // 幻象破碎表情
 
-    // Ominous Cloud
-    EMOTE_OMINOUS_CLOUD_PLAYER_TOUCH        = 0,
+    // Ominous Cloud - 不祥之云相关台词
+    EMOTE_OMINOUS_CLOUD_PLAYER_TOUCH        = 0,  // 玩家触碰不祥之云的表情
 
-    // Keepers
-    SAY_KEEPER_CHOSEN_1                     = 0,
-    SAY_KEEPER_CHOSEN_2                     = 1,
+    // Keepers - 守护者相关台词
+    SAY_KEEPER_CHOSEN_1                     = 0,  // 守护者被选中台词1
+    SAY_KEEPER_CHOSEN_2                     = 1,  // 守护者被选中台词2
 
-    // Yogg-Saron illusions
-    SAY_STORMWIND_ROLEPLAY_4                = 0,
-    SAY_STORMWIND_ROLEPLAY_7                = 1,
-    SAY_ICECROWN_ROLEPLAY_5                 = 2,
-    SAY_ICECROWN_ROLEPLAY_6                 = 3,
-    SAY_CHAMBER_ROLEPLAY_5                  = 4,
+    // Yogg-Saron illusions - 尤格-萨隆幻象相关台词
+    SAY_STORMWIND_ROLEPLAY_4                = 0,  // 暴风城幻象台词4
+    SAY_STORMWIND_ROLEPLAY_7                = 1,  // 暴风城幻象台词7
+    SAY_ICECROWN_ROLEPLAY_5                 = 2,  // 冰冠幻象台词5
+    SAY_ICECROWN_ROLEPLAY_6                 = 3,  // 冰冠幻象台词6
+    SAY_CHAMBER_ROLEPLAY_5                  = 4,  // 龙眠神殿幻象台词5
 
-    // Neltharion
-    SAY_CHAMBER_ROLEPLAY_1                  = 0,
-    SAY_CHAMBER_ROLEPLAY_3                  = 1,
+    // Neltharion - 耐萨里奥（死亡之翼）相关台词
+    SAY_CHAMBER_ROLEPLAY_1                  = 0,  // 龙眠神殿幻象台词1
+    SAY_CHAMBER_ROLEPLAY_3                  = 1,  // 龙眠神殿幻象台词3
 
-    // Ysera
-    SAY_CHAMBER_ROLEPLAY_2                  = 0,
+    // Ysera - 伊瑟拉相关台词
+    SAY_CHAMBER_ROLEPLAY_2                  = 0,  // 龙眠神殿幻象台词2
 
-    // Malygos
-    SAY_CHAMBER_ROLEPLAY_4                  = 0,
+    // Malygos - 玛里苟斯相关台词
+    SAY_CHAMBER_ROLEPLAY_4                  = 0,  // 龙眠神殿幻象台词4
 
-    // Immolated Champion
-    SAY_ICECROWN_ROLEPLAY_1                 = 0,
-    SAY_ICECROWN_ROLEPLAY_3                 = 1,
+    // Immolated Champion - 燃烧的勇士（伯瓦尔）相关台词
+    SAY_ICECROWN_ROLEPLAY_1                 = 0,  // 冰冠幻象台词1
+    SAY_ICECROWN_ROLEPLAY_3                 = 1,  // 冰冠幻象台词3
 
-    // The Lich King
-    SAY_ICECROWN_ROLEPLAY_2                 = 0,
-    SAY_ICECROWN_ROLEPLAY_4                 = 1,
+    // The Lich King - 巫妖王相关台词
+    SAY_ICECROWN_ROLEPLAY_2                 = 0,  // 冰冠幻象台词2
+    SAY_ICECROWN_ROLEPLAY_4                 = 1,  // 冰冠幻象台词4
 
-    // Garona
-    SAY_STORMWIND_ROLEPLAY_1                = 0,
-    SAY_STORMWIND_ROLEPLAY_2                = 1,
-    SAY_STORMWIND_ROLEPLAY_3                = 2,
-    SAY_STORMWIND_ROLEPLAY_6                = 3,
+    // Garona - 迦罗娜相关台词
+    SAY_STORMWIND_ROLEPLAY_1                = 0,  // 暴风城幻象台词1
+    SAY_STORMWIND_ROLEPLAY_2                = 1,  // 暴风城幻象台词2
+    SAY_STORMWIND_ROLEPLAY_3                = 2,  // 暴风城幻象台词3
+    SAY_STORMWIND_ROLEPLAY_6                = 3,  // 暴风城幻象台词6
 
-    // King Llane
-    SAY_STORMWIND_ROLEPLAY_5                = 0,
+    // King Llane - 莱恩国王相关台词
+    SAY_STORMWIND_ROLEPLAY_5                = 0,  // 暴风城幻象台词5
 };
 
+/**
+ * @enum Spells
+ * @brief 法术ID枚举
+ *
+ * 定义了尤格-萨隆战斗中使用的所有法术ID，按实体类型分组：
+ * - 尤格-萨隆之声的法术
+ * - 萨拉的法术
+ * - 不祥之云的法术
+ * - 尤格-萨隆守护者的法术
+ * - 尤格-萨隆本体的法术
+ * - 大脑的法术
+ * - 各种触手的法术
+ * - 不朽守护者的法术
+ * - 守护者协助法术
+ * - 幻象相关法术
+ */
 enum Spells
 {
-    // Voice of Yogg-Saron
-    SPELL_SUMMON_GUARDIAN_2                 = 62978,
-    SPELL_SANITY_PERIODIC                   = 63786,
-    SPELL_SANITY                            = 63050,
-    SPELL_INSANE_PERIODIC                   = 64554,
-    SPELL_INSANE                            = 63120,
-    //SPELL_CLEAR_INSANE                      = 63122,  // when should it be cast?
-    SPELL_CONSTRICTOR_TENTACLE              = 64132,
-    SPELL_CRUSHER_TENTACLE_SUMMON           = 64139,
-    SPELL_CORRUPTOR_TENTACLE_SUMMON         = 64143,
-    SPELL_IMMORTAL_GUARDIAN                 = 64158,
+    // Voice of Yogg-Saron - 尤格-萨隆之声的法术
+    SPELL_SUMMON_GUARDIAN_2                 = 62978, // 召唤尤格-萨隆守护者（第二阶段）
+    SPELL_SANITY_PERIODIC                   = 63786, // 理智值周期性光环
+    SPELL_SANITY                            = 63050, // 理智值（玩家核心机制）
+    SPELL_INSANE_PERIODIC                   = 64554, // 疯狂周期性检查
+    SPELL_INSANE                            = 63120, // 疯狂（理智为0时触发）
+    //SPELL_CLEAR_INSANE                      = 63122,  // 清除疯狂（何时施放？）
+    SPELL_CONSTRICTOR_TENTACLE              = 64132, // 召唤缠绕触手
+    SPELL_CRUSHER_TENTACLE_SUMMON           = 64139, // 召唤粉碎触手
+    SPELL_CORRUPTOR_TENTACLE_SUMMON         = 64143, // 召唤腐化触手
+    SPELL_IMMORTAL_GUARDIAN                 = 64158, // 召唤不朽守护者
 
-    // Sara
-    SPELL_SARAS_FERVOR                      = 63138,
-    SPELL_SARAS_FERVOR_TARGET_SELECTOR      = 63747,
-    SPELL_SARAS_BLESSING                    = 63134,
-    SPELL_SARAS_BLESSING_TARGET_SELECTOR    = 63745,
-    SPELL_SARAS_ANGER                       = 63147,
-    SPELL_SARAS_ANGER_TARGET_SELECTOR       = 63744,
-    SPELL_FULL_HEAL                         = 43978,
-    SPELL_PHASE_2_TRANSFORM                 = 65157,
-    SPELL_SHADOWY_BARRIER_SARA              = 64775,
-    SPELL_RIDE_YOGG_SARON_VEHICLE           = 61791,
-    SPELL_PSYCHOSIS                         = 63795,
-    SPELL_MALADY_OF_THE_MIND                = 63830,
-    SPELL_BRAIN_LINK                        = 63802,
-    SPELL_BRAIN_LINK_DAMAGE                 = 63803,  // red beam
-    SPELL_BRAIN_LINK_NO_DAMAGE              = 63804,  // yellow beam
-    SPELL_DEATH_RAY                         = 63891,
+    // Sara - 萨拉的法术
+    SPELL_SARAS_FERVOR                      = 63138, // 萨拉的狂热
+    SPELL_SARAS_FERVOR_TARGET_SELECTOR      = 63747, // 萨拉的狂热目标选择器
+    SPELL_SARAS_BLESSING                    = 63134, // 萨拉的祝福
+    SPELL_SARAS_BLESSING_TARGET_SELECTOR    = 63745, // 萨拉的祝福目标选择器
+    SPELL_SARAS_ANGER                       = 63147, // 萨拉的愤怒
+    SPELL_SARAS_ANGER_TARGET_SELECTOR       = 63744, // 萨拉的愤怒目标选择器
+    SPELL_FULL_HEAL                         = 43978, // 完全治疗
+    SPELL_PHASE_2_TRANSFORM                 = 65157, // 第二阶段转换视觉效果
+    SPELL_SHADOWY_BARRIER_SARA              = 64775, // 萨拉的暗影屏障
+    SPELL_RIDE_YOGG_SARON_VEHICLE           = 61791, // 骑乘尤格-萨隆载具
+    SPELL_PSYCHOSIS                         = 63795, // 精神病（降低理智）
+    SPELL_MALADY_OF_THE_MIND                = 63830, // 心灵疾病
+    SPELL_BRAIN_LINK                        = 63802, // 大脑连接
+    SPELL_BRAIN_LINK_DAMAGE                 = 63803, // 大脑连接伤害（红色光束）
+    SPELL_BRAIN_LINK_NO_DAMAGE              = 63804, // 大脑连接无伤害（黄色光束）
+    SPELL_DEATH_RAY                         = 63891, // 死亡射线
 
-    // Ominous Cloud
-    SPELL_OMINOUS_CLOUD_VISUAL              = 63084,
-    SPELL_SUMMON_GUARDIAN_1                 = 63031,
+    // Ominous Cloud - 不祥之云的法术
+    SPELL_OMINOUS_CLOUD_VISUAL              = 63084, // 不祥之云视觉效果
+    SPELL_SUMMON_GUARDIAN_1                 = 63031, // 召唤尤格-萨隆守护者（第一阶段）
 
-    // Guardian of Yogg-Saron
-    SPELL_DARK_VOLLEY                       = 63038,
-    SPELL_SHADOW_NOVA                       = 62714,
-    SPELL_SHADOW_NOVA_2                     = 65719,
+    // Guardian of Yogg-Saron - 尤格-萨隆守护者的法术
+    SPELL_DARK_VOLLEY                       = 63038, // 黑暗齐射
+    SPELL_SHADOW_NOVA                       = 62714, // 暗影新星（死亡时爆炸）
+    SPELL_SHADOW_NOVA_2                     = 65719, // 暗影新星2
 
-    // Yogg-Saron
-    SPELL_EXTINGUISH_ALL_LIFE               = 64166,
-    SPELL_SHADOWY_BARRIER_YOGG              = 63894,
-    SPELL_KNOCK_AWAY                        = 64022,
-    SPELL_PHASE_3_TRANSFORM                 = 63895,
-    SPELL_DEAFENING_ROAR                    = 64189,
-    SPELL_LUNATIC_GAZE                      = 64163,
-    SPELL_LUNATIC_GAZE_DAMAGE               = 64164,
-    SPELL_SHADOW_BEACON                     = 64465,
+    // Yogg-Saron - 尤格-萨隆本体的法术
+    SPELL_EXTINGUISH_ALL_LIFE               = 64166, // 熄灭所有生命（狂暴）
+    SPELL_SHADOWY_BARRIER_YOGG              = 63894, // 尤格-萨隆的暗影屏障
+    SPELL_KNOCK_AWAY                        = 64022, // 击退
+    SPELL_PHASE_3_TRANSFORM                 = 63895, // 第三阶段转换
+    SPELL_DEAFENING_ROAR                    = 64189, // 震耳咆哮（硬模式技能）
+    SPELL_LUNATIC_GAZE                      = 64163, // 疯狂凝视
+    SPELL_LUNATIC_GAZE_DAMAGE               = 64164, // 疯狂凝视伤害
+    SPELL_SHADOW_BEACON                     = 64465, // 暗影信标（标记不朽守护者）
 
-    // Brain of Yogg-Saron
-    SPELL_MATCH_HEALTH                      = 64066,
-    SPELL_MATCH_HEALTH_2                    = 64069,
-    SPELL_INDUCE_MADNESS                    = 64059,
-    SPELL_BRAIN_HURT_VISUAL                 = 64361,
-    SPELL_SHATTERED_ILLUSION                = 64173,
-    SPELL_SHATTERED_ILLUSION_REMOVE         = 65238,
+    // Brain of Yogg-Saron - 尤格-萨隆大脑的法术
+    SPELL_MATCH_HEALTH                      = 64066, // 匹配生命值（同步尤格-萨隆生命）
+    SPELL_MATCH_HEALTH_2                    = 64069, // 匹配生命值2
+    SPELL_INDUCE_MADNESS                    = 64059, // 诱导疯狂
+    SPELL_BRAIN_HURT_VISUAL                 = 64361, // 大脑受伤视觉效果
+    SPELL_SHATTERED_ILLUSION                = 64173, // 破碎幻象
+    SPELL_SHATTERED_ILLUSION_REMOVE         = 65238, // 移除破碎幻象
 
-    // Tentacles
-    SPELL_ERUPT                             = 64144,
-    SPELL_TENTACLE_VOID_ZONE                = 64017,  // used by Corruptor Tentacle and Crusher Tentacle only
+    // Tentacles - 触手通用法术
+    SPELL_ERUPT                             = 64144, // 喷发（召唤视觉效果）
+    SPELL_TENTACLE_VOID_ZONE                = 64017,  // 触手虚空区域（腐化和粉碎触手使用）
 
-    // Crusher Tentacle
-    SPELL_DIMINISH_POWER                    = 64145,
-    SPELL_DIMINSH_POWER                     = 64148,
-    SPELL_FOCUSED_ANGER                     = 57688,
-    SPELL_CRUSH                             = 64146,
-    //SPELL_CRUSH_2                           = 65201,  // triggered by SPELL_CRUSH, basepoints of SPELL_MALADY_OF_THE_MIND
+    // Crusher Tentacle - 粉碎触手的法术
+    SPELL_DIMINISH_POWER                    = 64145, // 削弱力量
+    SPELL_DIMINSH_POWER                     = 64148, // 削弱力量（引导）
+    SPELL_FOCUSED_ANGER                     = 57688, // 专注之怒
+    SPELL_CRUSH                             = 64146, // 粉碎
+    //SPELL_CRUSH_2                           = 65201,  // 由SPELL_CRUSH触发
 
-    // Constrictor Tentacle
-    SPELL_TENTACLE_VOID_ZONE_2              = 64384,
-    SPELL_LUNGE                             = 64131,
+    // Constrictor Tentacle - 缠绕触手的法术
+    SPELL_TENTACLE_VOID_ZONE_2              = 64384, // 触手虚空区域2
+    SPELL_LUNGE                             = 64131, // 猛扑（抓取玩家）
 
-    // Corruptor Tentacle
-    SPELL_APATHY                            = 64156,
-    SPELL_BLACK_PLAGUE                      = 64153,
-    SPELL_CURSE_OF_DOOM                     = 64157,
-    SPELL_DRAINING_POISON                   = 64152,
+    // Corruptor Tentacle - 腐化触手的法术
+    SPELL_APATHY                            = 64156, // 冷漠
+    SPELL_BLACK_PLAGUE                      = 64153, // 黑色瘟疫
+    SPELL_CURSE_OF_DOOM                     = 64157, // 厄运诅咒
+    SPELL_DRAINING_POISON                   = 64152, // 吸取毒素
 
-    // Immortal Guardian
-    SPELL_EMPOWERING_SHADOWS                = 64468,
-    SPELL_EMPOWERED                         = 64161,
-    SPELL_EMPOWERED_BUFF                    = 65294,
-    SPELL_WEAKENED                          = 64162,
-    SPELL_DRAIN_LIFE                        = 64159,
-    SPELL_RECENTLY_SPAWNED                  = 64497,
-    SPELL_SIMPLE_TELEPORT                   = 64195,
+    // Immortal Guardian - 不朽守护者的法术
+    SPELL_EMPOWERING_SHADOWS                = 64468, // 赋能之影
+    SPELL_EMPOWERED                         = 64161, // 强化状态
+    SPELL_EMPOWERED_BUFF                    = 65294, // 强化增益
+    SPELL_WEAKENED                          = 64162, // 虚弱状态
+    SPELL_DRAIN_LIFE                        = 64159, // 吸取生命
+    SPELL_RECENTLY_SPAWNED                  = 64497, // 最近生成
+    SPELL_SIMPLE_TELEPORT                   = 64195, // 简单传送
 
-    // Keepers at Observation Ring
-    SPELL_TELEPORT                          = 62940,
+    // Keepers at Observation Ring - 观察环上的守护者法术
+    SPELL_TELEPORT                          = 62940, // 传送
 
-    // Keepers
-    SPELL_SIMPLE_TELEPORT_KEEPERS           = 12980,
-    SPELL_KEEPER_ACTIVE                     = 62647,
+    // Keepers - 守护者通用法术
+    SPELL_SIMPLE_TELEPORT_KEEPERS           = 12980, // 守护者简单传送
+    SPELL_KEEPER_ACTIVE                     = 62647, // 守护者激活
 
-    // Mimiron
-    SPELL_SPEED_OF_INVENTION                = 62671,
-    SPELL_DESTABILIZATION_MATRIX            = 65206,
+    // Mimiron - 米米尔隆的协助法术
+    SPELL_SPEED_OF_INVENTION                = 62671, // 发明速度（急速增益）
+    SPELL_DESTABILIZATION_MATRIX            = 65206, // 失稳矩阵（降低触手伤害）
 
-    // Freya
-    SPELL_RESILIENCE_OF_NATURE              = 62670,
-    SPELL_SANITY_WELL_SUMMON                = 64170,
+    // Freya - 弗雷亚的协助法术
+    SPELL_RESILIENCE_OF_NATURE              = 62670, // 自然韧性（生命值增益）
+    SPELL_SANITY_WELL_SUMMON                = 64170, // 召唤理智之井
 
-    // Sanity Well
-    SPELL_SANITY_WELL_VISUAL                = 63288,
-    SPELL_SANITY_WELL                       = 64169,
+    // Sanity Well - 理智之井的法术
+    SPELL_SANITY_WELL_VISUAL                = 63288, // 理智之井视觉效果
+    SPELL_SANITY_WELL                       = 64169, // 理智之井（恢复理智）
 
-    // Thorim
-    SPELL_FURY_OF_THE_STORM                 = 62702,
-    SPELL_TITANIC_STORM                     = 64171,
+    // Thorim - 托里姆的协助法术
+    SPELL_FURY_OF_THE_STORM                 = 62702, // 风暴之怒（伤害增益）
+    SPELL_TITANIC_STORM                     = 64171, // 泰坦风暴（秒杀不朽守护者）
 
-    // Hodir
-    SPELL_FORTITUDE_OF_FROST                = 62650,
-    SPELL_HODIRS_PROTECTIVE_GAZE            = 64174,
-    SPELL_FLASH_FREEZE_VISUAL               = 64176,
+    // Hodir - 霍迪尔的协助法术
+    SPELL_FORTITUDE_OF_FROST                = 62650, // 霜之坚韧（伤害减免）
+    SPELL_HODIRS_PROTECTIVE_GAZE            = 64174, // 霍迪尔的保护凝视（免死）
+    SPELL_FLASH_FREEZE_VISUAL               = 64176, // 急速冷冻视觉效果
 
-    // Death Orb
-    SPELL_DEATH_RAY_ORIGIN_VISUAL           = 63893,
+    // Death Orb - 死亡之球的法术
+    SPELL_DEATH_RAY_ORIGIN_VISUAL           = 63893, // 死亡射线源头视觉效果
 
-    // Death Ray
-    SPELL_DEATH_RAY_WARNING_VISUAL          = 63882,
-    SPELL_DEATH_RAY_PERIODIC                = 63883,
-    SPELL_DEATH_RAY_DAMAGE_VISUAL           = 63886,
+    // Death Ray - 死亡射线的法术
+    SPELL_DEATH_RAY_WARNING_VISUAL          = 63882, // 死亡射线警告视觉效果
+    SPELL_DEATH_RAY_PERIODIC                = 63883, // 死亡射线周期性伤害
+    SPELL_DEATH_RAY_DAMAGE_VISUAL           = 63886, // 死亡射线伤害视觉效果
 
-    // Laughing Skull
-    SPELL_LUNATIC_GAZE_SKULL                = 64167,
+    // Laughing Skull - 大笑骷髅的法术
+    SPELL_LUNATIC_GAZE_SKULL                = 64167, // 骷髅的疯狂凝视
 
-    // Descend Into Madness
-    SPELL_TELEPORT_PORTAL_VISUAL            = 64416,
-    SPELL_TELEPORT_TO_STORMWIND_ILLUSION    = 63989,
-    SPELL_TELEPORT_TO_CHAMBER_ILLUSION      = 63997,
-    SPELL_TELEPORT_TO_ICECROWN_ILLUSION     = 63998,
+    // Descend Into Madness - 陷入疯狂（传送门）的法术
+    SPELL_TELEPORT_PORTAL_VISUAL            = 64416, // 传送门视觉效果
+    SPELL_TELEPORT_TO_STORMWIND_ILLUSION    = 63989, // 传送到暴风城幻象
+    SPELL_TELEPORT_TO_CHAMBER_ILLUSION      = 63997, // 传送到龙眠神殿幻象
+    SPELL_TELEPORT_TO_ICECROWN_ILLUSION     = 63998, // 传送到冰冠幻象
 
-    // Illusions
-    SPELL_GRIM_REPRISAL                     = 63305,
-    SPELL_GRIM_REPRISAL_DAMAGE              = 64039,
+    // Illusions - 幻象相关法术
+    SPELL_GRIM_REPRISAL                     = 63305, // 无情报复
+    SPELL_GRIM_REPRISAL_DAMAGE              = 64039, // 无情报复伤害
 
-    // Suit of Armor
-    SPELL_NONDESCRIPT_1                     = 64013,
+    // Suit of Armor - 盔甲假人的法术
+    SPELL_NONDESCRIPT_1                     = 64013, // 无描述效果1
 
-    // Dragon Consorts & Deathsworn Zealot
-    SPELL_NONDESCRIPT_2                     = 64010,
+    // Dragon Consorts & Deathsworn Zealot - 龙族配偶和死亡誓执行者的法术
+    SPELL_NONDESCRIPT_2                     = 64010, // 无描述效果2
 
-    // Garona
-    SPELL_ASSASSINATE                       = 64063,
+    // Garona - 迦罗娜的法术
+    SPELL_ASSASSINATE                       = 64063, // 刺杀
 
-    // King Llane
-    SPELL_PERMANENT_FEIGN_DEATH             = 29266,
+    // King Llane - 莱恩国王的法术
+    SPELL_PERMANENT_FEIGN_DEATH             = 29266, // 永久假死
 
-    // The Lich King
-    SPELL_DEATHGRASP                        = 63037,
+    // The Lich King - 巫妖王的法术
+    SPELL_DEATHGRASP                        = 63037, // 死亡之握
 
-    // Turned Champion
-    SPELL_VERTEX_COLOR_BLACK                = 39662,
+    // Turned Champion - 转化的勇士的法术
+    SPELL_VERTEX_COLOR_BLACK                = 39662, // 黑色顶点颜色
 
-    // Player self cast spells
-    SPELL_MALADY_OF_THE_MIND_JUMP           = 63881,
-    SPELL_ILLUSION_ROOM                     = 63988,
-    SPELL_HATE_TO_ZERO                      = 63984,
-    SPELL_TELEPORT_BACK_TO_MAIN_ROOM        = 63992,
-    SPELL_INSANE_VISUAL                     = 64464,
-    SPELL_CONSTRICTOR_TENTACLE_SUMMON       = 64133,
-    SPELL_SQUEEZE                           = 64125,
-    SPELL_FLASH_FREEZE                      = 64175,
-    SPELL_LOW_SANITY_SCREEN_EFFECT          = 63752,
+    // Player self cast spells - 玩家自身施放的法术
+    SPELL_MALADY_OF_THE_MIND_JUMP           = 63881, // 心灵疾病跳跃
+    SPELL_ILLUSION_ROOM                     = 63988, // 幻象房间标记
+    SPELL_HATE_TO_ZERO                      = 63984, // 仇恨清零
+    SPELL_TELEPORT_BACK_TO_MAIN_ROOM        = 63992, // 传送回主房间
+    SPELL_INSANE_VISUAL                     = 64464, // 疯狂视觉效果
+    SPELL_CONSTRICTOR_TENTACLE_SUMMON       = 64133, // 缠绕触手召唤
+    SPELL_SQUEEZE                           = 64125, // 挤压
+    SPELL_FLASH_FREEZE                      = 64175, // 急速冷冻
+    SPELL_LOW_SANITY_SCREEN_EFFECT          = 63752, // 低理智屏幕效果
 
-    SPELL_IN_THE_MAWS_OF_THE_OLD_GOD        = 64184,
+    SPELL_IN_THE_MAWS_OF_THE_OLD_GOD        = 64184, // 在古神之口中（瓦兰奈尔任务）
 };
 
+/**
+ * @enum Phases
+ * @brief 战斗阶段枚举
+ *
+ * 尤格-萨隆战斗分为四个阶段：
+ * - 第一阶段：与萨拉战斗，击杀守护者
+ * - 转换阶段：萨拉死亡，尤格-萨隆出现
+ * - 第二阶段：击杀触手，进入幻象房间攻击大脑
+ * - 第三阶段：直接攻击尤格-萨隆本体
+ */
 enum Phases
 {
-    PHASE_ONE               = 1,
-    PHASE_TRANSFORM         = 2,
-    PHASE_TWO               = 3,
-    PHASE_THREE             = 4,
+    PHASE_ONE               = 1,  // 第一阶段：萨拉阶段
+    PHASE_TRANSFORM         = 2,  // 转换阶段：萨拉死亡到尤格-萨隆出现
+    PHASE_TWO               = 3,  // 第二阶段：触手和幻象阶段
+    PHASE_THREE             = 4,  // 第三阶段：直接战斗阶段
 };
 
+/**
+ * @enum Events
+ * @brief 事件ID枚举
+ *
+ * 定义了战斗中所有定时事件的ID，用于事件调度系统。
+ * 事件按照所属实体进行分组：
+ * - 尤格-萨隆之声事件
+ * - 萨拉事件
+ * - 触手事件
+ * - 尤格-萨隆事件
+ * - 守护者事件
+ * - 幻象角色扮演事件
+ */
 enum Events
 {
-    // Voice of Yogg-Saron
-    EVENT_LOCK_DOOR                         = 1,
-    EVENT_SUMMON_GUARDIAN_OF_YOGG_SARON     = 2,
-    EVENT_SUMMON_CORRUPTOR_TENTACLE         = 3,
-    EVENT_SUMMON_CONSTRICTOR_TENTACLE       = 4,
-    EVENT_SUMMON_CRUSHER_TENTACLE           = 5,
-    EVENT_ILLUSION                          = 6,
-    EVENT_SUMMON_IMMORTAL_GUARDIAN          = 7,
-    EVENT_EXTINGUISH_ALL_LIFE               = 8,    // handled by Voice, timer starts at the beginning of the fight (Yogg-Saron is not spawned at this moment)
+    // Voice of Yogg-Saron - 尤格-萨隆之声的事件
+    EVENT_LOCK_DOOR                         = 1,  // 锁门事件
+    EVENT_SUMMON_GUARDIAN_OF_YOGG_SARON     = 2,  // 召唤尤格-萨隆守护者
+    EVENT_SUMMON_CORRUPTOR_TENTACLE         = 3,  // 召唤腐化触手
+    EVENT_SUMMON_CONSTRICTOR_TENTACLE       = 4,  // 召唤缠绕触手
+    EVENT_SUMMON_CRUSHER_TENTACLE           = 5,  // 召唤粉碎触手
+    EVENT_ILLUSION                          = 6,  // 幻象事件
+    EVENT_SUMMON_IMMORTAL_GUARDIAN          = 7,  // 召唤不朽守护者
+    EVENT_EXTINGUISH_ALL_LIFE               = 8,  // 熄灭所有生命（狂暴），由之声处理，战斗开始时计时（此时尤格-萨隆还未生成）
 
-    // Sara
-    EVENT_SARAS_FERVOR                      = 9,
-    EVENT_SARAS_BLESSING                    = 10,
-    EVENT_SARAS_ANGER                       = 11,
-    EVENT_TRANSFORM_1                       = 12,
-    EVENT_TRANSFORM_2                       = 13,
-    EVENT_TRANSFORM_3                       = 14,
-    EVENT_TRANSFORM_4                       = 15,
-    EVENT_PSYCHOSIS                         = 16,
-    EVENT_MALADY_OF_THE_MIND                = 17,
-    EVENT_BRAIN_LINK                        = 18,
-    EVENT_DEATH_RAY                         = 19,
+    // Sara - 萨拉的事件
+    EVENT_SARAS_FERVOR                      = 9,  // 萨拉的狂热
+    EVENT_SARAS_BLESSING                    = 10, // 萨拉的祝福
+    EVENT_SARAS_ANGER                       = 11, // 萨拉的愤怒
+    EVENT_TRANSFORM_1                       = 12, // 转换事件1
+    EVENT_TRANSFORM_2                       = 13, // 转换事件2
+    EVENT_TRANSFORM_3                       = 14, // 转换事件3
+    EVENT_TRANSFORM_4                       = 15, // 转换事件4
+    EVENT_PSYCHOSIS                         = 16, // 精神病
+    EVENT_MALADY_OF_THE_MIND                = 17, // 心灵疾病
+    EVENT_BRAIN_LINK                        = 18, // 大脑连接
+    EVENT_DEATH_RAY                         = 19, // 死亡射线
 
-    // Tentacles
-    EVENT_DIMINISH_POWER                    = 20,
-    EVENT_CAST_RANDOM_SPELL                 = 21,
+    // Tentacles - 触手的事件
+    EVENT_DIMINISH_POWER                    = 20, // 削弱力量
+    EVENT_CAST_RANDOM_SPELL                 = 21, // 施放随机法术
 
-    // Yogg-Saron
-    EVENT_YELL_BOW_DOWN                     = 22,
-    EVENT_SHADOW_BEACON                     = 23,
-    EVENT_LUNATIC_GAZE                      = 24,
-    EVENT_DEAFENING_ROAR                    = 25,  // only on 25-man with 0-3 keepers active (Hard Mode)
+    // Yogg-Saron - 尤格-萨隆的事件
+    EVENT_YELL_BOW_DOWN                     = 22, // 喊话：跪下
+    EVENT_SHADOW_BEACON                     = 23, // 暗影信标
+    EVENT_LUNATIC_GAZE                      = 24, // 疯狂凝视
+    EVENT_DEAFENING_ROAR                    = 25, // 震耳咆哮（仅在25人模式下，激活0-3个守护者时出现，硬模式技能）
 
-    // Guardian of Yogg-Saron
-    EVENT_DARK_VOLLEY                       = 26,
+    // Guardian of Yogg-Saron - 尤格-萨隆守护者的事件
+    EVENT_DARK_VOLLEY                       = 26, // 黑暗齐射
 
-    // Immortal Guardian
-    EVENT_DRAIN_LIFE                        = 27,
+    // Immortal Guardian - 不朽守护者的事件
+    EVENT_DRAIN_LIFE                        = 27, // 吸取生命
 
-    // Keepers
-    EVENT_DESTABILIZATION_MATRIX            = 28,
-    EVENT_HODIRS_PROTECTIVE_GAZE            = 29,
+    // Keepers - 守护者的事件
+    EVENT_DESTABILIZATION_MATRIX            = 28, // 失稳矩阵
+    EVENT_HODIRS_PROTECTIVE_GAZE            = 29, // 霍迪尔的保护凝视
 
-    // Chamber Illusion
-    EVENT_CHAMBER_ROLEPLAY_1                = 30,
-    EVENT_CHAMBER_ROLEPLAY_2                = 31,
-    EVENT_CHAMBER_ROLEPLAY_3                = 32,
-    EVENT_CHAMBER_ROLEPLAY_4                = 33,
-    EVENT_CHAMBER_ROLEPLAY_5                = 34,
+    // Chamber Illusion - 龙眠神殿幻象的角色扮演事件
+    EVENT_CHAMBER_ROLEPLAY_1                = 30, // 龙眠神殿角色扮演1
+    EVENT_CHAMBER_ROLEPLAY_2                = 31, // 龙眠神殿角色扮演2
+    EVENT_CHAMBER_ROLEPLAY_3                = 32, // 龙眠神殿角色扮演3
+    EVENT_CHAMBER_ROLEPLAY_4                = 33, // 龙眠神殿角色扮演4
+    EVENT_CHAMBER_ROLEPLAY_5                = 34, // 龙眠神殿角色扮演5
 
-    // Icecrown Illusion
-    EVENT_ICECROWN_ROLEPLAY_1               = 35,
-    EVENT_ICECROWN_ROLEPLAY_2               = 36,
-    EVENT_ICECROWN_ROLEPLAY_3               = 37,
-    EVENT_ICECROWN_ROLEPLAY_4               = 38,
-    EVENT_ICECROWN_ROLEPLAY_5               = 39,
-    EVENT_ICECROWN_ROLEPLAY_6               = 40,
+    // Icecrown Illusion - 冰冠幻象的角色扮演事件
+    EVENT_ICECROWN_ROLEPLAY_1               = 35, // 冰冠角色扮演1
+    EVENT_ICECROWN_ROLEPLAY_2               = 36, // 冰冠角色扮演2
+    EVENT_ICECROWN_ROLEPLAY_3               = 37, // 冰冠角色扮演3
+    EVENT_ICECROWN_ROLEPLAY_4               = 38, // 冰冠角色扮演4
+    EVENT_ICECROWN_ROLEPLAY_5               = 39, // 冰冠角色扮演5
+    EVENT_ICECROWN_ROLEPLAY_6               = 40, // 冰冠角色扮演6
 
-    // Stormwind Illusion
-    EVENT_STORMWIND_ROLEPLAY_1              = 41,
-    EVENT_STORMWIND_ROLEPLAY_2              = 42,
-    EVENT_STORMWIND_ROLEPLAY_3              = 43,
-    EVENT_STORMWIND_ROLEPLAY_4              = 44,
-    EVENT_STORMWIND_ROLEPLAY_5              = 45,
-    EVENT_STORMWIND_ROLEPLAY_6              = 46,
-    EVENT_STORMWIND_ROLEPLAY_7              = 47,
+    // Stormwind Illusion - 暴风城幻象的角色扮演事件
+    EVENT_STORMWIND_ROLEPLAY_1              = 41, // 暴风城角色扮演1
+    EVENT_STORMWIND_ROLEPLAY_2              = 42, // 暴风城角色扮演2
+    EVENT_STORMWIND_ROLEPLAY_3              = 43, // 暴风城角色扮演3
+    EVENT_STORMWIND_ROLEPLAY_4              = 44, // 暴风城角色扮演4
+    EVENT_STORMWIND_ROLEPLAY_5              = 45, // 暴风城角色扮演5
+    EVENT_STORMWIND_ROLEPLAY_6              = 46, // 暴风城角色扮演6
+    EVENT_STORMWIND_ROLEPLAY_7              = 47, // 暴风城角色扮演7
 };
 
+/**
+ * @enum EventGroups
+ * @brief 事件组枚举
+ *
+ * 用于将相关事件分组，便于批量延迟或取消。
+ */
 enum EventGroups
 {
-    EVENT_GROUP_SUMMON_TENTACLES            = 1,
+    EVENT_GROUP_SUMMON_TENTACLES            = 1,  // 召唤触手事件组
 };
 
+/**
+ * @enum Actions
+ * @brief 动作ID枚举
+ *
+ * 定义了用于AI之间通信的动作ID。
+ * 用于触发特定的状态转换或行为。
+ */
 enum Actions
 {
-    ACTION_PHASE_TRANSFORM              = 0,
-    ACTION_PHASE_TWO                    = 1,
-    ACTION_PHASE_THREE                  = 2,
-    ACTION_INDUCE_MADNESS               = 3,
-    ACTION_SANITY_WELLS                 = 4,
-    ACTION_FLASH_FREEZE                 = 5,
-    ACTION_TENTACLE_KILLED              = 6,
-    ACTION_START_ROLEPLAY               = 8,
-    ACTION_TOGGLE_SHATTERED_ILLUSION    = 9,
+    ACTION_PHASE_TRANSFORM              = 0,  // 触发转换阶段
+    ACTION_PHASE_TWO                    = 1,  // 触发第二阶段
+    ACTION_PHASE_THREE                  = 2,  // 触发第三阶段
+    ACTION_INDUCE_MADNESS               = 3,  // 诱导疯狂
+    ACTION_SANITY_WELLS                 = 4,  // 激活理智之井
+    ACTION_FLASH_FREEZE                 = 5,  // 急速冷冻
+    ACTION_TENTACLE_KILLED              = 6,  // 触手被击杀
+    ACTION_START_ROLEPLAY               = 8,  // 开始角色扮演
+    ACTION_TOGGLE_SHATTERED_ILLUSION    = 9,  // 切换破碎幻象状态
 };
 
+/**
+ * @enum CreatureGroups
+ * @brief 生物组枚举
+ *
+ * 定义了生物召唤组的ID，用于批量召唤。
+ */
 enum CreatureGroups
 {
-    CREATURE_GROUP_CLOUDS       = 0,
-    CREATURE_GROUP_PORTALS_10   = 1,
-    CREATURE_GROUP_PORTALS_25   = 2,
+    CREATURE_GROUP_CLOUDS       = 0,  // 不祥之云组
+    CREATURE_GROUP_PORTALS_10   = 1,  // 10人传送门组
+    CREATURE_GROUP_PORTALS_25   = 2,  // 25人传送门组
 };
 
+/**
+ * @brief 尤格-萨隆生成位置
+ */
 Position const YoggSaronSpawnPos            = {1980.43f, -25.7708f, 324.9724f, 3.141593f};
+
+/**
+ * @brief 观察环上守护者的位置
+ *
+ * 四位守护者在观察环上的初始位置：
+ * - [0] 弗雷亚
+ * - [1] 霍迪尔
+ * - [2] 托里姆
+ * - [3] 米米尔隆
+ */
 Position const ObservationRingKeepersPos[4] =
 {
-    {1945.682f,  33.34201f, 411.4408f, 5.270895f},  // Freya
-    {1945.761f, -81.52171f, 411.4407f, 1.029744f},  // Hodir
-    {2028.822f, -65.73573f, 411.4426f, 2.460914f},  // Thorim
-    {2028.766f,  17.42014f, 411.4446f, 3.857178f},  // Mimiron
+    {1945.682f,  33.34201f, 411.4408f, 5.270895f},  // Freya - 弗雷亚
+    {1945.761f, -81.52171f, 411.4407f, 1.029744f},  // Hodir - 霍迪尔
+    {2028.822f, -65.73573f, 411.4426f, 2.460914f},  // Thorim - 托里姆
+    {2028.766f,  17.42014f, 411.4446f, 3.857178f},  // Mimiron - 米米尔隆
 };
+
+/**
+ * @brief 战斗区域内守护者的位置
+ *
+ * 四位守护者被激活后，传送到战斗区域协助玩家的位置：
+ * - [0] 弗雷亚
+ * - [1] 霍迪尔
+ * - [2] 托里姆
+ * - [3] 米米尔隆
+ */
 Position const YSKeepersPos[4] =
 {
-    {2036.873f,  25.42513f, 338.4984f, 3.909538f},  // Freya
-    {1939.045f, -90.87457f, 338.5426f, 0.994837f},  // Hodir
-    {1939.148f,  42.49035f, 338.5427f, 5.235988f},  // Thorim
-    {2036.658f, -73.58822f, 338.4985f, 2.460914f},  // Mimiron
+    {2036.873f,  25.42513f, 338.4984f, 3.909538f},  // Freya - 弗雷亚
+    {1939.045f, -90.87457f, 338.5426f, 0.994837f},  // Hodir - 霍迪尔
+    {1939.148f,  42.49035f, 338.5427f, 5.235988f},  // Thorim - 托里姆
+    {2036.658f, -73.58822f, 338.4985f, 2.460914f},  // Mimiron - 米米尔隆
 };
+
+/**
+ * @brief 幻象房间中的其他位置
+ *
+ * 用于幻象角色扮演的移动目标：
+ * - [0] 迦罗娜的终点位置
+ * - [1] 萨鲁法尔的终点位置
+ */
 Position const IllusionsMiscPos[2] =
 {
-    {1928.793f,  65.03109f, 242.3763f, 0.0f}, // Garona end position
-    {1912.324f, -155.7967f, 239.9896f, 0.0f}, // Saurfang end position
+    {1928.793f,  65.03109f, 242.3763f, 0.0f}, // Garona end position - 迦罗娜终点位置
+    {1912.324f, -155.7967f, 239.9896f, 0.0f}, // Saurfang end position - 萨鲁法尔终点位置
 };
 
+/**
+ * @enum MiscData
+ * @brief 杂项数据枚举
+ *
+ * 定义了成就、音效和幻象房间数量等杂项数据。
+ */
 enum MiscData
 {
-    ACHIEV_TIMED_START_EVENT                = 21001,
-    SOUND_LUNATIC_GAZE                      = 15757,
-    MAX_ILLUSION_ROOMS                      = 3
+    ACHIEV_TIMED_START_EVENT                = 21001, // 计时成就开始事件ID
+    SOUND_LUNATIC_GAZE                      = 15757, // 疯狂凝视音效ID
+    MAX_ILLUSION_ROOMS                      = 3      // 最大幻象房间数量
 };
 
+/**
+ * @brief 幻象传送法术数组
+ *
+ * 存储三种幻象房间的传送法术ID：
+ * - [0] 龙眠神殿幻象
+ * - [1] 冰冠幻象
+ * - [2] 暴风城幻象
+ */
 uint32 const IllusionSpells[MAX_ILLUSION_ROOMS]
 {
     SPELL_TELEPORT_TO_CHAMBER_ILLUSION,
@@ -417,64 +556,141 @@ uint32 const IllusionSpells[MAX_ILLUSION_ROOMS]
     SPELL_TELEPORT_TO_STORMWIND_ILLUSION
 };
 
+/**
+ * @class StartAttackEvent
+ * @brief 开始攻击事件
+ *
+ * 延迟启动召唤生物的攻击行为。
+ * 用于在召唤生物生成后延迟一段时间才开始攻击，
+ * 避免召唤瞬间立即攻击玩家。
+ *
+ * 使用场景：
+ * - 触手召唤后的延迟攻击
+ * - 守护者召唤后的延迟攻击
+ */
 class StartAttackEvent : public BasicEvent
 {
     public:
+        /**
+         * @brief 构造函数
+         * @param summoner 召唤者生物
+         * @param owner 被召唤的生物（需要开始攻击的目标）
+         */
         StartAttackEvent(Creature* summoner, Creature* owner)
             : _summonerGuid(summoner->GetGUID()), _owner(owner)
         {
         }
 
+        /**
+         * @brief 执行事件
+         * @param time 执行时间
+         * @param diff 时间差
+         * @return 返回true表示事件完成
+         *
+         * 设置生物为主动攻击状态，并选择召唤者的随机仇恨目标进行攻击。
+         */
         bool Execute(uint64 /*time*/, uint32 /*diff*/) override
         {
+            // 设置为主动攻击状态
             _owner->SetReactState(REACT_AGGRESSIVE);
+            // 获取召唤者
             if (Creature* _summoner = ObjectAccessor::GetCreature(*_owner, _summonerGuid))
+                // 选择召唤者的随机目标进行攻击
                 if (Unit* target = _summoner->AI()->SelectTarget(SelectTargetMethod::Random, 0, 300.0f))
                     _owner->AI()->AttackStart(target);
             return true;
         }
 
     private:
-        ObjectGuid _summonerGuid;
-        Creature* _owner;
+        ObjectGuid _summonerGuid;  ///< 召唤者的GUID
+        Creature* _owner;          ///< 需要开始攻击的生物
 };
 
+/**
+ * @class boss_voice_of_yogg_saron
+ * @brief 尤格-萨隆之声脚本类
+ *
+ * 尤格-萨隆之声是战斗的核心控制器，负责：
+ * - 协调整个战斗流程
+ * - 管理理智值系统
+ * - 召唤各种触手和守护者
+ * - 控制幻象房间机制
+ * - 处理战斗阶段转换
+ *
+ * 尤格-萨隆之声是隐形的，玩家不直接与它战斗。
+ * 它作为战斗的幕后控制者，协调萨拉、尤格-萨隆和大脑的行为。
+ */
 class boss_voice_of_yogg_saron : public CreatureScript
 {
     public:
         boss_voice_of_yogg_saron() : CreatureScript("boss_voice_of_yogg_saron") { }
 
+        /**
+         * @struct boss_voice_of_yogg_saronAI
+         * @brief 尤格-萨隆之声的AI实现
+         *
+         * 继承自BossAI，实现了战斗的核心逻辑。
+         * 负责管理战斗的所有阶段和机制。
+         */
         struct boss_voice_of_yogg_saronAI : public BossAI
         {
+            /**
+             * @brief 构造函数
+             * @param creature 生物对象指针
+             */
             boss_voice_of_yogg_saronAI(Creature* creature) : BossAI(creature, DATA_YOGG_SARON)
             {
                 Initialize();
-                SetCombatMovement(false);
+                SetCombatMovement(false); // 不移动，固定位置
             }
 
+            /**
+             * @brief 初始化成员变量
+             *
+             * 重置所有计数器和计时器到初始状态。
+             */
             void Initialize()
             {
-                _guardiansCount = 0;
-                _guardianTimer = 20s;
-                _illusionShattered = false;
+                _guardiansCount = 0;        // 守护者计数
+                _guardianTimer = 20s;       // 守护者召唤间隔
+                _illusionShattered = false; // 幻象是否破碎
             }
 
+            /**
+             * @brief 视线检测
+             * @param who 检测到的单位
+             *
+             * 当玩家进入范围内时触发战斗。
+             * 注意：MoveInLineOfSight对于如此大的距离不起作用。
+             *
+             * @调用时机 每帧检测
+             */
             void MoveInLineOfSight(Unit* who) override
             {
-                // TODO: MoveInLineOfSight doesn't work for such a big distance
+                // TODO: MoveInLineOfSight对于如此大的距离不起作用
                 if (who->GetTypeId() == TYPEID_PLAYER && !who->ToPlayer()->IsGameMaster() && me->GetDistance2d(who) < 99.0f && !me->IsInCombat())
                     DoZoneInCombat();
             }
 
+            /**
+             * @brief 进入脱战模式
+             * @param why 脱战原因
+             *
+             * 当战斗重置时调用，清理所有相关实体的战斗状态。
+             * 移除玩家的理智和疯狂光环。
+             *
+             * @调用时机 战斗重置或团灭时
+             */
             void EnterEvadeMode(EvadeReason why) override
             {
                 BossAI::EnterEvadeMode(why);
 
+                // 让所有相关实体也脱战
                 for (uint8 i = DATA_SARA; i <= DATA_MIMIRON_YS; ++i)
                     if (Creature* creature = ObjectAccessor::GetCreature(*me, instance->GetGuidData(i)))
                         creature->AI()->EnterEvadeMode();
 
-                // not sure, spoken by Sara (sound), regarding to wowwiki Voice whispers it
+                // 不确定，由萨拉说出（声音），根据wowwiki尤格-萨隆之声低语
                 Map::PlayerList const& players = me->GetMap()->GetPlayers();
                 for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
                     if (Player* player = itr->GetSource())
@@ -482,21 +698,31 @@ class boss_voice_of_yogg_saron : public CreatureScript
                         if (events.IsInPhase(PHASE_ONE))
                             Talk(WHISPER_VOICE_PHASE_1_WIPE, player);
 
+                        // 移除理智和疯狂光环
                         player->RemoveAurasDueToSpell(SPELL_SANITY);
                         player->RemoveAurasDueToSpell(SPELL_INSANE);
                     }
             }
 
+            /**
+             * @brief 重置战斗
+             *
+             * 重置所有战斗状态，召唤不祥之云并设置初始阶段。
+             *
+             * @调用时机 战斗结束或重置时
+             */
             void Reset() override
             {
                 _Reset();
                 events.SetPhase(PHASE_ONE);
 
+                // 设置成就标志
                 instance->SetData(DATA_DRIVE_ME_CRAZY, uint32(true));
                 instance->DoStopTimedAchievement(ACHIEVEMENT_TIMED_TYPE_EVENT, ACHIEV_TIMED_START_EVENT);
 
                 Initialize();
 
+                // 召唤不祥之云，并设置它们的移动路径（交替顺时针和逆时针）
                 bool clockwise = false;
                 std::list<TempSummon*> clouds;
                 me->SummonCreatureGroup(CREATURE_GROUP_CLOUDS, &clouds);
@@ -508,44 +734,75 @@ class boss_voice_of_yogg_saron : public CreatureScript
                 }
             }
 
+            /**
+             * @brief 进入战斗
+             * @param who 目标单位
+             *
+             * 开始战斗，初始化理智系统，设置萨拉和守护者的战斗状态。
+             *
+             * @调用时机 战斗开始时
+             */
             void JustEngagedWith(Unit* /*who*/) override
             {
+                // 萨拉进入战斗
                 if (Creature* sara = instance->GetCreature(DATA_SARA))
                     sara->SetInCombatWith(me);
 
+                // 所有激活的守护者进入战斗
                 for (uint8 i = DATA_FREYA_YS; i <= DATA_MIMIRON_YS; ++i)
                     if (Creature* keeper = ObjectAccessor::GetCreature(*me, instance->GetGuidData(i)))
                         keeper->SetInCombatWith(me);
 
+                // 开始计时成就
                 instance->DoStartTimedAchievement(ACHIEVEMENT_TIMED_TYPE_EVENT, ACHIEV_TIMED_START_EVENT);
 
+                // 施放理智周期光环，召唤第一个守护者
                 DoCastAOE(SPELL_SUMMON_GUARDIAN_2, { SPELLVALUE_MAX_TARGETS, 1 });
                 DoCast(me, SPELL_SANITY_PERIODIC);
 
+                // 调度事件
                 events.ScheduleEvent(EVENT_LOCK_DOOR, 15s);
                 events.ScheduleEvent(EVENT_SUMMON_GUARDIAN_OF_YOGG_SARON, _guardianTimer, 0, PHASE_ONE);
-                events.ScheduleEvent(EVENT_EXTINGUISH_ALL_LIFE, 15min);    // 15 minutes
+                events.ScheduleEvent(EVENT_EXTINGUISH_ALL_LIFE, 15min);    // 15分钟狂暴
             }
 
+            /**
+             * @brief 死亡处理
+             * @param killer 击杀者
+             *
+             * 不消失尤格-萨隆的尸体，将其从召唤列表中移除。
+             *
+             * @调用时机 尤格-萨隆之声死亡时（战斗胜利）
+             */
             void JustDied(Unit* /*killer*/) override
             {
-                // don't despawn Yogg-Saron's corpse, remove him from SummonList!
+                // 不消失尤格-萨隆的尸体，将其从召唤列表中移除
                 if (Creature* yogg = instance->GetCreature(DATA_YOGG_SARON))
                     summons.Despawn(yogg);
 
                 _JustDied();
             }
 
+            /**
+             * @brief 更新AI
+             * @param diff 时间差（毫秒）
+             *
+             * 主要的AI更新循环，处理事件调度和战斗逻辑。
+             *
+             * @调用时机 每帧调用
+             * @性能注意事项 包含事件循环和多个条件判断，性能影响中等
+             */
             void UpdateAI(uint32 diff) override
             {
                 if (!UpdateVictim())
                     return;
 
+                // 如果没有玩家在战斗中，脱战
                 if (!me->GetCombatManager().HasPvECombatWithPlayers())
                     EnterEvadeMode(EVADE_REASON_NO_HOSTILES);
 
                 events.Update(diff);
-                // don't summon tentacles when illusion is shattered, delay them
+                // 当幻象破碎时，延迟触手召唤事件
                 if (_illusionShattered)
                     events.DelayEvents(Milliseconds(diff), EVENT_GROUP_SUMMON_TENTACLES);
 
@@ -554,57 +811,71 @@ class boss_voice_of_yogg_saron : public CreatureScript
                     switch (eventId)
                     {
                         case EVENT_LOCK_DOOR:
+                            // 锁门，开始疯狂周期检测
                             DoCast(me, SPELL_INSANE_PERIODIC);
                             instance->SetBossState(DATA_YOGG_SARON, IN_PROGRESS);
                             break;
                         case EVENT_EXTINGUISH_ALL_LIFE:
+                            // 狂暴：熄灭所有生命
                             if (Creature* yogg = instance->GetCreature(DATA_YOGG_SARON))
                             {
                                 yogg->AI()->Talk(EMOTE_YOGG_SARON_EXTINGUISH_ALL_LIFE, me);
                                 yogg->CastSpell(nullptr, SPELL_EXTINGUISH_ALL_LIFE, true);
                             }
-                            events.ScheduleEvent(EVENT_EXTINGUISH_ALL_LIFE, 10s);    // cast it again after a short while, players can survive
+                            // 短时间后再次施放，玩家可能存活
+                            events.ScheduleEvent(EVENT_EXTINGUISH_ALL_LIFE, 10s);
                             break;
                         case EVENT_SUMMON_GUARDIAN_OF_YOGG_SARON:
+                            // 第一阶段：召唤守护者
                             DoCastAOE(SPELL_SUMMON_GUARDIAN_2, { SPELLVALUE_MAX_TARGETS, 1 });
                             ++_guardiansCount;
+                            // 前6个守护者，每3个减少5秒召唤间隔
                             if (_guardiansCount <= 6 && _guardiansCount % 3 == 0)
                                 _guardianTimer -= 5s;
                             events.ScheduleEvent(EVENT_SUMMON_GUARDIAN_OF_YOGG_SARON, _guardianTimer, 0, PHASE_ONE);
                             break;
                         case EVENT_SUMMON_CORRUPTOR_TENTACLE:
+                            // 第二阶段：召唤腐化触手
                             DoCastAOE(SPELL_CORRUPTOR_TENTACLE_SUMMON);
                             events.ScheduleEvent(EVENT_SUMMON_CORRUPTOR_TENTACLE, 30s, EVENT_GROUP_SUMMON_TENTACLES, PHASE_TWO);
                             break;
                         case EVENT_SUMMON_CONSTRICTOR_TENTACLE:
+                            // 第二阶段：召唤缠绕触手
                             DoCastAOE(SPELL_CONSTRICTOR_TENTACLE, { SPELLVALUE_MAX_TARGETS, 1 });
                             events.ScheduleEvent(EVENT_SUMMON_CONSTRICTOR_TENTACLE, 25s, EVENT_GROUP_SUMMON_TENTACLES, PHASE_TWO);
                             break;
                         case EVENT_SUMMON_CRUSHER_TENTACLE:
+                            // 第二阶段：召唤粉碎触手
                             DoCastAOE(SPELL_CRUSHER_TENTACLE_SUMMON);
                             events.ScheduleEvent(EVENT_SUMMON_CRUSHER_TENTACLE, 60s, EVENT_GROUP_SUMMON_TENTACLES, PHASE_TWO);
                             break;
                         case EVENT_ILLUSION:
                         {
+                            // 第二阶段：幻象房间
                             if (Creature* yogg = instance->GetCreature(DATA_YOGG_SARON))
                             {
                                 yogg->AI()->Talk(EMOTE_YOGG_SARON_MADNESS);
                                 yogg->AI()->Talk(SAY_YOGG_SARON_MADNESS);
                             }
 
+                            // 召唤传送门
                             me->SummonCreatureGroup(CREATURE_GROUP_PORTALS_10);
                             if (me->GetMap()->Is25ManRaid())
                                 me->SummonCreatureGroup(CREATURE_GROUP_PORTALS_25);
 
+                            // 随机选择幻象类型
                             uint8 illusion = urand(CHAMBER_ILLUSION, STORMWIND_ILLUSION);
                             instance->SetData(DATA_ILLUSION, illusion);
 
+                            // 通知大脑开始诱导疯狂
                             if (Creature* brain = instance->GetCreature(DATA_BRAIN_OF_YOGG_SARON))
                                 brain->AI()->DoAction(ACTION_INDUCE_MADNESS);
-                            events.ScheduleEvent(EVENT_ILLUSION, 80s, 0, PHASE_TWO);  // wowwiki says 80 secs, wowhead says something about 90 secs
+                            // wowwiki说是80秒，wowhead说是90秒左右
+                            events.ScheduleEvent(EVENT_ILLUSION, 80s, 0, PHASE_TWO);
                             break;
                         }
                         case EVENT_SUMMON_IMMORTAL_GUARDIAN:
+                            // 第三阶段：召唤不朽守护者
                             DoCastAOE(SPELL_IMMORTAL_GUARDIAN);
                             events.ScheduleEvent(EVENT_SUMMON_IMMORTAL_GUARDIAN, 15s, 0, PHASE_THREE);
                             break;
@@ -614,28 +885,44 @@ class boss_voice_of_yogg_saron : public CreatureScript
                 }
             }
 
+            /**
+             * @brief 执行动作
+             * @param action 动作ID
+             *
+             * 处理阶段转换和其他外部触发的事件。
+             *
+             * @调用时机 由其他AI（萨拉、大脑等）触发
+             */
             void DoAction(int32 action) override
             {
                 switch (action)
                 {
                     case ACTION_PHASE_TRANSFORM:
+                        // 进入转换阶段
                         events.SetPhase(PHASE_TRANSFORM);
+                        // 移除所有不祥之云
                         summons.DespawnEntry(NPC_OMINOUS_CLOUD);
                         break;
                     case ACTION_PHASE_TWO:
+                        // 进入第二阶段
                         events.SetPhase(PHASE_TWO);
+                        // 召唤尤格-萨隆本体
                         me->SummonCreature(NPC_YOGG_SARON, YoggSaronSpawnPos);
+                        // 大脑进入战斗
                         if (Creature* brain = instance->GetCreature(DATA_BRAIN_OF_YOGG_SARON))
                             DoZoneInCombat(brain);
+                        // 调度触手召唤事件
                         events.ScheduleEvent(EVENT_SUMMON_CORRUPTOR_TENTACLE, 5s, EVENT_GROUP_SUMMON_TENTACLES, PHASE_TWO);
                         events.ScheduleEvent(EVENT_SUMMON_CONSTRICTOR_TENTACLE, 7s, EVENT_GROUP_SUMMON_TENTACLES, PHASE_TWO);
                         events.ScheduleEvent(EVENT_SUMMON_CRUSHER_TENTACLE, 5s, EVENT_GROUP_SUMMON_TENTACLES, PHASE_TWO);
                         events.ScheduleEvent(EVENT_ILLUSION, 1min, 0, PHASE_TWO);
                         break;
                     case ACTION_TOGGLE_SHATTERED_ILLUSION:
+                        // 切换幻象破碎状态
                         _illusionShattered = !_illusionShattered;
                         break;
                     case ACTION_PHASE_THREE:
+                        // 进入第三阶段
                         events.SetPhase(PHASE_THREE);
                         events.ScheduleEvent(EVENT_SUMMON_IMMORTAL_GUARDIAN, 1s, 0, PHASE_THREE);
                         break;
@@ -644,29 +931,43 @@ class boss_voice_of_yogg_saron : public CreatureScript
                 }
             }
 
+            /**
+             * @brief 召唤生物处理
+             * @param summon 召唤的生物
+             *
+             * 处理各种召唤生物的初始化，包括设置攻击延迟、视觉效果等。
+             *
+             * @调用时机 生物被召唤时
+             */
             void JustSummoned(Creature* summon) override
             {
                 switch (summon->GetEntry())
                 {
                     case NPC_GUARDIAN_OF_YOGG_SARON:
+                        // 守护者：延迟1秒开始攻击
                         summon->m_Events.AddEvent(new StartAttackEvent(me, summon), summon->m_Events.CalculateTime(1s));
                         break;
                     case NPC_YOGG_SARON:
+                        // 尤格-萨隆：播放出现动画
                         summon->HandleEmoteCommand(EMOTE_ONESHOT_EMERGE);
                         break;
                     case NPC_CONSTRICTOR_TENTACLE:
+                        // 缠绕触手：立即施放猛扑
                         summon->CastSpell(summon, SPELL_LUNGE, true);
                         break;
                     case NPC_CRUSHER_TENTACLE:
                     case NPC_CORRUPTOR_TENTACLE:
+                        // 粉碎和腐化触手：延迟5秒开始攻击
                         summon->SetReactState(REACT_PASSIVE);
                         summon->HandleEmoteCommand(EMOTE_ONESHOT_EMERGE);
                         summon->m_Events.AddEvent(new StartAttackEvent(me, summon), summon->m_Events.CalculateTime(5s));
                         break;
                     case NPC_DESCEND_INTO_MADNESS:
+                        // 传送门：显示传送门视觉效果
                         summon->CastSpell(summon, SPELL_TELEPORT_PORTAL_VISUAL, true);
                         break;
                     case NPC_IMMORTAL_GUARDIAN:
+                        // 不朽守护者：传送效果
                         summon->CastSpell(summon, SPELL_SIMPLE_TELEPORT, true);
                         break;
                 }
@@ -675,26 +976,64 @@ class boss_voice_of_yogg_saron : public CreatureScript
             }
 
         private:
-            uint8 _guardiansCount;
-            Milliseconds _guardianTimer;
-            bool _illusionShattered;
+            uint8 _guardiansCount;          ///< 已召唤的守护者数量
+            Milliseconds _guardianTimer;    ///< 守护者召唤间隔
+            bool _illusionShattered;        ///< 幻象是否破碎（用于延迟触手召唤）
         };
 
+        /**
+         * @brief 获取AI实例
+         * @param creature 生物对象指针
+         * @return AI实例指针
+         */
         CreatureAI* GetAI(Creature* creature) const override
         {
             return GetUlduarAI<boss_voice_of_yogg_saronAI>(creature);
         }
 };
 
+/**
+ * @class boss_sara
+ * @brief 萨拉脚本类
+ *
+ * 萨拉是第一阶段的Boss，实际上是被尤格-萨隆控制的女巨人。
+ * 当萨拉被"杀死"后，会触发转换阶段，尤格-萨隆出现。
+ *
+ * 第一阶段行为：
+ * - 对玩家施放各种负面法术（萨拉的狂热、祝福、愤怒）
+ * - 召唤尤格-萨隆守护者
+ * - 管理大脑连接机制
+ *
+ * 第二阶段行为：
+ * - 变身为尤格-萨隆的一部分
+ * - 继续施放精神病、心灵疾病、大脑连接和死亡射线
+ */
 class boss_sara : public CreatureScript
 {
     public:
         boss_sara() : CreatureScript("boss_sara") { }
 
+        /**
+         * @struct boss_saraAI
+         * @brief 萨拉的AI实现
+         *
+         * 实现了萨拉在第一和第二阶段的战斗逻辑。
+         */
         struct boss_saraAI : public ScriptedAI
         {
+            /**
+             * @brief 构造函数
+             * @param creature 生物对象指针
+             */
             boss_saraAI(Creature* creature) : ScriptedAI(creature), _instance(creature->GetInstanceScript()) { }
 
+            /**
+             * @brief 获取连接玩家的GUID
+             * @param guid 玩家GUID
+             * @return 与该玩家连接的另一个玩家GUID
+             *
+             * 用于大脑连接机制，查找与指定玩家配对的另一个玩家。
+             */
             ObjectGuid GetLinkedPlayerGUID(ObjectGuid guid) const
             {
                 std::map<ObjectGuid, ObjectGuid>::const_iterator itr = _linkData.find(guid);
@@ -704,29 +1043,57 @@ class boss_sara : public CreatureScript
                 return ObjectGuid::Empty;
             }
 
+            /**
+             * @brief 设置玩家之间的连接
+             * @param player1 第一个玩家的GUID
+             * @param player2 第二个玩家的GUID
+             *
+             * 建立两个玩家之间的大脑连接。
+             */
             void SetLinkBetween(ObjectGuid player1, ObjectGuid player2)
             {
                 _linkData[player1] = player2;
                 _linkData[player2] = player1;
             }
 
+            /**
+             * @brief 从连接中移除玩家
+             * @param player1 要移除的玩家GUID
+             *
+             * 当光环移除时，为每个目标调用一次。
+             */
             // called once for each target on aura remove
             void RemoveLinkFrom(ObjectGuid player1)
             {
                 _linkData.erase(player1);
             }
 
+            /**
+             * @brief 受到伤害处理
+             * @param attacker 攻击者
+             * @param damage 伤害值（可修改）
+             * @param damageType 伤害类型
+             * @param spellInfo 法术信息
+             *
+             * 当萨拉的生命值降至0时，触发转换阶段。
+             * 不允许萨拉真正死亡，而是保持1点生命值并开始转换序列。
+             *
+             * @调用时机 每次受到伤害时
+             */
             void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType /*damageType*/, SpellInfo const* /*spellInfo = nullptr*/) override
             {
                 if (damage >= me->GetHealth())
                 {
+                    // 保持1点生命值
                     damage = me->GetHealth() - 1;
 
                     if (_events.IsInPhase(PHASE_ONE))
                     {
+                        // 通知尤格-萨隆之声开始转换阶段
                         if (Creature* voice = _instance->GetCreature(DATA_VOICE_OF_YOGG_SARON))
                             voice->AI()->DoAction(ACTION_PHASE_TRANSFORM);
 
+                        // 开始转换序列的台词
                         Talk(SAY_SARA_TRANSFORM_1);
                         _events.SetPhase(PHASE_TRANSFORM);
                         _events.ScheduleEvent(EVENT_TRANSFORM_1, 4700ms, 0, PHASE_TRANSFORM);
@@ -737,6 +1104,16 @@ class boss_sara : public CreatureScript
                 }
             }
 
+            /**
+             * @brief 法术命中目标处理
+             * @param target 目标对象
+             * @param spellInfo 法术信息
+             *
+             * 当法术命中目标时，有30%几率喊话。
+             * 在转换阶段不喊话。
+             *
+             * @调用时机 法术命中目标时
+             */
             void SpellHitTarget(WorldObject* /*target*/, SpellInfo const* spellInfo) override
             {
                 if (!roll_chance_i(30) || _events.IsInPhase(PHASE_TRANSFORM))
@@ -758,12 +1135,28 @@ class boss_sara : public CreatureScript
                 }
             }
 
+            /**
+             * @brief 击杀单位处理
+             * @param victim 被击杀的单位
+             *
+             * 当萨拉击杀玩家时喊话。
+             *
+             * @调用时机 击杀玩家时
+             */
             void KilledUnit(Unit* victim) override
             {
                 if (victim->GetTypeId() == TYPEID_PLAYER && !me->IsInEvadeMode())
                     Talk(SAY_SARA_KILL);
             }
 
+            /**
+             * @brief 进入战斗
+             * @param who 目标单位
+             *
+             * 开始第一阶段的战斗，调度各种法术事件。
+             *
+             * @调用时机 战斗开始时
+             */
             void JustEngagedWith(Unit* /*who*/) override
             {
                 Talk(SAY_SARA_AGGRO);
@@ -772,6 +1165,14 @@ class boss_sara : public CreatureScript
                 _events.ScheduleEvent(EVENT_SARAS_ANGER, 15s, 25s, 0, PHASE_ONE);
             }
 
+            /**
+             * @brief 刚进入战斗
+             * @param who 目标单位
+             *
+             * 防止重复进入战斗。
+             *
+             * @调用时机 进入战斗时
+             */
             void JustEnteredCombat(Unit* who) override
             {
                 if (IsEngaged())
@@ -780,25 +1181,44 @@ class boss_sara : public CreatureScript
                 EngagementStart(who);
             }
 
+            /**
+             * @brief 重置
+             *
+             * 重置萨拉的状态，移除所有光环，设置为被动和友好阵营。
+             *
+             * @调用时机 战斗重置时
+             */
             void Reset() override
             {
                 me->RemoveAllAuras();
-                me->SetReactState(REACT_PASSIVE);
-                me->SetFaction(FACTION_FRIENDLY);
+                me->SetReactState(REACT_PASSIVE);  // 被动反应状态
+                me->SetFaction(FACTION_FRIENDLY);  // 友好阵营
                 _events.Reset();
                 _events.SetPhase(PHASE_ONE);
             }
 
+            /**
+             * @brief 更新AI
+             * @param diff 时间差（毫秒）
+             *
+             * 主要的AI更新循环，处理第一和第二阶段的法术施放。
+             * 当破碎幻象激活时暂停行动。
+             *
+             * @调用时机 每帧调用
+             * @性能注意事项 包含事件循环和施法判断，性能影响中等
+             */
             void UpdateAI(uint32 diff) override
             {
                 if (!me->IsInCombat())
                     return;
 
+                // 破碎幻象期间不行动
                 if (me->HasAura(SPELL_SHATTERED_ILLUSION))
                     return;
 
                 _events.Update(diff);
 
+                // 如果正在施法，等待
                 if (me->HasUnitState(UNIT_STATE_CASTING))
                     return;
 
@@ -807,56 +1227,70 @@ class boss_sara : public CreatureScript
                     switch (eventId)
                     {
                         case EVENT_SARAS_FERVOR:
+                            // 第一阶段：萨拉的狂热
                             DoCastAOE(SPELL_SARAS_FERVOR_TARGET_SELECTOR, { SPELLVALUE_MAX_TARGETS, 1 });
                             _events.ScheduleEvent(EVENT_SARAS_FERVOR, 6s, 0, PHASE_ONE);
                             break;
                         case EVENT_SARAS_ANGER:
+                            // 第一阶段：萨拉的愤怒
                             DoCastAOE(SPELL_SARAS_ANGER_TARGET_SELECTOR, { SPELLVALUE_MAX_TARGETS, 1 });
                             _events.ScheduleEvent(EVENT_SARAS_ANGER, 6s, 8s, 0, PHASE_ONE);
                             break;
                         case EVENT_SARAS_BLESSING:
+                            // 第一阶段：萨拉的祝福
                             DoCastAOE(SPELL_SARAS_BLESSING_TARGET_SELECTOR, { SPELLVALUE_MAX_TARGETS, 1 });
                             _events.ScheduleEvent(EVENT_SARAS_BLESSING, 6s, 30s, 0, PHASE_ONE);
                             break;
                         case EVENT_TRANSFORM_1:
+                            // 转换阶段：台词2
                             Talk(SAY_SARA_TRANSFORM_2);
                             break;
                         case EVENT_TRANSFORM_2:
+                            // 转换阶段：台词3
                             Talk(SAY_SARA_TRANSFORM_3);
                             break;
                         case EVENT_TRANSFORM_3:
+                            // 转换阶段：台词4，完全治疗，改变阵营，通知开始第二阶段
                             Talk(SAY_SARA_TRANSFORM_4);
                             DoCast(me, SPELL_FULL_HEAL);
-                            me->SetFaction(FACTION_MONSTER_2);
+                            me->SetFaction(FACTION_MONSTER_2);  // 敌对阵营
+                            // 通知尤格-萨隆之声进入第二阶段
                             if (Creature* voice = _instance->GetCreature(DATA_VOICE_OF_YOGG_SARON))
                                 voice->AI()->DoAction(ACTION_PHASE_TWO);
+                            // 通知米米尔隆进入第二阶段
                             if (Creature* mimiron = ObjectAccessor::GetCreature(*me, _instance->GetGuidData(DATA_MIMIRON_YS)))
                                 mimiron->AI()->DoAction(ACTION_PHASE_TWO);
                             break;
                         case EVENT_TRANSFORM_4:
+                            // 转换阶段：变形，骑乘尤格-萨隆，施放暗影屏障
                             DoCast(me, SPELL_PHASE_2_TRANSFORM);
                             if (Creature* yogg = _instance->GetCreature(DATA_YOGG_SARON))
                                 DoCast(yogg, SPELL_RIDE_YOGG_SARON_VEHICLE);
                             DoCast(me, SPELL_SHADOWY_BARRIER_SARA);
                             _events.SetPhase(PHASE_TWO);
-                            _events.ScheduleEvent(EVENT_DEATH_RAY, 20s, 0, PHASE_TWO);    // almost never cast at scheduled time, why?
+                            // 调度第二阶段法术
+                            _events.ScheduleEvent(EVENT_DEATH_RAY, 20s, 0, PHASE_TWO);    // 几乎从不在预定时间施放，为什么？
                             _events.ScheduleEvent(EVENT_MALADY_OF_THE_MIND, 18s, 0, PHASE_TWO);
                             _events.ScheduleEvent(EVENT_PSYCHOSIS, 1ms, 0, PHASE_TWO);
                             _events.ScheduleEvent(EVENT_BRAIN_LINK, 23s, 0, PHASE_TWO);
                             break;
                         case EVENT_DEATH_RAY:
+                            // 第二阶段：死亡射线
                             DoCast(me, SPELL_DEATH_RAY);
                             _events.ScheduleEvent(EVENT_DEATH_RAY, 21s, 0, PHASE_TWO);
                             break;
                         case EVENT_MALADY_OF_THE_MIND:
+                            // 第二阶段：心灵疾病
                             DoCastAOE(SPELL_MALADY_OF_THE_MIND, { SPELLVALUE_MAX_TARGETS, 1 });
                             _events.ScheduleEvent(EVENT_MALADY_OF_THE_MIND, 18s, 25s, 0, PHASE_TWO);
                             break;
                         case EVENT_PSYCHOSIS:
+                            // 第二阶段：精神病
                             DoCastAOE(SPELL_PSYCHOSIS, { SPELLVALUE_MAX_TARGETS, 1 });
                             _events.ScheduleEvent(EVENT_PSYCHOSIS, 4s, 0, PHASE_TWO);
                             break;
                         case EVENT_BRAIN_LINK:
+                            // 第二阶段：大脑连接
                             DoCastAOE(SPELL_BRAIN_LINK, { SPELLVALUE_MAX_TARGETS, 2 });
                             _events.ScheduleEvent(EVENT_BRAIN_LINK, 23s, 26s, 0, PHASE_TWO);
                             break;
@@ -866,6 +1300,14 @@ class boss_sara : public CreatureScript
                 }
             }
 
+            /**
+             * @brief 召唤生物处理
+             * @param summon 召唤的生物
+             *
+             * 处理死亡射线相关的召唤物。
+             *
+             * @调用时机 生物被召唤时
+             */
             void JustSummoned(Creature* summon) override
             {
                 summon->SetReactState(REACT_PASSIVE);
@@ -873,8 +1315,10 @@ class boss_sara : public CreatureScript
                 switch (summon->GetEntry())
                 {
                     case NPC_DEATH_ORB:
+                        // 死亡之球：喊话，施放视觉效果，召唤4条死亡射线
                         Talk(SAY_SARA_DEATH_RAY);
                         summon->CastSpell(summon, SPELL_DEATH_RAY_ORIGIN_VISUAL);
+                        // 召唤4条死亡射线，随机位置
                         for (uint8 i = 0; i < 4; ++i)
                         {
                             Position pos;
@@ -887,19 +1331,29 @@ class boss_sara : public CreatureScript
                         }
                         break;
                     case NPC_DEATH_RAY:
+                        // 死亡射线：施放警告视觉效果
                         summon->CastSpell(summon, SPELL_DEATH_RAY_WARNING_VISUAL);
                         break;
                 }
 
+                // 通知尤格-萨隆之声
                 if (Creature* voice = _instance->GetCreature(DATA_VOICE_OF_YOGG_SARON))
                     voice->AI()->JustSummoned(summon);
             }
 
+            /**
+             * @brief 执行动作
+             * @param action 动作ID
+             *
+             * 处理阶段转换动作。
+             *
+             * @调用时机 由其他AI触发
+             */
             void DoAction(int32 action) override
             {
                 switch (action)
                 {
-                    case ACTION_PHASE_THREE:    // Sara does nothing in phase 3
+                    case ACTION_PHASE_THREE:    // 萨拉在第三阶段不行动
                         _events.SetPhase(PHASE_THREE);
                         break;
                     default:
@@ -908,11 +1362,16 @@ class boss_sara : public CreatureScript
             }
 
             private:
-                EventMap _events;
-                InstanceScript* _instance;
-                std::map<ObjectGuid, ObjectGuid> _linkData;
+                EventMap _events;                               ///< 事件映射表
+                InstanceScript* _instance;                      ///< 副本脚本指针
+                std::map<ObjectGuid, ObjectGuid> _linkData;     ///< 大脑连接数据映射
         };
 
+        /**
+         * @brief 获取AI实例
+         * @param creature 生物对象指针
+         * @return AI实例指针
+         */
         CreatureAI* GetAI(Creature* creature) const override
         {
             return GetUlduarAI<boss_saraAI>(creature);
@@ -3189,54 +3648,70 @@ class spell_yogg_saron_hodirs_protective_gaze : public SpellScriptLoader     // 
         }
 };
 
+/**
+ * @brief 注册尤格-萨隆相关脚本
+ *
+ * 此函数是脚本系统的入口点，负责注册本文件中所有AI和法术脚本。
+ * 包括：
+ * - Boss AI：尤格-萨隆之声、萨拉、尤格-萨隆、大脑
+ * - NPC AI：各种触手、守护者、幻象NPC等
+ * - 法术脚本：理智系统、大脑连接、各种技能效果等
+ *
+ * @调用时机 服务器启动时，由脚本加载系统调用
+ */
 void AddSC_boss_yogg_saron()
 {
-    new boss_voice_of_yogg_saron();
-    new boss_sara();
-    new boss_yogg_saron();
-    new boss_brain_of_yogg_saron();
-    new npc_ominous_cloud();
-    new npc_guardian_of_yogg_saron();
-    new npc_corruptor_tentacle();
-    new npc_constrictor_tentacle();
-    new npc_crusher_tentacle();
-    new npc_influence_tentacle();
-    new npc_descend_into_madness();
-    new npc_immortal_guardian();
-    new npc_observation_ring_keeper();
-    new npc_yogg_saron_keeper();
-    new npc_yogg_saron_illusions();
-    new npc_garona();
-    new npc_turned_champion();
-    new npc_laughing_skull();
-    new spell_yogg_saron_target_selectors();
-    new spell_yogg_saron_psychosis();
-    new spell_yogg_saron_malady_of_the_mind();
-    new spell_yogg_saron_brain_link();
-    new spell_yogg_saron_brain_link_damage();
-    new spell_yogg_saron_boil_ominously();
-    new spell_yogg_saron_shadow_beacon();
-    new spell_yogg_saron_empowering_shadows_range_check();
-    new spell_yogg_saron_empowering_shadows_missile();
-    new spell_yogg_saron_constrictor_tentacle();
-    new spell_yogg_saron_lunge();
-    new spell_yogg_saron_squeeze();
-    new spell_yogg_saron_diminsh_power();
-    new spell_yogg_saron_empowered();
-    new spell_yogg_saron_match_health();
-    new spell_yogg_saron_shattered_illusion();
-    new spell_yogg_saron_death_ray_warning_visual();
-    new spell_yogg_saron_cancel_illusion_room_aura();
-    new spell_yogg_saron_nondescript();
-    new spell_yogg_saron_revealed_tentacle();
-    new spell_yogg_saron_grim_reprisal();
-    new spell_yogg_saron_induce_madness();
-    new spell_yogg_saron_sanity();
-    new spell_yogg_saron_insane();
-    new spell_yogg_saron_insane_periodic();
-    new spell_yogg_saron_lunatic_gaze();
-    new spell_yogg_saron_keeper_aura();
-    new spell_yogg_saron_in_the_maws_of_the_old_god();
-    new spell_yogg_saron_titanic_storm();
-    new spell_yogg_saron_hodirs_protective_gaze();
+    // Boss AI
+    new boss_voice_of_yogg_saron();     // 尤格-萨隆之声（核心控制器）
+    new boss_sara();                    // 萨拉（第一阶段Boss）
+    new boss_yogg_saron();              // 尤格-萨隆本体
+    new boss_brain_of_yogg_saron();     // 尤格-萨隆大脑
+
+    // NPC AI
+    new npc_ominous_cloud();            // 不祥之云
+    new npc_guardian_of_yogg_saron();   // 尤格-萨隆守护者
+    new npc_corruptor_tentacle();       // 腐化触手
+    new npc_constrictor_tentacle();     // 缠绕触手
+    new npc_crusher_tentacle();         // 粉碎触手
+    new npc_influence_tentacle();       // 影响触手（幻象房间中的目标）
+    new npc_descend_into_madness();     // 陷入疯狂（传送门）
+    new npc_immortal_guardian();        // 不朽守护者
+    new npc_observation_ring_keeper();  // 观察环上的守护者
+    new npc_yogg_saron_keeper();        // 战斗区域内的守护者
+    new npc_yogg_saron_illusions();     // 尤格-萨隆幻象
+    new npc_garona();                   // 迦罗娜（暴风城幻象）
+    new npc_turned_champion();          // 转化的勇士（冰冠幻象）
+    new npc_laughing_skull();           // 大笑骷髅
+
+    // 法术脚本
+    new spell_yogg_saron_target_selectors();            // 目标选择器
+    new spell_yogg_saron_psychosis();                   // 精神病
+    new spell_yogg_saron_malady_of_the_mind();          // 心灵疾病
+    new spell_yogg_saron_brain_link();                  // 大脑连接
+    new spell_yogg_saron_brain_link_damage();           // 大脑连接伤害
+    new spell_yogg_saron_boil_ominously();              // 不祥沸腾
+    new spell_yogg_saron_shadow_beacon();               // 暗影信标
+    new spell_yogg_saron_empowering_shadows_range_check();  // 赋能之影范围检查
+    new spell_yogg_saron_empowering_shadows_missile();  // 赋能之影飞弹
+    new spell_yogg_saron_constrictor_tentacle();        // 缠绕触手召唤
+    new spell_yogg_saron_lunge();                       // 猛扑
+    new spell_yogg_saron_squeeze();                     // 挤压
+    new spell_yogg_saron_diminsh_power();               // 削弱力量
+    new spell_yogg_saron_empowered();                   // 强化
+    new spell_yogg_saron_match_health();                // 匹配生命值
+    new spell_yogg_saron_shattered_illusion();          // 破碎幻象
+    new spell_yogg_saron_death_ray_warning_visual();    // 死亡射线警告视觉效果
+    new spell_yogg_saron_cancel_illusion_room_aura();   // 取消幻象房间光环
+    new spell_yogg_saron_nondescript();                 // 无描述效果
+    new spell_yogg_saron_revealed_tentacle();           // 揭示触手
+    new spell_yogg_saron_grim_reprisal();               // 无情报复
+    new spell_yogg_saron_induce_madness();              // 诱导疯狂
+    new spell_yogg_saron_sanity();                      // 理智值
+    new spell_yogg_saron_insane();                      // 疯狂
+    new spell_yogg_saron_insane_periodic();             // 疯狂周期性
+    new spell_yogg_saron_lunatic_gaze();                // 疯狂凝视
+    new spell_yogg_saron_keeper_aura();                 // 守护者光环
+    new spell_yogg_saron_in_the_maws_of_the_old_god();  // 在古神之口中
+    new spell_yogg_saron_titanic_storm();               // 泰坦风暴
+    new spell_yogg_saron_hodirs_protective_gaze();      // 霍迪尔的保护凝视
 }

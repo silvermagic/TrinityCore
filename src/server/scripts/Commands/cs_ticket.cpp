@@ -22,6 +22,26 @@ Comment: All ticket related commands
 Category: commandscripts
 EndScriptData */
 
+/**
+ * @file cs_ticket.cpp
+ * @brief 工单(Ticket)管理命令模块
+ *
+ * 本模块实现了所有与GM工单管理相关的命令,包括:
+ * - 工单分配(.ticket assign)
+ * - 工单关闭(.ticket close)
+ * - 工单完成(.ticket complete)
+ * - 工单删除(.ticket delete)
+ * - 工单升级(.ticket escalate)
+ * - 工单列表查看(.ticket list)
+ * - 工单查看(.ticket viewid, .ticket viewname)
+ * - 工单评论(.ticket comment)
+ * - 工单回复(.ticket response)
+ * - 工单系统开关(.ticket togglesystem)
+ *
+ * 工单系统是玩家与GM沟通的主要渠道,玩家可以提交问题或举报,
+ * GM通过这些命令来管理和处理工单。
+ */
+
 #include "ScriptMgr.h"
 #include "AccountMgr.h"
 #include "CharacterCache.h"
@@ -40,18 +60,59 @@ EndScriptData */
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #endif
 
+/**
+ * @class ticket_commandscript
+ * @brief 工单管理命令脚本类
+ *
+ * 继承自CommandScript,提供工单管理相关的所有GM命令处理函数。
+ * 包括工单的创建、查看、分配、关闭、删除等完整生命周期管理。
+ */
 class ticket_commandscript : public CommandScript
 {
 public:
+    /**
+     * @brief 构造函数
+     *
+     * 初始化工单命令脚本,注册脚本名称为"ticket_commandscript"
+     */
     ticket_commandscript() : CommandScript("ticket_commandscript") { }
 
+    /**
+     * @brief 获取命令表
+     * @return 返回工单命令表结构
+     *
+     * 构建并返回所有工单相关命令的层次结构,包括:
+     * - ticket assign: 分配工单给指定GM
+     * - ticket close: 关闭工单
+     * - ticket closedlist: 列出已关闭的工单
+     * - ticket comment: 添加工单评论
+     * - ticket complete: 标记工单为已完成
+     * - ticket delete: 删除工单
+     * - ticket escalate: 升级工单
+     * - ticket escalatedlist: 列出已升级的工单
+     * - ticket list: 列出所有工单
+     * - ticket onlinelist: 列出在线玩家的工单
+     * - ticket reset: 重置工单系统
+     * - ticket response: 回复工单
+     *   - append: 追加回复内容
+     *   - appendln: 追加回复内容并换行
+     * - ticket togglesystem: 切换工单系统开关
+     * - ticket unassign: 取消工单分配
+     * - ticket viewid: 通过ID查看工单
+     * - ticket viewname: 通过玩家名查看工单
+     *
+     * @note 此函数在服务器启动时调用一次,构建的命令表会被缓存
+     */
     std::vector<ChatCommand> GetCommands() const override
     {
+        // 工单回复子命令表
         static std::vector<ChatCommand> ticketResponseCommandTable =
         {
             { "append",   rbac::RBAC_PERM_COMMAND_TICKET_RESPONSE_APPEND,   true,  &HandleGMTicketResponseAppendCommand,   "" },
             { "appendln", rbac::RBAC_PERM_COMMAND_TICKET_RESPONSE_APPENDLN, true,  &HandleGMTicketResponseAppendLnCommand, "" },
         };
+
+        // 主工单命令表
         static std::vector<ChatCommand> ticketCommandTable =
         {
             { "assign",        rbac::RBAC_PERM_COMMAND_TICKET_ASSIGN,        true, &HandleGMTicketAssignToCommand,          "" },
@@ -71,6 +132,8 @@ public:
             { "viewid",        rbac::RBAC_PERM_COMMAND_TICKET_VIEWID,        true, &HandleGMTicketGetByIdCommand,           "" },
             { "viewname",      rbac::RBAC_PERM_COMMAND_TICKET_VIEWNAME,      true, &HandleGMTicketGetByNameCommand,         "" },
         };
+
+        // 根命令表
         static std::vector<ChatCommand> commandTable =
         {
             { "ticket", rbac::RBAC_PERM_COMMAND_TICKET, false, nullptr, "", ticketCommandTable },
@@ -78,11 +141,29 @@ public:
         return commandTable;
     }
 
+    /**
+     * @brief 处理分配工单命令
+     * @param handler 聊天处理器指针
+     * @param args 命令参数,格式: <ticketId> <playerName>
+     * @return true 命令执行成功
+     *
+     * @par 调用时机:
+     * 当GM执行.ticket assign <ticketId> <playerName>命令时调用
+     *
+     * @par 功能说明:
+     * 将指定工单分配给指定的GM处理。目标玩家必须有处理工单的权限。
+     * 已分配的工单不能再分配给其他人,除非当前处理人自己操作或控制台强制分配。
+     *
+     * @par 权限要求:
+     * - 需要RBAC_PERM_COMMAND_TICKET_ASSIGN权限
+     * - 目标玩家需要RBAC_PERM_COMMANDS_BE_ASSIGNED_TICKET权限
+     */
     static bool HandleGMTicketAssignToCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
             return false;
 
+        // 解析参数:工单ID和目标玩家名称
         char* ticketIdStr = strtok((char*)args, " ");
         uint32 ticketId = atoi(ticketIdStr);
 
@@ -94,6 +175,7 @@ public:
         if (!normalizePlayerName(target))
             return false;
 
+        // 获取工单对象
         GmTicket* ticket = sTicketMgr->GetTicket(ticketId);
         if (!ticket || ticket->IsClosed())
         {
@@ -101,8 +183,11 @@ public:
             return true;
         }
 
+        // 获取目标玩家的GUID和账户ID
         ObjectGuid targetGuid = sCharacterCache->GetCharacterGuidByName(target);
         uint32 accountId = sCharacterCache->GetCharacterAccountIdByGuid(targetGuid);
+
+        // 检查目标玩家是否有处理工单的权限
         // Target must exist and have administrative rights
         if (!AccountMgr::HasPermission(accountId, rbac::RBAC_PERM_COMMANDS_BE_ASSIGNED_TICKET, realm.Id.Realm))
         {
@@ -110,6 +195,7 @@ public:
             return true;
         }
 
+        // 如果已经分配给目标玩家,不需要重复分配
         // If already assigned, leave
         if (ticket->IsAssignedTo(targetGuid))
         {
@@ -117,6 +203,7 @@ public:
             return true;
         }
 
+        // 如果工单已分配给其他人,只有控制台或当前处理人可以重新分配
         // If assigned to different player other than current, leave
         //! Console can override though
         Player* player = handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr;
@@ -126,17 +213,36 @@ public:
             return true;
         }
 
+        // 分配工单
         // Assign ticket
         CharacterDatabaseTransaction trans = CharacterDatabaseTransaction(nullptr);
         ticket->SetAssignedTo(targetGuid, AccountMgr::IsAdminAccount(AccountMgr::GetSecurity(accountId, realm.Id.Realm)));
         ticket->SaveToDB(trans);
         sTicketMgr->UpdateLastChange();
 
+        // 向所有GM广播分配消息
         std::string msg = ticket->FormatMessageString(*handler, nullptr, target.c_str(), nullptr, nullptr, nullptr);
         handler->SendGlobalGMSysMessage(msg.c_str());
         return true;
     }
 
+    /**
+     * @brief 处理关闭工单命令
+     * @param handler 聊天处理器指针
+     * @param args 命令参数,格式: <ticketId>
+     * @return true 命令执行成功
+     *
+     * @par 调用时机:
+     * 当GM执行.ticket close <ticketId>命令时调用
+     *
+     * @par 功能说明:
+     * 关闭指定的工单。工单必须未关闭且未完成。
+     * 只有分配给工单的GM或控制台才能关闭工单。
+     * 关闭后会通知工单提交者。
+     *
+     * @par 权限要求:
+     * - 需要RBAC_PERM_COMMAND_TICKET_CLOSE权限
+     */
     static bool HandleGMTicketCloseByIdCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
@@ -150,6 +256,7 @@ public:
             return true;
         }
 
+        // 只有分配给工单的GM或控制台才能关闭工单
         // Ticket should be assigned to the player who tries to close it.
         // Console can override though
         Player* player = handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr;
@@ -159,12 +266,15 @@ public:
             return true;
         }
 
+        // 关闭工单
         sTicketMgr->ResolveAndCloseTicket(ticket->GetId(), player ? player->GetGUID() : ObjectGuid(uint64(0)));
         sTicketMgr->UpdateLastChange();
 
+        // 广播关闭消息
         std::string msg = ticket->FormatMessageString(*handler, player ? player->GetName().c_str() : "Console", nullptr, nullptr, nullptr, nullptr);
         handler->SendGlobalGMSysMessage(msg.c_str());
 
+        // 通知工单提交者
         // Inform player, who submitted this ticket, that it is closed
         if (Player* submitter = ticket->GetPlayer())
         {
@@ -175,6 +285,18 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理添加工单评论命令
+     * @param handler 聊天处理器指针
+     * @param args 命令参数,格式: <ticketId> <comment>
+     * @return true 命令执行成功
+     *
+     * @par 调用时机:
+     * 当GM执行.ticket comment <ticketId> <comment>命令时调用
+     *
+     * @par 功能说明:
+     * 为工单添加评论,方便GM之间沟通协作
+     */
     static bool HandleGMTicketCommentCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
@@ -220,12 +342,27 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理列出已关闭工单命令
+     * @param handler 聊天处理器指针
+     * @param args 命令参数(未使用)
+     * @return true 命令执行成功
+     */
     static bool HandleGMTicketListClosedCommand(ChatHandler* handler, char const* /*args*/)
     {
         sTicketMgr->ShowClosedList(*handler);
         return true;
     }
 
+    /**
+     * @brief 处理完成工单命令
+     * @param handler 聊天处理器指针
+     * @param args 命令参数,格式: <ticketId> [response]
+     * @return true 命令执行成功
+     *
+     * @par 功能说明:
+     * 标记工单为已完成,并发送可选的回复给玩家
+     */
     static bool HandleGMTicketCompleteCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
@@ -273,6 +410,15 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理删除工单命令
+     * @param handler 聊天处理器指针
+     * @param args 命令参数,格式: <ticketId>
+     * @return true 命令执行成功
+     *
+     * @par 功能说明:
+     * 删除已关闭的工单。工单必须先关闭才能删除
+     */
     static bool HandleGMTicketDeleteByIdCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
@@ -297,6 +443,7 @@ public:
 
         if (Player* player = ticket->GetPlayer())
         {
+            // 强制玩家放弃工单
             // Force abandon ticket
             WorldPacket data(SMSG_GMTICKET_DELETETICKET, 4);
             data << uint32(GMTICKET_RESPONSE_TICKET_DELETED);
@@ -309,6 +456,15 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理升级工单命令
+     * @param handler 聊天处理器指针
+     * @param args 命令参数,格式: <ticketId>
+     * @return true 命令执行成功
+     *
+     * @par 功能说明:
+     * 将工单标记为需要更高级别GM处理
+     */
     static bool HandleGMTicketEscalateCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
@@ -331,24 +487,39 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理列出已升级工单命令
+     */
     static bool HandleGMTicketListEscalatedCommand(ChatHandler* handler, char const* /*args*/)
     {
         sTicketMgr->ShowEscalatedList(*handler);
         return true;
     }
 
+    /**
+     * @brief 处理列出所有工单命令
+     */
     static bool HandleGMTicketListCommand(ChatHandler* handler, char const* /*args*/)
     {
         sTicketMgr->ShowList(*handler, false);
         return true;
     }
 
+    /**
+     * @brief 处理列出在线玩家工单命令
+     */
     static bool HandleGMTicketListOnlineCommand(ChatHandler* handler, char const* /*args*/)
     {
         sTicketMgr->ShowList(*handler, true);
         return true;
     }
 
+    /**
+     * @brief 处理重置工单系统命令
+     *
+     * @par 功能说明:
+     * 清空所有工单数据。只有当没有未处理的工单时才能执行
+     */
     static bool HandleGMTicketResetCommand(ChatHandler* handler, char const* /*args*/)
     {
         if (sTicketMgr->GetOpenTicketCount())
@@ -365,6 +536,12 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理切换工单系统开关命令
+     *
+     * @par 功能说明:
+     * 开启或关闭工单系统。关闭后玩家无法提交新工单
+     */
     static bool HandleToggleGMTicketSystem(ChatHandler* handler, char const* /*args*/)
     {
         bool status = !sTicketMgr->GetStatus();
@@ -373,6 +550,16 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理取消工单分配命令
+     * @param handler 聊天处理器指针
+     * @param args 命令参数,格式: <ticketId>
+     * @return true 命令执行成功
+     *
+     * @par 功能说明:
+     * 取消工单的GM分配,使其变为未分配状态
+     * 只能取消权限等级不高于自己的GM的分配
+     */
     static bool HandleGMTicketUnAssignCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
@@ -426,6 +613,15 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理通过ID查看工单命令
+     * @param handler 聊天处理器指针
+     * @param args 命令参数,格式: <ticketId>
+     * @return true 命令执行成功
+     *
+     * @par 功能说明:
+     * 查看指定ID的工单详细内容
+     */
     static bool HandleGMTicketGetByIdCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
@@ -447,6 +643,15 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理通过玩家名查看工单命令
+     * @param handler 聊天处理器指针
+     * @param args 命令参数,格式: <playerName>
+     * @return true 命令执行成功
+     *
+     * @par 功能说明:
+     * 查看指定玩家的工单详细内容
+     */
     static bool HandleGMTicketGetByNameCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
@@ -456,6 +661,7 @@ public:
         if (!normalizePlayerName(name))
             return false;
 
+        // 查找玩家GUID
         // Detect target's GUID
         ObjectGuid guid;
         if (Player* player = ObjectAccessor::FindPlayerByName(name))
@@ -463,6 +669,7 @@ public:
         else
             guid = sCharacterCache->GetCharacterGuidByName(name);
 
+        // 目标玩家必须存在
         // Target must exist
         if (guid.IsEmpty())
         {
@@ -470,6 +677,7 @@ public:
             return true;
         }
 
+        // 工单必须存在
         // Ticket must exist
         GmTicket* ticket = sTicketMgr->GetTicketByPlayer(guid);
         if (!ticket)
@@ -486,6 +694,16 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理工单回复追加的内部函数
+     * @param args 命令参数
+     * @param newLine 是否添加换行
+     * @param handler 聊天处理器指针
+     * @return true 命令执行成功
+     *
+     * @par 功能说明:
+     * 向工单追加回复内容的内部实现
+     */
     static bool _HandleGMTicketResponseAppendCommand(char const* args, bool newLine, ChatHandler* handler)
     {
         if (!*args)
@@ -505,6 +723,7 @@ public:
             return true;
         }
 
+        // 不能给分配给其他人的工单添加回复
         // Cannot add response to ticket, assigned to someone else
         //! Console excluded
         Player* player = handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr;
@@ -523,17 +742,29 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理追加工单回复命令
+     */
     static bool HandleGMTicketResponseAppendCommand(ChatHandler* handler, char const* args)
     {
         return _HandleGMTicketResponseAppendCommand(args, false, handler);
     }
 
+    /**
+     * @brief 处理追加工单回复并换行命令
+     */
     static bool HandleGMTicketResponseAppendLnCommand(ChatHandler* handler, char const* args)
     {
         return _HandleGMTicketResponseAppendCommand(args, true, handler);
     }
 };
 
+/**
+ * @brief 注册工单命令脚本
+ *
+ * 此函数在服务器启动时被脚本系统调用,用于注册工单命令脚本。
+ * 创建ticket_commandscript实例并将其添加到命令处理系统中。
+ */
 void AddSC_ticket_commandscript()
 {
     new ticket_commandscript();

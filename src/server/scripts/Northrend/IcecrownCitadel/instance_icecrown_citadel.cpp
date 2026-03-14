@@ -15,6 +15,22 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file    instance_icecrown_citadel.cpp
+ * @brief   冰冠堡垒副本实例脚本
+ *
+ * 本模块实现了冰冠堡垒副本的实例管理功能，包括：
+ * - 副本内所有首领的边界定义
+ * - 门和传送门的状态管理
+ * - 副本进度的保存和加载
+ * - 英雄模式尝试次数限制
+ * - 每周任务系统
+ * - 阵营增益（乌瑞恩之力/地狱咆哮的战歌）
+ * - 战舰事件管理
+ * - 冰霜巨龙平台重建
+ * - 巫妖王死亡后的NPC生成
+ */
+
 #include "icecrown_citadel.h"
 #include "AreaBoundary.h"
 #include "Creature.h"
@@ -32,6 +48,12 @@
 #include "WorldStatePackets.h"
 #include <unordered_set>
 
+/**
+ * @enum EventIds
+ * @brief 游戏事件ID定义
+ *
+ * 用于触发冰冠堡垒内的特定事件，如战舰战斗、地震等
+ */
 enum EventIds
 {
     EVENT_PLAYERS_GUNSHIP_SPAWN     = 22663,
@@ -44,6 +66,12 @@ enum EventIds
     EVENT_TELEPORT_TO_FROSTMOURNE   = 23617
 };
 
+/**
+ * @enum TimedEvents
+ * @brief 定时事件ID定义
+ *
+ * 用于实例内部定时事件的调度
+ */
 enum TimedEvents
 {
     EVENT_UPDATE_EXECUTION_TIME = 1,
@@ -52,12 +80,23 @@ enum TimedEvents
     EVENT_RESPAWN_GUNSHIP       = 4
 };
 
+/**
+ * @enum SpawnGroups
+ * @brief 生成组ID定义
+ *
+ * 定义了阵营特定的NPC生成组
+ */
 enum SpawnGroups
 {
     SPAWN_GROUP_ALLIANCE_ROS   = 57,
     SPAWN_GROUP_HORDE_ROS      = 58
 };
 
+/**
+ * @brief 首领战斗边界数据
+ *
+ * 定义了每个首领的战斗区域边界，防止首领被拖出战斗区域
+ */
 BossBoundaryData const boundaries =
 {
     { DATA_LORD_MARROWGAR,        new CircleBoundary(Position(-428.0f,2211.0f), 95.0) },
@@ -76,6 +115,11 @@ BossBoundaryData const boundaries =
     { DATA_SINDRAGOSA,            new EllipseBoundary(Position(4408.6f, 2484.0f), 100.0, 75.0) }
 };
 
+/**
+ * @brief 门数据配置
+ *
+ * 定义了副本内各个门与首领状态的关联
+ */
 DoorData const doorData[] =
 {
     { GO_LORD_MARROWGAR_S_ENTRANCE,           DATA_LORD_MARROWGAR,        DOOR_TYPE_ROOM },
@@ -106,14 +150,25 @@ DoorData const doorData[] =
     { 0,                                      0,                          DOOR_TYPE_ROOM }  // END
 };
 
-// this doesnt have to only store questgivers, also can be used for related quest spawns
+/**
+ * @struct WeeklyQuest
+ * @brief 每周任务数据结构
+ *
+ * 存储每周任务相关的NPC和任务ID
+ * 不限于任务给予者，也可用于相关任务生成物
+ */
 struct WeeklyQuest
 {
-    uint32 creatureEntry;
-    uint32 questId[2];  // 10 and 25 man versions
+    uint32 creatureEntry;       ///< 相关NPC条目ID
+    uint32 questId[2];          ///< 任务ID数组 [10人模式, 25人模式]
 };
 
-// when changing the content, remember to update SetData, DATA_BLOOD_QUICKENING_STATE case for NPC_ALRIN_THE_AGILE index
+/**
+ * @brief 每周任务数据数组
+ *
+ * 定义了冰冠堡垒所有每周任务
+ * 注意：修改此数组时，记得更新SetData中DATA_BLOOD_QUICKENING_STATE的NPC_ALRIN_THE_AGILE索引
+ */
 WeeklyQuest const WeeklyQuestData[WeeklyNPCs] =
 {
     { NPC_INFILTRATOR_MINCHAR,         { QUEST_DEPROGRAMMING_10,                 QUEST_DEPROGRAMMING_25                 } }, // Deprogramming
@@ -127,41 +182,77 @@ WeeklyQuest const WeeklyQuestData[WeeklyNPCs] =
     { NPC_VALITHRIA_DREAMWALKER_QUEST, { QUEST_RESPITE_FOR_A_TORNMENTED_SOUL_10, QUEST_RESPITE_FOR_A_TORNMENTED_SOUL_25 } }  // Respite for a Tormented Soul
 };
 
-// NPCs spawned at Light's Hammer on Lich King dead
-Position const JainaSpawnPos    = { -48.65278f, 2211.026f, 27.98586f, 3.124139f };
-Position const MuradinSpawnPos  = { -47.34549f, 2208.087f, 27.98586f, 3.106686f };
-Position const UtherSpawnPos    = { -26.58507f, 2211.524f, 30.19898f, 3.124139f };
-Position const SylvanasSpawnPos = { -41.45833f, 2222.891f, 27.98586f, 3.647738f };
+/**
+ * @brief 巫妖王死亡后在光明之锤生成的NPC位置
+ *
+ * 这些NPC在巫妖王被击杀后会出现在副本入口处
+ */
+Position const JainaSpawnPos    = { -48.65278f, 2211.026f, 27.98586f, 3.124139f };  // 吉安娜位置
+Position const MuradinSpawnPos  = { -47.34549f, 2208.087f, 27.98586f, 3.106686f };  // 穆拉丁位置
+Position const UtherSpawnPos    = { -26.58507f, 2211.524f, 30.19898f, 3.124139f };  // 乌瑟尔位置
+Position const SylvanasSpawnPos = { -41.45833f, 2222.891f, 27.98586f, 3.647738f };  // 希尔瓦娜斯位置
 
+/**
+ * @class instance_icecrown_citadel
+ * @brief 冰冠堡垒副本实例脚本
+ *
+ * 负责管理冰冠堡垒副本的整体状态，包括：
+ * - 首领状态管理
+ * - 英雄模式尝试次数
+ * - 门和传送门状态
+ * - 每周任务系统
+ * - 阵营增益
+ * - 战舰事件
+ */
 class instance_icecrown_citadel : public InstanceMapScript
 {
     public:
         instance_icecrown_citadel() : InstanceMapScript(ICCScriptName, 631) { }
 
+        /**
+         * @class instance_icecrown_citadel_InstanceMapScript
+         * @brief 冰冠堡垒实例脚本实现
+         *
+         * 继承自InstanceScript，实现冰冠堡垒副本的具体逻辑
+         */
         struct instance_icecrown_citadel_InstanceMapScript : public InstanceScript
         {
+            /**
+             * @brief 构造函数
+             * @param map 副本地图指针
+             *
+             * 初始化副本实例，设置首领数量、边界、门数据和各种状态变量
+             */
             instance_icecrown_citadel_InstanceMapScript(InstanceMap* map) : InstanceScript(map)
             {
                 SetHeaders(DataHeader);
                 SetBossNumber(EncounterCount);
                 LoadBossBoundaries(boundaries);
                 LoadDoorData(doorData);
-                TeamInInstance = map->GetTeamInInstance();
-                HeroicAttempts = MaxHeroicAttempts;
-                ColdflameJetsState = NOT_STARTED;
-                UpperSpireTeleporterActiveState = NOT_STARTED;
-                BloodQuickeningState = NOT_STARTED;
-                BloodQuickeningMinutes = 0;
-                BloodPrinceIntro = 1;
-                SindragosaIntro = 1;
-                IsBonedEligible = true;
-                IsOozeDanceEligible = true;
-                IsNauseaEligible = true;
-                IsOrbWhispererEligible = true;
-                IsFactionBuffActive = true;
+
+                // 初始化成员变量
+                TeamInInstance = map->GetTeamInInstance();           // 副本阵营
+                HeroicAttempts = MaxHeroicAttempts;                  // 英雄模式尝试次数
+                ColdflameJetsState = NOT_STARTED;                    // 冰霜喷流状态（玛洛加尔）
+                UpperSpireTeleporterActiveState = NOT_STARTED;       // 上层尖塔传送器状态
+                BloodQuickeningState = NOT_STARTED;                  // 血之加速任务状态
+                BloodQuickeningMinutes = 0;                          // 血之加速剩余时间
+                BloodPrinceIntro = 1;                                // 血王子介绍状态
+                SindragosaIntro = 1;                                 // 辛达苟萨介绍状态
+                IsBonedEligible = true;                              // 成就"白骨累累"是否有效
+                IsOozeDanceEligible = true;                          // 成就"软泥之舞"是否有效
+                IsNauseaEligible = true;                             // 成就"恶心反胃"是否有效
+                IsOrbWhispererEligible = true;                       // 成就"低语宝珠"是否有效
+                IsFactionBuffActive = true;                          // 阵营增益是否激活
             }
 
-            // A function to help reduce the number of lines for teleporter management.
+            /**
+             * @brief 设置传送器状态
+             * @param go 游戏对象指针
+             * @param usable 是否可用
+             *
+             * 辅助函数，用于简化传送器状态管理的代码量
+             */
             void SetTeleporterState(GameObject* go, bool usable)
             {
                 if (usable)
@@ -176,6 +267,14 @@ class instance_icecrown_citadel : public InstanceMapScript
                 }
             }
 
+            /**
+             * @brief 填充初始世界状态
+             * @param packet 世界状态数据包
+             *
+             * 向客户端发送副本相关的世界状态数据，包括：
+             * - 血之加速任务计时器
+             * - 英雄模式尝试次数
+             */
             void FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& packet) override
             {
                 packet.Worldstates.emplace_back(WORLDSTATE_SHOW_TIMER, BloodQuickeningState == IN_PROGRESS ? 1 : 0);
@@ -185,6 +284,15 @@ class instance_icecrown_citadel : public InstanceMapScript
                 packet.Worldstates.emplace_back(WORLDSTATE_ATTEMPTS_MAX, MaxHeroicAttempts);
             }
 
+            /**
+             * @brief 玩家进入副本时
+             * @param player 进入的玩家
+             *
+             * 当玩家进入副本时：
+             * - 生成阵营相关的NPC（联盟/部落）
+             * - 如果需要则生成战舰
+             * - 施加阵营增益buff
+             */
             void OnPlayerEnter(Player* player) override
             {
                 uint8 spawnGroupId = TeamInInstance == ALLIANCE ? SPAWN_GROUP_ALLIANCE_ROS : SPAWN_GROUP_HORDE_ROS;
@@ -198,11 +306,26 @@ class instance_icecrown_citadel : public InstanceMapScript
                     DoCastSpellOnPlayer(player, TeamInInstance == ALLIANCE ? SPELL_STRENGHT_OF_WRYNN : SPELL_HELLSCREAMS_WARSONG);
             }
 
+            /**
+             * @brief 玩家离开副本时
+             * @param player 离开的玩家
+             *
+             * 移除玩家身上的阵营增益buff
+             */
             void OnPlayerLeave(Player* player) override
             {
                 DoRemoveAurasDueToSpellOnPlayer(player, TeamInInstance == ALLIANCE ? SPELL_STRENGHT_OF_WRYNN : SPELL_HELLSCREAMS_WARSONG, true, true);
             }
 
+            /**
+             * @brief 生物创建时的回调
+             * @param creature 新创建的生物
+             *
+             * 当副本内的生物创建时被调用，用于：
+             * - 为守护者施加阵营增益
+             * - 记录首领和重要NPC的GUID
+             * - 初始化某些生物的特殊状态
+             */
             void OnCreatureCreate(Creature* creature) override
             {
                 if (creature->IsGuardian() && creature->GetOwnerGUID().IsPlayer())

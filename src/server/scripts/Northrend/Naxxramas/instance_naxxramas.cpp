@@ -15,6 +15,19 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file    instance_naxxramas.cpp
+ * @brief   纳克萨玛斯副本实例脚本
+ *
+ * 本模块实现了纳克萨玛斯副本的实例管理功能，包括：
+ * - 副本内所有首领的边界定义
+ * - 门和传送门的状态管理
+ * - 副本进度的保存和加载
+ * - 首领击杀后的对话和事件触发
+ * - 成就判定（不朽者/不死者）
+ * - 四大区域的传送门激活管理
+ */
+
 #include "ScriptMgr.h"
 #include "AreaBoundary.h"
 #include "CreatureAI.h"
@@ -24,6 +37,12 @@
 #include "naxxramas.h"
 #include "TemporarySummon.h"
 
+/**
+ * @brief 首领战斗边界数据
+ *
+ * 定义了每个首领的战斗区域边界，用于防止首领被拖出战斗区域。
+ * 包括圆形、矩形、平行四边形和Z轴范围边界。
+ */
 BossBoundaryData const boundaries =
 {
     /* Arachnid Quarter */
@@ -57,6 +76,14 @@ BossBoundaryData const boundaries =
     { BOSS_KELTHUZAD, new CircleBoundary(Position(3716.0f, -5107.0f), 85.0) }
 };
 
+/**
+ * @brief 门数据配置
+ *
+ * 定义了副本内各个门与首领状态的关联。
+ * 门会根据对应首领的状态自动开启或关闭。
+ * DOOR_TYPE_ROOM: 房间门，首领战斗时关闭
+ * DOOR_TYPE_PASSAGE: 通道门，首领死亡后开启
+ */
 DoorData const doorData[] =
 {
     { GO_ROOM_ANUBREKHAN,       BOSS_ANUBREKHAN,    DOOR_TYPE_ROOM },
@@ -95,6 +122,11 @@ DoorData const doorData[] =
     { 0,                        0,                  DOOR_TYPE_ROOM }
 };
 
+/**
+ * @brief 游戏对象数据配置
+ *
+ * 定义了副本内需要追踪的游戏对象GUID与数据ID的映射。
+ */
 ObjectData const objectData[] =
 {
     { GO_NAXX_PORTAL_ARACHNID,  DATA_NAXX_PORTAL_ARACHNID  },
@@ -105,13 +137,36 @@ ObjectData const objectData[] =
     { 0,                        0,                         }
 };
 
+/**
+ * @class instance_naxxramas
+ * @brief 纳克萨玛斯副本实例脚本
+ *
+ * 负责管理纳克萨玛斯副本的整体状态，包括：
+ * - 首领状态管理
+ * - 游戏对象（门、传送门）状态
+ * - 副本事件调度
+ * - 成就判定
+ * - 副本数据保存和加载
+ */
 class instance_naxxramas : public InstanceMapScript
 {
     public:
         instance_naxxramas() : InstanceMapScript(NaxxramasScriptName, 533) { }
 
+        /**
+         * @class instance_naxxramas_InstanceMapScript
+         * @brief 纳克萨玛斯实例脚本实现
+         *
+         * 继承自InstanceScript，实现纳克萨玛斯副本的具体逻辑
+         */
         struct instance_naxxramas_InstanceMapScript : public InstanceScript
         {
+            /**
+             * @brief 构造函数
+             * @param map 副本地图指针
+             *
+             * 初始化副本实例，设置首领数量、边界和门数据
+             */
             instance_naxxramas_InstanceMapScript(InstanceMap* map) : InstanceScript(map)
             {
                 SetHeaders(DataHeader);
@@ -120,12 +175,19 @@ class instance_naxxramas : public InstanceMapScript
                 LoadDoorData(doorData);
                 LoadObjectData(nullptr, objectData);
 
-                hadSapphironBirth       = false;
-                CurrentWingTaunt        = SAY_KELTHUZAD_FIRST_WING_TAUNT;
+                // 初始化成员变量
+                hadSapphironBirth       = false;  // 萨菲隆是否已经出现过（出生动画）
+                CurrentWingTaunt        = SAY_KELTHUZAD_FIRST_WING_TAUNT;  // 当前区域嘲讽对话ID
 
-                playerDied              = false;
+                playerDied              = false;  // 是否有玩家死亡（用于不朽者/不死者成就）
             }
 
+            /**
+             * @brief 生物创建时的回调
+             * @param creature 新创建的生物
+             *
+             * 当副本内的生物创建时被调用，用于记录首领和重要NPC的GUID
+             */
             void OnCreatureCreate(Creature* creature) override
             {
                 switch (creature->GetEntry())
@@ -183,6 +245,13 @@ class instance_naxxramas : public InstanceMapScript
                 }
             }
 
+            /**
+             * @brief 游戏对象创建时的回调
+             * @param go 新创建的游戏对象
+             *
+             * 当副本内的游戏对象创建时被调用，用于记录门、传送门等对象的GUID
+             * 并根据副本进度设置对象的初始状态
+             */
             void OnGameObjectCreate(GameObject* go) override
             {
                 switch (go->GetEntry())
@@ -246,6 +315,12 @@ class instance_naxxramas : public InstanceMapScript
                 InstanceScript::OnGameObjectCreate(go);
             }
 
+            /**
+             * @brief 单位死亡时的回调
+             * @param unit 死亡的单位
+             *
+             * 处理玩家死亡事件用于成就判定，以及特殊NPC（比格尔斯沃斯猫）死亡时的对话
+             */
             void OnUnitDeath(Unit* unit) override
             {
                 if (!playerDied && unit->IsPlayer() && IsEncounterInProgress())
@@ -264,6 +339,13 @@ class instance_naxxramas : public InstanceMapScript
                     }
             }
 
+            /**
+             * @brief 设置实例数据
+             * @param id 数据ID
+             * @param value 数据值
+             *
+             * 用于设置副本内的自定义数据，如高希克门的状态、萨菲隆出生动画状态
+             */
             void SetData(uint32 id, uint32 value) override
             {
                 switch (id)
@@ -280,6 +362,13 @@ class instance_naxxramas : public InstanceMapScript
                 }
             }
 
+            /**
+             * @brief 获取实例数据
+             * @param id 数据ID
+             * @return 对应的数据值
+             *
+             * 用于获取副本内的自定义数据
+             */
             uint32 GetData(uint32 id) const override
             {
                 switch (id)
@@ -293,6 +382,13 @@ class instance_naxxramas : public InstanceMapScript
                 return 0;
             }
 
+            /**
+             * @brief 获取GUID数据
+             * @param id 数据ID
+             * @return 对应的GUID
+             *
+             * 根据数据ID返回对应生物的GUID，用于各首领脚本之间的通信
+             */
             ObjectGuid GetGuidData(uint32 id) const override
             {
                 switch (id)
@@ -344,6 +440,19 @@ class instance_naxxramas : public InstanceMapScript
                 return ObjectGuid::Empty;
             }
 
+            /**
+             * @brief 设置首领状态
+             * @param id 首领ID
+             * @param state 首领状态
+             * @return 是否成功设置
+             *
+             * 当首领状态改变时触发相关事件：
+             * - 激活对应区域的传送门
+             * - 触发克尔苏加德的风趣嘲讽
+             * - 开启通向下一区域的道路
+             * - 四骑士战利品箱子刷新
+             * - 萨菲隆死亡后的对话链
+             */
             bool SetBossState(uint32 id, EncounterState state) override
             {
                 if (!InstanceScript::SetBossState(id, state))
@@ -414,6 +523,13 @@ class instance_naxxramas : public InstanceMapScript
                 return true;
             }
 
+            /**
+             * @brief 更新实例状态
+             * @param diff 距离上次更新的时间差（毫秒）
+             *
+             * 定期更新副本实例，处理事件调度器中的事件
+             * 包括对话链的执行和克尔苏加德的风趣嘲讽
+             */
             void Update(uint32 diff) override
             {
                 events.Update(diff);
@@ -504,9 +620,14 @@ class instance_naxxramas : public InstanceMapScript
                 }
             }
 
-            // This Function is called in CheckAchievementCriteriaMeet and CheckAchievementCriteriaMeet is called before SetBossState(bossId, DONE),
-            // so to check if all bosses are done the checker must exclude 1 boss, the last done, if there is at most 1 encouter in progress when is
-            // called this function then all bosses are done. The one boss that check is the boss that calls this function, so it is dead.
+            /**
+             * @brief 检查所有首领是否被击杀
+             * @return 如果所有首领都被击杀（最多1个进行中的遭遇）返回true
+             *
+             * 此函数在CheckAchievementCriteriaMeet中被调用，用于判断是否满足不朽者/不死者成就条件。
+             * 由于CheckAchievementCriteriaMeet在SetBossState(bossId, DONE)之前被调用，
+             * 因此需要排除最后一个首领，如果最多只有1个遭遇正在进行，则所有首领都已完成。
+             */
             bool AreAllEncountersDone()
             {
                 uint32 numBossAlive = 0;
@@ -519,6 +640,19 @@ class instance_naxxramas : public InstanceMapScript
                 return true;
             }
 
+            /**
+             * @brief 检查成就条件是否满足
+             * @param criteria_id 成就条件ID
+             * @param source 触发成就的玩家
+             * @param target 目标单位（可选）
+             * @param miscvalue1 额外参数（可选）
+             * @return 是否满足成就条件
+             *
+             * 检查以下成就：
+             * - 他们都倒下了：15秒内击杀四骑士
+             * - 不朽者（25人）：在一个CD内不死亡任何人击杀所有首领
+             * - 不死者（10人）：在一个CD内不死亡任何人击杀所有首领
+             */
             bool CheckAchievementCriteriaMeet(uint32 criteria_id, Player const* /*source*/, Unit const* /*target = nullptr*/, uint32 /*miscvalue1 = 0*/) override
             {
                 switch (criteria_id)
@@ -552,11 +686,23 @@ class instance_naxxramas : public InstanceMapScript
                 return false;
             }
 
+            /**
+             * @brief 写入额外的保存数据
+             * @param data 输出字符串流
+             *
+             * 将playerDied标志保存到副本数据中
+             */
             void WriteSaveDataMore(std::ostringstream& data) override
             {
                 data << uint32(playerDied ? 1 : 0);
             }
 
+            /**
+             * @brief 读取额外的保存数据
+             * @param data 输入字符串流
+             *
+             * 从副本数据中读取playerDied标志
+             */
             void ReadSaveDataMore(std::istringstream& data) override
             {
                 uint32 tmpState;
@@ -565,55 +711,51 @@ class instance_naxxramas : public InstanceMapScript
             }
 
         protected:
-            /* The Arachnid Quarter */
-            // Anub'rekhan
-            ObjectGuid AnubRekhanGUID;
-            // Grand Widow Faerlina
-            ObjectGuid FaerlinaGUID;
+            /* ========== 蜘蛛区 ========== */
+            ObjectGuid AnubRekhanGUID;    // 阿努布雷坎GUID
+            ObjectGuid FaerlinaGUID;      // 大寡妇费琳娜GUID
 
-            /* The Plague Quarter */
-            // Heigan the Unclean
-            ObjectGuid HeiganGUID;
+            /* ========== 瘟疫区 ========== */
+            ObjectGuid HeiganGUID;        // 肮脏的希尔盖GUID
 
-            /* The Military Quarter */
-            // Instructor Razuvious
-            ObjectGuid RazuviousGUID;
-            // Gothik the Harvester
-            ObjectGuid GothikGUID;
-            ObjectGuid GothikGateGUID;
-            // The Four Horsemen
-            ObjectGuid ThaneGUID;
-            ObjectGuid LadyGUID;
-            ObjectGuid BaronGUID;
-            ObjectGuid SirGUID;
-            ObjectGuid HorsemenChestGUID;
+            /* ========== 军事区 ========== */
+            ObjectGuid RazuviousGUID;     // 教官拉苏维奥斯GUID
+            ObjectGuid GothikGUID;        // 高希克GUID
+            ObjectGuid GothikGateGUID;    // 高希克之门GUID
+            ObjectGuid ThaneGUID;         // 瑟里耶克爵士GUID（四骑士-库尔塔兹领主）
+            ObjectGuid LadyGUID;          // 布劳缪克斯女士GUID（四骑士）
+            ObjectGuid BaronGUID;         // 男爵GUID（四骑士-瑞文戴尔男爵）
+            ObjectGuid SirGUID;           // 泽尔尼克斯爵士GUID（四骑士）
+            ObjectGuid HorsemenChestGUID; // 四骑士宝箱GUID
 
-            /* The Construct Quarter */
-            // Gluth
-            ObjectGuid GluthGUID;
-            // Thaddius
-            ObjectGuid ThaddiusGUID;
-            ObjectGuid FeugenGUID;
-            ObjectGuid StalaggGUID;
+            /* ========== 构造区 ========== */
+            ObjectGuid GluthGUID;         // 格拉斯GUID
+            ObjectGuid ThaddiusGUID;      // 塔迪乌斯GUID
+            ObjectGuid FeugenGUID;        // 费尔根GUID（塔迪乌斯小怪）
+            ObjectGuid StalaggGUID;       // 斯塔拉格GUID（塔迪乌斯小怪）
 
-            /* Frostwyrm Lair */
-            // Sapphiron
-            ObjectGuid SapphironGUID;
-            // Kel'Thuzad
-            ObjectGuid KelthuzadGUID;
-            ObjectGuid KelthuzadTriggerGUID;
-            ObjectGuid PortalsGUID[4];
-            ObjectGuid KelthuzadDoorGUID;
-            ObjectGuid LichKingGUID;
-            bool hadSapphironBirth;
-            uint8 CurrentWingTaunt;
+            /* ========== 冰霜巨龙巢穴 ========== */
+            ObjectGuid SapphironGUID;         // 萨菲隆GUID
+            ObjectGuid KelthuzadGUID;         // 克尔苏加德GUID
+            ObjectGuid KelthuzadTriggerGUID;  // 克尔苏加德触发器GUID
+            ObjectGuid PortalsGUID[4];        // 克尔苏加德房间四个传送门GUID
+            ObjectGuid KelthuzadDoorGUID;     // 克尔苏加德房间门GUID
+            ObjectGuid LichKingGUID;          // 巫妖王GUID（克尔苏加德房间装饰性NPC）
 
-            /* The Immortal / The Undying */
-            bool playerDied;
+            bool hadSapphironBirth;           // 萨菲隆是否已经完成出生动画
+            uint8 CurrentWingTaunt;           // 当前克尔苏加德区域嘲讽对话ID
 
-            EventMap events;
+            /* ========== 不朽者/不死者成就 ========== */
+            bool playerDied;                  // 是否有玩家在首领战斗中死亡
+
+            EventMap events;                  // 事件调度器
         };
 
+        /**
+         * @brief 获取实例脚本
+         * @param map 副本地图指针
+         * @return 新创建的实例脚本对象
+         */
         InstanceScript* GetInstanceScript(InstanceMap* map) const override
         {
             return new instance_naxxramas_InstanceMapScript(map);

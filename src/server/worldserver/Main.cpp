@@ -125,6 +125,24 @@ void ShutdownCLIThread(std::thread* cliThread);
 bool LoadRealmInfo(Trinity::Asio::IoContext& ioContext);
 variables_map GetConsoleArguments(int argc, char** argv, fs::path& configFile, fs::path& configDir, std::string& winServiceAction);
 
+// ============================================================================
+// worldserver 程序入口
+// ============================================================================
+// 职责：游戏世界服务器的启动入口，初始化所有系统
+// 参数：
+//   argc - 参数个数
+//   argv - 参数数组
+// 返回值：退出码（0=正常，非0=错误）
+// 启动流程：
+//   1. 命令行参数解析
+//   2. 配置文件加载
+//   3. 日志系统初始化
+//   4. 数据库连接初始化
+//   5. 世界初始化（World::SetInitialWorldSettings）
+//   6. 脚本系统初始化
+//   7. 网络服务启动
+//   8. 进入主循环（WorldUpdateLoop）
+// ============================================================================
 /// Launch the Trinity server
 extern int main(int argc, char** argv)
 {
@@ -433,6 +451,16 @@ extern int main(int argc, char** argv)
     return World::GetExitCode();
 }
 
+// ============================================================================
+// 关闭命令行线程
+// ============================================================================
+// 职责：优雅地关闭命令行交互线程
+// 参数：
+//   cliThread - 指向命令行线程的指针
+// 返回值：无
+// 调用时机：服务器关闭时
+// 注意：必须等待线程安全退出
+// ============================================================================
 void ShutdownCLIThread(std::thread* cliThread)
 {
     if (cliThread != nullptr)
@@ -494,6 +522,15 @@ void ShutdownCLIThread(std::thread* cliThread)
     }
 }
 
+// ============================================================================
+// 世界更新循环
+// ============================================================================
+// 职责：游戏主循环，每帧调用 World::Update()
+// 参数：无
+// 返回值：无
+// 循环频率：默认 50ms (20 FPS)
+// 注意：此函数是游戏的核心驱动
+// ============================================================================
 void WorldUpdateLoop()
 {
     uint32 minUpdateDiff = uint32(sConfigMgr->GetIntDefault("MinWorldUpdateTime", 1));

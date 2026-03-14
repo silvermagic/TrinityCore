@@ -30,6 +30,75 @@
 #include "World.h"
 #include "WorldPacket.h"
 
+/**
+ * @file ItemHandler.cpp
+ * @brief 物品操作网络包处理模块
+ *
+ * @details 本文件实现了所有与物品相关的网络包处理函数。
+ *          涵盖物品的查询、移动、装备、交易、销毁、附魔、镶嵌等操作。
+ *
+ * 主要功能模块：
+ *
+ * 1. 物品查询与信息获取
+ *    - HandleItemQuerySingleOpcode(): 查询物品静态信息
+ *    - HandleItemNameQueryOpcode(): 查询套装名称
+ *    - HandleItemTextQuery(): 查询物品文本内容
+ *
+ * 2. 物品移动与交换
+ *    - HandleSplitItemOpcode(): 分割物品堆叠
+ *    - HandleSwapInvItemOpcode(): 背包内交换物品
+ *    - HandleSwapItem(): 通用物品交换
+ *    - HandleAutoStoreBagItemOpcode(): 自动存储到背包
+ *
+ * 3. 物品装备与卸下
+ *    - HandleAutoEquipItemOpcode(): 自动装备物品
+ *    - HandleAutoEquipItemSlotOpcode(): 装备到指定槽位
+ *    - HandleCancelTempEnchantmentOpcode(): 取消临时附魔
+ *
+ * 4. 商人交互
+ *    - HandleListInventoryOpcode(): 列出商人库存
+ *    - HandleBuyItemOpcode(): 购买物品
+ *    - HandleBuyItemInSlotOpcode(): 购买到指定槽位
+ *    - HandleSellItemOpcode(): 出售物品
+ *    - HandleBuybackItem(): 购回物品
+ *
+ * 5. 物品修改与附魔
+ *    - HandleSocketOpcode(): 镶嵌宝石
+ *    - HandleWrapItemOpcode(): 包装物品
+ *    - SendEnchantmentLog(): 发送附魔日志
+ *    - SendItemEnchantTimeUpdate(): 更新附魔时间
+ *
+ * 6. 其他功能
+ *    - HandleDestroyItemOpcode(): 销毁物品
+ *    - HandleReadItem(): 阅读物品
+ *    - HandleSetAmmoOpcode(): 设置弹药
+ *    - HandleItemRefundInfoRequest(): 请求退款信息
+ *    - HandleItemRefund(): 执行物品退款
+ *
+ * @note 所有处理函数都是 WorldSession 类的成员函数
+ * @note 网络包数据通过 WorldPacket 类传递
+ */
+
+/**
+ * @brief 处理分割物品网络包（CMSG_SPLIT_ITEM）
+ *
+ * @details 当玩家想要将一堆物品分成两部分时调用此函数。
+ *          例如：将20个物品中的一半（10个）移动到另一个空槽位。
+ *
+ * @param recvData 接收到的网络包数据，包含以下字段：
+ *        - srcbag: 源背包编号
+ *        - srcslot: 源槽位编号
+ *        - dstbag: 目标背包编号
+ *        - dstslot: 目标槽位编号
+ *        - count: 要分割的物品数量
+ *
+ * @return 无返回值
+ *
+ * @note 主要流程：
+ *       1. 解析网络包获取源和目标位置信息
+ *       2. 验证源位置和目标位置的有效性
+ *       3. 调用 Player::SplitItem() 执行实际的分割操作
+ */
 void WorldSession::HandleSplitItemOpcode(WorldPacket& recvData)
 {
     //TC_LOG_DEBUG("network", "WORLD: CMSG_SPLIT_ITEM");
@@ -63,6 +132,24 @@ void WorldSession::HandleSplitItemOpcode(WorldPacket& recvData)
     _player->SplitItem(src, dst, count);
 }
 
+/**
+ * @brief 处理背包内交换物品网络包（CMSG_SWAP_INV_ITEM）
+ *
+ * @details 当玩家在主背包（背包0）内交换两个槽位的物品时调用此函数。
+ *          注意：此函数仅处理主背包内的交换，不涉及其他背包。
+ *
+ * @param recvData 接收到的网络包数据，包含以下字段：
+ *        - dstslot: 目标槽位编号
+ *        - srcslot: 源槽位编号
+ *
+ * @return 无返回值
+ *
+ * @note 主要流程：
+ *       1. 解析网络包获取源和目标槽位
+ *       2. 验证源槽位和目标槽位的有效性
+ *       3. 检查银行访问权限（如果涉及银行槽位）
+ *       4. 调用 Player::SwapItem() 执行交换操作
+ */
 void WorldSession::HandleSwapInvItemOpcode(WorldPacket& recvData)
 {
     //TC_LOG_DEBUG("network", "WORLD: CMSG_SWAP_INV_ITEM");
@@ -105,6 +192,24 @@ void WorldSession::HandleSwapInvItemOpcode(WorldPacket& recvData)
     _player->SwapItem(src, dst);
 }
 
+/**
+ * @brief 处理自动装备物品到指定槽位网络包（CMSG_AUTOEQUIP_ITEM_SLOT）
+ *
+ * @details 当玩家右键点击背包中的可装备物品，指定装备到某个特定槽位时调用此函数。
+ *          客户端会自动选择合适的装备槽位，然后将物品装备上去。
+ *
+ * @param recvData 接收到的网络包数据，包含以下字段：
+ *        - itemguid: 物品的唯一标识符（GUID）
+ *        - dstslot: 目标装备槽位编号
+ *
+ * @return 无返回值
+ *
+ * @note 主要流程：
+ *       1. 解析网络包获取物品GUID和目标槽位
+ *       2. 验证目标槽位是否为装备槽位（防止作弊）
+ *       3. 获取物品对象并验证其存在性
+ *       4. 调用 Player::SwapItem() 将物品装备到目标槽位
+ */
 void WorldSession::HandleAutoEquipItemSlotOpcode(WorldPacket& recvData)
 {
     ObjectGuid itemguid;
@@ -124,6 +229,27 @@ void WorldSession::HandleAutoEquipItemSlotOpcode(WorldPacket& recvData)
     _player->SwapItem(item->GetPos(), dstpos);
 }
 
+/**
+ * @brief 处理交换物品网络包（CMSG_SWAP_ITEM）
+ *
+ * @details 当玩家拖拽物品从一个位置移动到另一个位置时调用此函数。
+ *          这是最通用的物品交换函数，支持跨背包操作。
+ *          如果目标位置已有物品，则两个物品会互换位置。
+ *
+ * @param recvData 接收到的网络包数据，包含以下字段：
+ *        - dstbag: 目标背包编号
+ *        - dstslot: 目标槽位编号
+ *        - srcbag: 源背包编号
+ *        - srcslot: 源槽位编号
+ *
+ * @return 无返回值
+ *
+ * @note 主要流程：
+ *       1. 解析网络包获取源和目标位置信息
+ *       2. 验证源位置和目标位置的有效性
+ *       3. 检查银行访问权限（如果涉及银行位置）
+ *       4. 调用 Player::SwapItem() 执行交换操作
+ */
 void WorldSession::HandleSwapItem(WorldPacket& recvData)
 {
     //TC_LOG_DEBUG("network", "WORLD: CMSG_SWAP_ITEM");
@@ -166,6 +292,31 @@ void WorldSession::HandleSwapItem(WorldPacket& recvData)
     _player->SwapItem(src, dst);
 }
 
+/**
+ * @brief 处理自动装备物品网络包（CMSG_AUTOEQUIP_ITEM）
+ *
+ * @details 当玩家右键点击背包中的可装备物品时调用此函数。
+ *          系统会自动找到合适的装备槽位并将物品装备上去。
+ *          如果目标槽位已有装备，则会尝试将原装备移动到源位置。
+ *
+ * @param recvData 接收到的网络包数据，包含以下字段：
+ *        - srcbag: 源背包编号
+ *        - srcslot: 源槽位编号
+ *
+ * @return 无返回值
+ *
+ * @note 主要流程：
+ *       1. 解析网络包获取源位置信息
+ *       2. 获取源物品并验证其存在性
+ *       3. 检查物品是否可以被装备
+ *       4. 如果目标槽位为空，直接装备物品
+ *       5. 如果目标槽位已有物品，执行交换操作：
+ *          - 验证目标物品是否可以卸下
+ *          - 检查目标物品是否可以放入源位置
+ *          - 执行交换操作
+ *       6. 处理副手武器自动卸下逻辑
+ *       7. 更新物品依赖的光环效果
+ */
 void WorldSession::HandleAutoEquipItemOpcode(WorldPacket& recvData)
 {
     //TC_LOG_DEBUG("network", "WORLD: CMSG_AUTOEQUIP_ITEM");
@@ -265,6 +416,27 @@ void WorldSession::HandleAutoEquipItemOpcode(WorldPacket& recvData)
     }
 }
 
+/**
+ * @brief 处理销毁物品网络包（CMSG_DESTROYITEM）
+ *
+ * @details 当玩家主动删除物品时调用此函数。
+ *          玩家可以通过右键点击物品选择删除，或拖拽物品到空白区域删除。
+ *
+ * @param recvData 接收到的网络包数据，包含以下字段：
+ *        - bag: 物品所在背包编号
+ *        - slot: 物品所在槽位编号
+ *        - count: 要销毁的数量（如果为0则销毁整组）
+ *        - data1/data2/data3: 未使用的附加数据
+ *
+ * @return 无返回值
+ *
+ * @note 主要流程：
+ *       1. 解析网络包获取物品位置和数量
+ *       2. 检查装备槽位和背包槽位的卸下权限
+ *       3. 验证物品是否存在
+ *       4. 检查物品是否允许玩家销毁（某些特殊物品不可销毁）
+ *       5. 根据数量决定销毁部分或全部物品
+ */
 void WorldSession::HandleDestroyItemOpcode(WorldPacket& recvData)
 {
     //TC_LOG_DEBUG("network", "WORLD: CMSG_DESTROYITEM");
@@ -308,6 +480,27 @@ void WorldSession::HandleDestroyItemOpcode(WorldPacket& recvData)
         _player->DestroyItem(bag, slot, true);
 }
 
+/**
+ * @brief 处理查询单个物品信息网络包（CMSG_ITEM_QUERY_SINGLE）
+ *
+ * @details 当客户端需要获取某个物品的详细信息时调用此函数。
+ *          例如：玩家查看物品提示信息、拍卖行浏览物品等场景。
+ *          此函数返回物品的静态数据（名称、描述、属性等）。
+ *
+ * @param query 查询包数据，包含以下字段：
+ *        - ItemID: 要查询的物品模板ID（Entry）
+ *
+ * @return 无返回值（通过发送响应包返回数据）
+ *
+ * @note 主要流程：
+ *       1. 根据物品ID查找物品模板
+ *       2. 如果找到模板：
+ *          - 如果启用了数据缓存，发送预构建的查询数据
+ *          - 否则构建并发送查询响应数据
+ *       3. 如果未找到模板，发送空响应包
+ *
+ * @note 只发送静态数据，不包含物品实例的动态数据（如附魔、耐久度等）
+ */
 // Only _static_ data send in this packet !!!
 void WorldSession::HandleItemQuerySingleOpcode(WorldPackets::Query::QueryItemSingle& query)
 {
@@ -332,6 +525,25 @@ void WorldSession::HandleItemQuerySingleOpcode(WorldPackets::Query::QueryItemSin
     }
 }
 
+/**
+ * @brief 处理阅读物品网络包（CMSG_READ_ITEM）
+ *
+ * @details 当玩家尝试阅读包含页面文本的物品时调用此函数。
+ *          例如：书籍、信件、任务文档等可阅读物品。
+ *
+ * @param recvData 接收到的网络包数据，包含以下字段：
+ *        - bag: 物品所在背包编号
+ *        - slot: 物品所在槽位编号
+ *
+ * @return 无返回值（通过发送响应包返回结果）
+ *
+ * @note 主要流程：
+ *       1. 解析网络包获取物品位置
+ *       2. 获取物品对象并验证其存在性
+ *       3. 检查物品是否包含页面文本
+ *       4. 验证玩家是否可以使用该物品
+ *       5. 发送阅读成功或失败的响应包
+ */
 void WorldSession::HandleReadItem(WorldPacket& recvData)
 {
     //TC_LOG_DEBUG("network", "WORLD: CMSG_READ_ITEM");
@@ -365,6 +577,29 @@ void WorldSession::HandleReadItem(WorldPacket& recvData)
         _player->SendEquipError(EQUIP_ERR_ITEM_NOT_FOUND, nullptr, nullptr);
 }
 
+/**
+ * @brief 处理出售物品给商人网络包（CMSG_SELL_ITEM）
+ *
+ * @details 当玩家向商人出售物品时调用此函数。
+ *          玩家可以通过拖拽物品到商人窗口或右键点击物品出售。
+ *          出售的物品会进入回购列表，玩家可以在一定时间内购回。
+ *
+ * @param recvData 接收到的网络包数据，包含以下字段：
+ *        - vendorguid: 商人的唯一标识符（GUID）
+ *        - itemguid: 物品的唯一标识符（GUID）
+ *        - count: 要出售的数量（0表示出售全部）
+ *
+ * @return 无返回值
+ *
+ * @note 主要流程：
+ *       1. 验证商人是否存在且可交互
+ *       2. 验证物品是否存在且属于玩家
+ *       3. 检查物品是否可以出售（非空背包、非正在拾取、非可退款）
+ *       4. 计算出售价格（考虑声望折扣）
+ *       5. 如果出售部分数量，克隆物品并更新原物品数量
+ *       6. 如果出售全部，移动物品到回购槽位
+ *       7. 增加玩家金币并更新成就进度
+ */
 void WorldSession::HandleSellItemOpcode(WorldPacket& recvData)
 {
     TC_LOG_DEBUG("network", "WORLD: Received CMSG_SELL_ITEM");
@@ -490,6 +725,25 @@ void WorldSession::HandleSellItemOpcode(WorldPacket& recvData)
     return;
 }
 
+/**
+ * @brief 处理购回物品网络包（CMSG_BUYBACK_ITEM）
+ *
+ * @details 当玩家想要从商人处购回之前出售的物品时调用此函数。
+ *          玩家可以在一定时间内以原出售价格购回物品。
+ *
+ * @param recvData 接收到的网络包数据，包含以下字段：
+ *        - vendorguid: 商人的唯一标识符（GUID）
+ *        - slot: 回购槽位编号
+ *
+ * @return 无返回值
+ *
+ * @note 主要流程：
+ *       1. 验证商人是否存在且可交互
+ *       2. 从回购槽位获取物品
+ *       3. 检查玩家是否有足够的金币
+ *       4. 检查玩家背包是否有空间
+ *       5. 扣除金币并将物品放入玩家背包
+ */
 void WorldSession::HandleBuybackItem(WorldPacket& recvData)
 {
     TC_LOG_DEBUG("network", "WORLD: Received CMSG_BUYBACK_ITEM");
@@ -537,6 +791,28 @@ void WorldSession::HandleBuybackItem(WorldPacket& recvData)
         _player->SendBuyError(BUY_ERR_CANT_FIND_ITEM, creature, 0, 0);
 }
 
+/**
+ * @brief 处理购买物品到指定槽位网络包（CMSG_BUY_ITEM_IN_SLOT）
+ *
+ * @details 当玩家从商人处购买物品并指定放入特定背包槽位时调用此函数。
+ *          允许玩家精确控制购买物品的存放位置。
+ *
+ * @param recvData 接收到的网络包数据，包含以下字段：
+ *        - vendorguid: 商人的唯一标识符（GUID）
+ *        - item: 物品模板ID
+ *        - slot: 商人出售列表中的槽位（客户端发送的值+1）
+ *        - bagguid: 目标背包的唯一标识符（GUID）
+ *        - bagslot: 目标背包中的槽位编号
+ *        - count: 购买数量
+ *
+ * @return 无返回值
+ *
+ * @note 主要流程：
+ *       1. 解析网络包数据
+ *       2. 调整商人槽位索引（客户端从1开始计数）
+ *       3. 根据背包GUID查找对应的背包槽位
+ *       4. 调用 Player::BuyItemFromVendorSlot() 执行购买操作
+ */
 void WorldSession::HandleBuyItemInSlotOpcode(WorldPacket& recvData)
 {
     TC_LOG_DEBUG("network", "WORLD: Received CMSG_BUY_ITEM_IN_SLOT");
@@ -579,6 +855,26 @@ void WorldSession::HandleBuyItemInSlotOpcode(WorldPacket& recvData)
     GetPlayer()->BuyItemFromVendorSlot(vendorguid, slot, item, count, bag, bagslot);
 }
 
+/**
+ * @brief 处理购买物品网络包（CMSG_BUY_ITEM）
+ *
+ * @details 当玩家从商人处购买物品时调用此函数。
+ *          系统会自动找到合适的背包位置存放购买的物品。
+ *
+ * @param recvData 接收到的网络包数据，包含以下字段：
+ *        - vendorguid: 商人的唯一标识符（GUID）
+ *        - item: 物品模板ID
+ *        - slot: 商人出售列表中的槽位（客户端发送的值+1）
+ *        - count: 购买数量
+ *        - unk1: 未使用的附加数据
+ *
+ * @return 无返回值
+ *
+ * @note 主要流程：
+ *       1. 解析网络包数据
+ *       2. 调整商人槽位索引（客户端从1开始计数）
+ *       3. 调用 Player::BuyItemFromVendorSlot() 执行购买操作
+ */
 void WorldSession::HandleBuyItemOpcode(WorldPacket& recvData)
 {
     TC_LOG_DEBUG("network", "WORLD: Received CMSG_BUY_ITEM");
@@ -597,6 +893,22 @@ void WorldSession::HandleBuyItemOpcode(WorldPacket& recvData)
     GetPlayer()->BuyItemFromVendorSlot(vendorguid, slot, item, count, NULL_BAG, NULL_SLOT);
 }
 
+/**
+ * @brief 处理列出商人库存网络包（CMSG_LIST_INVENTORY）
+ *
+ * @details 当玩家打开商人界面时调用此函数。
+ *          请求商人出售的物品列表。
+ *
+ * @param recvData 接收到的网络包数据，包含以下字段：
+ *        - guid: 商人的唯一标识符（GUID）
+ *
+ * @return 无返回值
+ *
+ * @note 主要流程：
+ *       1. 解析网络包获取商人GUID
+ *       2. 验证玩家是否存活
+ *       3. 调用 SendListInventory() 发送商人物品列表
+ */
 void WorldSession::HandleListInventoryOpcode(WorldPacket& recvData)
 {
     ObjectGuid guid;
@@ -611,6 +923,29 @@ void WorldSession::HandleListInventoryOpcode(WorldPacket& recvData)
     SendListInventory(guid);
 }
 
+/**
+ * @brief 发送商人库存列表给客户端
+ *
+ * @details 构建并发送商人出售物品列表的网络包。
+ *          包含物品ID、显示信息、库存数量、价格、耐久度、购买数量、扩展成本等信息。
+ *          会根据玩家的职业、阵营、声望等进行过滤和折扣计算。
+ *
+ * @param vendorGuid 商人的唯一标识符（GUID）
+ *
+ * @return 无返回值
+ *
+ * @note 主要流程：
+ *       1. 验证商人是否存在且可交互
+ *       2. 暂停商人的移动
+ *       3. 获取商人的出售物品列表
+ *       4. 遍历所有物品，过滤不符合条件的物品：
+ *          - 职业限制（拾取绑定的物品）
+ *          - 阵营限制（联盟/部落专属物品）
+ *          - 库存限制（已售罄的物品）
+ *          - 条件限制（条件不满足的物品）
+ *       5. 计算声望折扣后的价格
+ *       6. 构建并发送物品列表数据包
+ */
 void WorldSession::SendListInventory(ObjectGuid vendorGuid)
 {
     Creature* vendor = GetPlayer()->GetNPCIfCanInteractWith(vendorGuid, UNIT_NPC_FLAG_VENDOR);
@@ -705,6 +1040,28 @@ void WorldSession::SendListInventory(ObjectGuid vendorGuid)
     SendPacket(&data);
 }
 
+/**
+ * @brief 处理自动存储背包物品网络包（CMSG_AUTOSTORE_BAG_ITEM）
+ *
+ * @details 当玩家想要将物品移动到指定背包的任意可用槽位时调用此函数。
+ *          系统会自动找到背包中第一个可用的槽位存放物品。
+ *
+ * @param recvData 接收到的网络包数据，包含以下字段：
+ *        - srcbag: 源背包编号
+ *        - srcslot: 源槽位编号
+ *        - dstbag: 目标背包编号
+ *
+ * @return 无返回值
+ *
+ * @note 主要流程：
+ *       1. 解析网络包获取源位置和目标背包
+ *       2. 获取源物品并验证其存在性
+ *       3. 验证目标背包位置的有效性
+ *       4. 如果是装备槽位或背包槽位，检查卸下权限
+ *       5. 检查物品是否可以存储到目标背包
+ *       6. 如果目标位置就是当前位置，发送成功消息
+ *       7. 否则执行移动物品操作
+ */
 void WorldSession::HandleAutoStoreBagItemOpcode(WorldPacket& recvData)
 {
     //TC_LOG_DEBUG("network", "WORLD: CMSG_AUTOSTORE_BAG_ITEM");
@@ -756,6 +1113,26 @@ void WorldSession::HandleAutoStoreBagItemOpcode(WorldPacket& recvData)
     _player->StoreItem(dest, pItem, true);
 }
 
+/**
+ * @brief 处理设置弹药网络包（CMSG_SET_AMMO）
+ *
+ * @details 当玩家设置自动射击/投掷使用的弹药时调用此函数。
+ *          弓/弩使用箭矢，枪械使用子弹，投掷武器使用投掷物品。
+ *          设置后系统会在使用相关武器时自动消耗弹药。
+ *
+ * @param recvData 接收到的网络包数据，包含以下字段：
+ *        - item: 弹药物品模板ID（0表示取消弹药设置）
+ *
+ * @return 无返回值
+ *
+ * @note 主要流程：
+ *       1. 检查玩家是否存活
+ *       2. 解析网络包获取弹药ID
+ *       3. 如果弹药ID不为0：
+ *          - 验证玩家是否拥有该弹药
+ *          - 调用 Player::SetAmmo() 设置弹药
+ *       4. 如果弹药ID为0，调用 Player::RemoveAmmo() 移除弹药设置
+ */
 void WorldSession::HandleSetAmmoOpcode(WorldPacket& recvData)
 {
     if (!_player->IsAlive())
@@ -783,6 +1160,24 @@ void WorldSession::HandleSetAmmoOpcode(WorldPacket& recvData)
         _player->RemoveAmmo();
 }
 
+/**
+ * @brief 发送附魔日志给客户端
+ *
+ * @details 当物品附魔成功时，向周围玩家发送附魔效果日志。
+ *          其他玩家可以看到附魔的光效和音效。
+ *
+ * @param target 目标物品拥有者的GUID
+ * @param caster 施法者（附魔者）的GUID
+ * @param itemId 物品模板ID
+ * @param enchantId 附魔效果ID
+ *
+ * @return 无返回值
+ *
+ * @note 主要流程：
+ *       1. 构建附魔日志数据包（SMSG_ENCHANTMENTLOG）
+ *       2. 填充目标、施法者、物品ID、附魔ID
+ *       3. 向周围玩家广播数据包
+ */
 void WorldSession::SendEnchantmentLog(ObjectGuid target, ObjectGuid caster, uint32 itemId, uint32 enchantId)
 {
     WorldPacket data(SMSG_ENCHANTMENTLOG, (8+8+4+4));     // last check 2.0.10
@@ -793,6 +1188,24 @@ void WorldSession::SendEnchantmentLog(ObjectGuid target, ObjectGuid caster, uint
     GetPlayer()->SendMessageToSet(&data, true);
 }
 
+/**
+ * @brief 发送物品附魔时间更新给客户端
+ *
+ * @details 当临时附魔的剩余时间发生变化时，通知客户端更新显示。
+ *          例如：磨刀石、武器油等临时附魔的持续时间。
+ *
+ * @param Playerguid 玩家的GUID
+ * @param Itemguid 物品的GUID
+ * @param slot 附魔槽位编号
+ * @param Duration 剩余持续时间（毫秒）
+ *
+ * @return 无返回值
+ *
+ * @note 主要流程：
+ *       1. 构建附魔时间更新数据包（SMSG_ITEM_ENCHANT_TIME_UPDATE）
+ *       2. 填充物品GUID、槽位、持续时间、玩家GUID
+ *       3. 发送数据包给客户端
+ */
 void WorldSession::SendItemEnchantTimeUpdate(ObjectGuid Playerguid, ObjectGuid Itemguid, uint32 slot, uint32 Duration)
 {
                                                             // last check 2.0.10
@@ -804,6 +1217,24 @@ void WorldSession::SendItemEnchantTimeUpdate(ObjectGuid Playerguid, ObjectGuid I
     SendPacket(&data);
 }
 
+/**
+ * @brief 处理物品套装名称查询网络包（CMSG_ITEM_NAME_QUERY）
+ *
+ * @details 当客户端需要获取套装物品的名称信息时调用此函数。
+ *          套装名称用于显示套装奖励信息。
+ *
+ * @param recvData 接收到的网络包数据，包含以下字段：
+ *        - itemid: 套装ID
+ *        - guid: 物品GUID（未使用）
+ *
+ * @return 无返回值（通过发送响应包返回数据）
+ *
+ * @note 主要流程：
+ *       1. 解析网络包获取套装ID
+ *       2. 查找套装名称数据
+ *       3. 根据玩家语言获取本地化名称
+ *       4. 构建并发送响应数据包，包含套装ID、名称、装备类型
+ */
 void WorldSession::HandleItemNameQueryOpcode(WorldPacket& recvData)
 {
     uint32 itemid;
@@ -828,6 +1259,35 @@ void WorldSession::HandleItemNameQueryOpcode(WorldPacket& recvData)
     }
 }
 
+/**
+ * @brief 处理包装物品网络包（CMSG_WRAP_ITEM）
+ *
+ * @details 当玩家使用包装纸（如蓝色包装纸、红色包装纸等）包装物品时调用此函数。
+ *          包装后的物品变成礼物，可以交易给其他玩家，对方打开后会获得原物品。
+ *
+ * @param recvData 接收到的网络包数据，包含以下字段：
+ *        - gift_bag: 包装纸所在背包编号
+ *        - gift_slot: 包装纸所在槽位编号
+ *        - item_bag: 要包装物品所在背包编号
+ *        - item_slot: 要包装物品所在槽位编号
+ *
+ * @return 无返回值
+ *
+ * @note 主要流程：
+ *       1. 解析网络包获取包装纸和物品位置
+ *       2. 验证包装纸是否存在且为有效包装物品
+ *       3. 验证被包装物品是否存在且符合包装条件：
+ *          - 不能是包装纸自己
+ *          - 不能是已装备的物品
+ *          - 不能是已包装的物品
+ *          - 不能是背包
+ *          - 不能是灵魂绑定的物品
+ *          - 不能是可堆叠的物品
+ *          - 不能是有限数量的物品
+ *       4. 在数据库中创建礼物记录
+ *       5. 修改物品为包装后的形态
+ *       6. 销毁包装纸
+ */
 void WorldSession::HandleWrapItemOpcode(WorldPacket& recvData)
 {
     TC_LOG_DEBUG("network", "Received opcode CMSG_WRAP_ITEM");
@@ -939,6 +1399,36 @@ void WorldSession::HandleWrapItemOpcode(WorldPacket& recvData)
     _player->DestroyItemCount(gift, count, true);
 }
 
+/**
+ * @brief 处理镶嵌宝石网络包（CMSG_SOCKET_GEMS）
+ *
+ * @details 当玩家在装备上镶嵌宝石时调用此函数。
+ *          宝石可以镶嵌到装备的插槽中，提供额外属性加成。
+ *          支持多种颜色的宝石和插槽，以及多彩宝石的特殊要求。
+ *
+ * @param recvData 接收到的网络包数据，包含以下字段：
+ *        - item_guid: 目标装备的GUID
+ *        - gem_guids[]: 最多3个宝石的GUID数组（对应3个插槽）
+ *
+ * @return 无返回值
+ *
+ * @note 主要流程：
+ *       1. 解析网络包获取装备和宝石GUID
+ *       2. 验证装备和宝石是否存在
+ *       3. 检查是否尝试重复镶嵌同一个宝石（作弊检测）
+ *       4. 验证宝石与插槽的匹配：
+ *          - 检查插槽是否存在
+ *          - 验证宝石颜色与插槽颜色匹配
+ *          - 多彩宝石只能放入多彩插槽，反之亦然
+ *       5. 检查唯一装备条件：
+ *          - 同一物品中不能有重复的唯一宝石
+ *          - 检查宝石数量限制
+ *       6. 移除旧的宝石附魔
+ *       7. 应用新的宝石附魔
+ *       8. 检查并更新插槽奖励状态
+ *       9. 更新多彩宝石激活状态
+ *       10. 清除物品的可交易标记
+ */
 void WorldSession::HandleSocketOpcode(WorldPacket& recvData)
 {
     TC_LOG_DEBUG("network", "WORLD: CMSG_SOCKET_GEMS");
@@ -1137,6 +1627,25 @@ void WorldSession::HandleSocketOpcode(WorldPacket& recvData)
     itemTarget->SendUpdateSockets();
 }
 
+/**
+ * @brief 处理取消临时附魔网络包（CMSG_CANCEL_TEMP_ENCHANTMENT）
+ *
+ * @details 当玩家想要移除武器上的临时附魔时调用此函数。
+ *          临时附魔如磨刀石、武器油等，可以通过右键点击取消。
+ *
+ * @param recvData 接收到的网络包数据，包含以下字段：
+ *        - eslot: 装备槽位编号
+ *
+ * @return 无返回值
+ *
+ * @note 主要流程：
+ *       1. 解析网络包获取装备槽位
+ *       2. 验证槽位是否为装备槽位
+ *       3. 获取槽位中的物品
+ *       4. 检查物品是否有临时附魔
+ *       5. 移除临时附魔效果
+ *       6. 清除附魔数据
+ */
 void WorldSession::HandleCancelTempEnchantmentOpcode(WorldPacket& recvData)
 {
     TC_LOG_DEBUG("network", "WORLD: CMSG_CANCEL_TEMP_ENCHANTMENT");
@@ -1161,6 +1670,22 @@ void WorldSession::HandleCancelTempEnchantmentOpcode(WorldPacket& recvData)
     item->ClearEnchantment(TEMP_ENCHANTMENT_SLOT);
 }
 
+/**
+ * @brief 处理物品退款信息请求网络包（CMSG_ITEM_REFUND_INFO）
+ *
+ * @details 当玩家查看可退款物品的退款信息时调用此函数。
+ *          某些物品在购买后一定时间内可以退款，需要显示退款详情。
+ *
+ * @param recvData 接收到的网络包数据，包含以下字段：
+ *        - guid: 物品的唯一标识符（GUID）
+ *
+ * @return 无返回值
+ *
+ * @note 主要流程：
+ *       1. 解析网络包获取物品GUID
+ *       2. 根据GUID查找物品
+ *       3. 如果物品存在，发送退款信息给客户端
+ */
 void WorldSession::HandleItemRefundInfoRequest(WorldPacket& recvData)
 {
     TC_LOG_DEBUG("network", "WORLD: CMSG_ITEM_REFUND_INFO");
@@ -1178,6 +1703,23 @@ void WorldSession::HandleItemRefundInfoRequest(WorldPacket& recvData)
     GetPlayer()->SendRefundInfo(item);
 }
 
+/**
+ * @brief 处理物品退款网络包（CMSG_ITEM_REFUND）
+ *
+ * @details 当玩家确认退款物品时调用此函数。
+ *          物品会被移除，玩家获得原购买价格的货币和货币代币。
+ *
+ * @param recvData 接收到的网络包数据，包含以下字段：
+ *        - guid: 物品的唯一标识符（GUID）
+ *
+ * @return 无返回值
+ *
+ * @note 主要流程：
+ *       1. 解析网络包获取物品GUID
+ *       2. 根据GUID查找物品
+ *       3. 验证物品是否正在被分解（防止重复操作）
+ *       4. 调用 Player::RefundItem() 执行退款操作
+ */
 void WorldSession::HandleItemRefund(WorldPacket &recvData)
 {
     TC_LOG_DEBUG("network", "WORLD: CMSG_ITEM_REFUND");
@@ -1199,9 +1741,25 @@ void WorldSession::HandleItemRefund(WorldPacket &recvData)
 }
 
 /**
- * Handles the packet sent by the client when requesting information about item text.
+ * @brief 处理物品文本查询网络包（CMSG_ITEM_TEXT_QUERY）
  *
- * This function is called when player clicks on item which has some flag set
+ * @details 当客户端请求物品的文本内容时调用此函数。
+ *          例如：礼物包装的物品可能包含发送者的留言文本。
+ *          当玩家点击带有文本标记的物品时会触发此请求。
+ *
+ * @param recvData 接收到的网络包数据，包含以下字段：
+ *        - itemGuid: 物品的唯一标识符（GUID）
+ *
+ * @return 无返回值（通过发送响应包返回数据）
+ *
+ * @note 主要流程：
+ *       1. 解析网络包获取物品GUID
+ *       2. 根据GUID查找物品
+ *       3. 如果找到物品：
+ *          - 发送成功响应（has text = 0）
+ *          - 包含物品GUID和文本内容
+ *       4. 如果未找到物品：
+ *          - 发送失败响应（has text = 1，表示无文本）
  */
 void WorldSession::HandleItemTextQuery(WorldPacket& recvData )
 {

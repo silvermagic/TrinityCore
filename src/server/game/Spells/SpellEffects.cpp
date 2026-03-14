@@ -15,6 +15,25 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file SpellEffects.cpp
+ * @brief 法术效果处理实现文件
+ *
+ * 本文件实现了所有法术效果（Spell Effects）的具体处理逻辑。
+ * 每个法术可以包含多个效果，这些效果通过 SpellEffectHandlers 数组映射到对应的处理函数。
+ *
+ * 主要职责：
+ * - 处理各种法术效果（伤害、治疗、召唤、光环等）
+ * - 实现职业技能特有的效果逻辑
+ * - 管理法术触发、武器伤害、光环应用等核心机制
+ *
+ * 法术效果处理流程：
+ * 1. Spell 对象调用 CallScriptEffectHandlers() 或 HandleEffects()
+ * 2. 根据效果索引查找 SpellEffectHandlers 数组
+ * 3. 调用对应的效果处理函数（如 EffectSchoolDMG、EffectHeal 等）
+ * 4. 处理函数根据 effectHandleMode 判断处理时机
+ */
+
 #include "Spell.h"
 #include "AccountMgr.h"
 #include "Battleground.h"
@@ -61,6 +80,16 @@
 #include "WorldPacket.h"
 #include "WorldSession.h"
 
+/**
+ * @brief 法术效果处理函数映射表
+ *
+ * 这个数组将每种法术效果类型映射到对应的处理函数。
+ * 数组索引对应 SpellEffIndex 枚举值，值是对应的处理函数指针。
+ *
+ * 用法：
+ * SpellEffectHandlerFn handler = SpellEffectHandlers[effectIndex];
+ * (this->*handler)(); // 调用处理函数
+ */
 SpellEffectHandlerFn SpellEffectHandlers[TOTAL_SPELL_EFFECTS] =
 {
     &Spell::EffectNULL,                                     //  0
@@ -230,16 +259,44 @@ SpellEffectHandlerFn SpellEffectHandlers[TOTAL_SPELL_EFFECTS] =
     &Spell::EffectRemoveAura,                               //164 SPELL_EFFECT_REMOVE_AURA
 };
 
+/**
+ * @brief 空效果处理函数
+ *
+ * 用于处理未实现或不需要任何处理效果的法术效果。
+ * 仅输出调试日志，不执行任何实际操作。
+ */
 void Spell::EffectNULL()
 {
     TC_LOG_DEBUG("spells", "WORLD: Spell Effect DUMMY");
 }
 
+/**
+ * @brief 未使用效果处理函数
+ *
+ * 用于处理在 TrinityCore 中未使用、已废弃或以其他方式实现的法术效果。
+ * 函数体为空，不执行任何操作。
+ */
 void Spell::EffectUnused()
 {
     // NOT USED BY ANY SPELL OR USELESS OR IMPLEMENTED IN DIFFERENT WAY IN TRINITY
 }
 
+/**
+ * @brief 处理新复活效果（SPELL_EFFECT_RESURRECT_NEW）
+ *
+ * 向死亡玩家发送复活请求，设定复活后的生命值和法力值。
+ *
+ * 处理流程：
+ * 1. 检查是否在命中目标阶段执行
+ * 2. 获取目标玩家（从尸体或单位目标）
+ * 3. 验证玩家是否死亡且未已有复活请求
+ * 4. 设置复活数据（施法者、生命值、法力值）
+ * 5. 发送复活请求包给客户端
+ *
+ * 参数：
+ * - damage: 复活后的生命值
+ * - effectInfo->MiscValue: 复活后的法力值
+ */
 void Spell::EffectResurrectNew()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
@@ -268,6 +325,23 @@ void Spell::EffectResurrectNew()
     SendResurrectRequest(player);
 }
 
+/**
+ * @brief 处理即时死亡效果（SPELL_EFFECT_INSTAKILL）
+ *
+ * 立即杀死目标单位，无视生命值。
+ *
+ * 处理流程：
+ * 1. 检查是否在命中目标阶段执行
+ * 2. 验证目标存活
+ * 3. 检查玩家是否开启无敌模式（GOD 模式）
+ * 4. 若施法者是目标自己，结束法术施放（防止中断消息）
+ * 5. 发送即时死亡日志包给周围玩家
+ * 6. 对目标造成等于其当前生命值的伤害
+ *
+ * 注意事项：
+ * - 此效果无视任何伤害减免
+ * - GOD 模式的玩家免疫此效果
+ */
 void Spell::EffectInstaKill()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
@@ -292,6 +366,21 @@ void Spell::EffectInstaKill()
     Unit::DealDamage(GetUnitCasterForEffectHandlers(), unitTarget, unitTarget->GetHealth(), nullptr, NODAMAGE, SPELL_SCHOOL_MASK_NORMAL, nullptr, false);
 }
 
+/**
+ * @brief 处理环境伤害效果（SPELL_EFFECT_ENVIRONMENTAL_DAMAGE）
+ *
+ * 对目标造成环境伤害（如火焰、岩浆等）。
+ *
+ * 处理流程：
+ * 1. 检查是否在命中目标阶段执行
+ * 2. 验证目标存活
+ * 3. 玩家目标：调用 EnvironmentalDamage 方法（已包含吸收/抵抗计算）
+ * 4. 非玩家目标：手动计算吸收和抵抗，发送伤害日志
+ *
+ * 参数：
+ * - damage: 基础伤害值
+ * - m_spellInfo->GetSchoolMask(): 法术学派掩码
+ */
 void Spell::EffectEnvironmentalDMG()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
@@ -316,6 +405,31 @@ void Spell::EffectEnvironmentalDMG()
     }
 }
 
+/**
+ * @brief 处理魔法学派伤害效果（SPELL_EFFECT_SCHOOL_DAMAGE）
+ *
+ * 这是最基础的法术伤害效果，处理各种职业的直接伤害法术。
+ * 根据不同职业和法术特性，进行特殊伤害计算和修正。
+ *
+ * 处理流程：
+ * 1. 检查是否在发射目标阶段执行
+ * 2. 验证目标存活
+ * 3. 根据法术家族进行职业特殊处理（战士、术士、牧师、德鲁伊、盗贼、猎人、死亡骑士等）
+ * 4. 计算最终伤害值并累加到 m_damage
+ *
+ * 职业特殊处理示例：
+ * - 战士：盾牌猛击（格挡值加成）、胜利冲锋（攻击强度加成）、震荡波
+ * - 术士：烧尽（献祭加成）、燃烧（消耗献祭/暗影烈焰）、暗影撕咬
+ * - 牧师：强化心灵震爆（暗影形态触发心灵创伤）
+ * - 德鲁伊：凶猛撕咬（能量转化）、愤怒（虫群加成）
+ * - 盗贼：毒伤（消耗致命毒药）、剔骨（攻击强度加成）
+ * - 猎人：稳固射击（眩晕目标加成）
+ * - 死亡骑士：各种打击技能（疾病加成）
+ *
+ * 参数：
+ * - damage: 基础伤害值
+ * - m_spellInfo->SpellFamilyName: 法术家族，用于职业判断
+ */
 void Spell::EffectSchoolDMG()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_LAUNCH_TARGET)
@@ -696,6 +810,27 @@ void Spell::EffectSchoolDMG()
     }
 }
 
+/**
+ * @brief 处理虚拟效果（SPELL_EFFECT_DUMMY）
+ *
+ * Dummy 效果是一个通用的脚本接口，用于实现复杂的自定义逻辑。
+ * 当法术效果无法用标准效果表示时，使用 Dummy 效果并通过脚本处理。
+ *
+ * 处理流程：
+ * 1. 检查是否在命中目标阶段执行
+ * 2. 验证是否存在有效目标（单位、游戏对象、物品或尸体）
+ * 3. 处理宠物光环（如果施法者是玩家）
+ * 4. 启动数据库脚本（SpellScripts 表）
+ *
+ * 用途：
+ * - 实现复杂的法术逻辑（如任务相关法术、特殊物品效果）
+ * - 触发脚本事件
+ * - 处理需要多步骤的自定义效果
+ *
+ * 参数：
+ * - m_spellInfo->Id: 法术ID，用于查找对应脚本
+ * - effectInfo->EffectIndex: 效果索引
+ */
 void Spell::EffectDummy()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
@@ -719,6 +854,30 @@ void Spell::EffectDummy()
     m_caster->GetMap()->ScriptsStart(sSpellScripts, uint32(m_spellInfo->Id | (effectInfo->EffectIndex << 24)), m_caster, unitTarget);
 }
 
+/**
+ * @brief 处理触发法术效果（SPELL_EFFECT_TRIGGER_SPELL / SPELL_EFFECT_TRIGGER_SPELL_WITH_VALUE）
+ *
+ * 触发另一个法术，常用于连击技能、套装效果、特殊物品等。
+ *
+ * 处理流程：
+ * 1. 检查执行模式（发射目标或发射阶段）
+ * 2. 获取触发的法术ID
+ * 3. 处理特殊案例（如镜像、恶魔赋能、易碎护甲等）
+ * 4. 验证触发的法术是否存在
+ * 5. 设置触发法术的目标
+ * 6. 设置基础点数值（如果是 TRIGGER_SPELL_WITH_VALUE）
+ * 7. 施放触发的法术
+ *
+ * 特殊案例：
+ * - 镜像（58832）：检查是否有镜像雕文
+ * - 恶魔赋能 - 魅魔（54437）：移除移动限制光环，施放次级隐形
+ * - 易脆护甲（29284）：添加最大层数的护甲效果
+ * - 水银护盾（29286）：添加最大层数的护盾效果
+ *
+ * 参数：
+ * - effectInfo->TriggerSpell: 触发的法术ID
+ * - damage: 基础点数值（用于 TRIGGER_SPELL_WITH_VALUE）
+ */
 void Spell::EffectTriggerSpell()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_LAUNCH_TARGET
@@ -834,6 +993,23 @@ void Spell::EffectTriggerSpell()
     m_caster->CastSpell(std::move(targets), spellInfo->Id, args);
 }
 
+/**
+ * @brief 处理触发导弹法术效果（SPELL_EFFECT_TRIGGER_MISSILE / SPELL_EFFECT_TRIGGER_MISSILE_SPELL_WITH_VALUE）
+ *
+ * 触发一个导弹法术，与 EffectTriggerSpell 类似但使用不同的处理时机。
+ * 主要区别在于执行阶段（HIT_TARGET 和 HIT）。
+ *
+ * 处理流程：
+ * 1. 检查执行模式（命中目标或命中阶段）
+ * 2. 获取触发的法术ID并验证
+ * 3. 设置触发法术的目标
+ * 4. 设置基础点数值（如果是 WITH_VALUE 类型）
+ * 5. 施放触发的法术
+ *
+ * 参数：
+ * - effectInfo->TriggerSpell: 触发的法术ID
+ * - damage: 基础点数值（用于 WITH_VALUE 类型）
+ */
 void Spell::EffectTriggerMissileSpell()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET
@@ -886,6 +1062,28 @@ void Spell::EffectTriggerMissileSpell()
     m_caster->CastSpell(std::move(targets), spellInfo->Id, args);
 }
 
+/**
+ * @brief 处理强制施法效果（SPELL_EFFECT_FORCE_CAST / SPELL_EFFECT_FORCE_CAST_WITH_VALUE / SPELL_EFFECT_FORCE_CAST_2）
+ *
+ * 强制目标施放指定的法术。常用于特殊技能、任务物品、BOSS 技能等。
+ *
+ * 处理流程：
+ * 1. 检查是否在命中目标阶段执行
+ * 2. 验证目标单位存在
+ * 3. 获取触发的法术ID并验证
+ * 4. 处理特殊案例（如骷髅狮鹫逃脱、乘坐烈焰使者等）
+ * 5. 设置施法参数（完全触发、基础点数值等）
+ * 6. 强制目标施放法术
+ *
+ * 特殊案例：
+ * - 骷髅狮鹫逃脱（52588）、乘坐烈焰使者提示（48598）：移除光环
+ * - 躲在矿车中（52463）、超越（52349）：使用基础点数值施法
+ * - 可塑粘液召唤（72298）：目标向自己施法
+ *
+ * 参数：
+ * - effectInfo->TriggerSpell: 强制施放的法术ID
+ * - damage: 基础点数值（用于 WITH_VALUE 类型）或光环ID
+ */
 void Spell::EffectForceCast()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
@@ -969,6 +1167,26 @@ void Spell::EffectTriggerRitualOfSummoning()
     m_caster->CastSpell(nullptr, spellInfo->Id, false);
 }
 
+/**
+ * @brief 计算跳跃速度
+ *
+ * 根据距离和法术效果参数计算跳跃的水平速度和垂直速度。
+ * 用于跳跃类法术（如冲锋、跳跃、后跳等）的运动轨迹计算。
+ *
+ * @param spellEffectInfo 法术效果信息
+ * @param dist 跳跃距离
+ * @param speedXY [out] 水平速度
+ * @param speedZ [out] 垂直速度（起跳速度）
+ *
+ * 计算公式：
+ * - 水平速度：基于奔跑速度和倍率计算，有上下限
+ * - 垂直速度：基于抛物线运动公式计算
+ * - 跳跃高度：根据持续时间和重力加速度计算
+ *
+ * 性能注意事项：
+ * - 包含平方根计算和浮点运算
+ * - 每次跳跃法术都会调用
+ */
 void Spell::CalculateJumpSpeeds(SpellEffectInfo const& spellEffectInfo, float dist, float& speedXY, float& speedZ)
 {
     Unit* unitCaster = GetUnitCasterForEffectHandlers();
@@ -985,8 +1203,8 @@ void Spell::CalculateJumpSpeeds(SpellEffectInfo const& spellEffectInfo, float di
 
     float duration = dist / speedXY;
     float durationSqr = duration * duration;
-    float minHeight = spellEffectInfo.MiscValue  ? spellEffectInfo.MiscValue  / 10.0f :    0.5f; // Lower bound is blizzlike
-    float maxHeight = spellEffectInfo.MiscValueB ? spellEffectInfo.MiscValueB / 10.0f : 1000.0f; // Upper bound is unknown
+    float minHeight = spellEffectInfo.MiscValue  ? spellEffectInfo.MiscValue  / 10.0f :    0.5f; // Lower bound is blizzlike // 下限是暴雪标准
+    float maxHeight = spellEffectInfo.MiscValueB ? spellEffectInfo.MiscValueB / 10.0f : 1000.0f; // Upper bound is unknown // 上限未知
     float height;
     if (durationSqr < minHeight * 8 / Movement::gravity)
         height = minHeight;
@@ -998,6 +1216,25 @@ void Spell::CalculateJumpSpeeds(SpellEffectInfo const& spellEffectInfo, float di
     speedZ = std::sqrt(2 * Movement::gravity * height);
 }
 
+/**
+ * @brief 处理跳跃效果（SPELL_EFFECT_JUMP）
+ *
+ * 施法者跳跃到目标单位位置。如战士的冲锋、拦截等。
+ *
+ * 处理流程：
+ * 1. 检查是否在发射目标阶段执行
+ * 2. 验证施法者存在且不在飞行状态
+ * 3. 验证目标单位存在
+ * 4. 计算跳跃速度
+ * 5. 执行跳跃移动
+ *
+ * 参数：
+ * - unitTarget: 跳跃目标单位
+ *
+ * 注意事项：
+ * - 跳跃期间施法者处于移动状态，可能被某些机制中断
+ * - 跳跃轨迹由运动管理器计算
+ */
 void Spell::EffectJump()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_LAUNCH_TARGET)
@@ -1018,6 +1255,25 @@ void Spell::EffectJump()
     unitCaster->GetMotionMaster()->MoveJump(*unitTarget, speedXY, speedZ, EVENT_JUMP, false);
 }
 
+/**
+ * @brief 处理跳跃到目标点效果（SPELL_EFFECT_JUMP_DEST）
+ *
+ * 施法者跳跃到指定的目标坐标点。如死亡骑士的死亡之握拉回目标。
+ *
+ * 处理流程：
+ * 1. 检查是否在发射阶段执行
+ * 2. 验证施法者存在且不在飞行状态
+ * 3. 验证目标位置存在
+ * 4. 计算跳跃速度
+ * 5. 执行跳跃移动到目标点
+ *
+ * 参数：
+ * - destTarget: 目标坐标点
+ *
+ * 与 EffectJump 的区别：
+ * - EffectJump 跳跃到单位目标
+ * - EffectJumpDest 跳跃到指定坐标点
+ */
 void Spell::EffectJumpDest()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_LAUNCH)
@@ -1038,6 +1294,32 @@ void Spell::EffectJumpDest()
     unitCaster->GetMotionMaster()->MoveJump(*destTarget, speedXY, speedZ, EVENT_JUMP, !m_targets.GetObjectTargetGUID().IsEmpty());
 }
 
+/**
+ * @brief 处理传送效果（SPELL_EFFECT_TELEPORT_UNITS）
+ *
+ * 将目标单位传送到指定位置。如法师的闪现术、术士的传送门等。
+ *
+ * 处理流程：
+ * 1. 检查是否在命中目标阶段执行
+ * 2. 验证目标存在且不在飞行状态
+ * 3. 验证目标位置存在
+ * 4. 初始化目标坐标（处理默认地图ID和朝向）
+ * 5. 同地图传送：使用 NearTeleportTo
+ * 6. 跨地图传送：仅玩家可跨地图传送
+ *
+ * 参数：
+ * - destTarget: 目标位置坐标
+ * - unitTarget: 要传送的目标单位
+ *
+ * 注意事项：
+ * - 生物不能跨地图传送
+ * - 传送会中断施法者的当前施法
+ * - 传送后需要重新计算视野和可见性
+ *
+ * 性能注意事项：
+ * - 跨地图传送涉及地图切换，开销较大
+ * - 需要同步客户端位置信息
+ */
 void Spell::EffectTeleportUnits()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
@@ -1047,6 +1329,7 @@ void Spell::EffectTeleportUnits()
         return;
 
     // If not exist data for dest location - return
+    // 如果不存在目标位置数据则返回
     if (!m_targets.HasDst())
     {
         TC_LOG_ERROR("spells", "Spell::EffectTeleportUnits - does not have a destination for spellId {}.", m_spellInfo->Id);
@@ -1054,6 +1337,7 @@ void Spell::EffectTeleportUnits()
     }
 
     // Init dest coordinates
+    // 初始化目标坐标
     WorldLocation targetDest(*destTarget);
     if (targetDest.GetMapId() == MAPID_INVALID)
         targetDest.m_mapId = unitTarget->GetMapId();
@@ -1072,6 +1356,29 @@ void Spell::EffectTeleportUnits()
     }
 }
 
+/**
+ * @brief 处理应用光环效果（SPELL_EFFECT_APPLY_AURA）
+ *
+ * 将法术光环（Aura）应用到目标单位。光环是持续性的法术效果，
+ * 如增益状态、减益状态、持续伤害/治疗等。
+ *
+ * 处理流程：
+ * 1. 检查是否在命中目标阶段执行
+ * 2. 验证 _spellAura 和 unitTarget 存在
+ * 3. 检查目标是否已有该光环的应用
+ * 4. 若不存在：创建新的光环应用
+ * 5. 若已存在：更新光环效果掩码，添加新效果
+ *
+ * 光环应用机制：
+ * - 一个法术可能包含多个效果（如持续治疗 + 抗性提升）
+ * - AuraApplication 管理单位上的光环应用状态
+ * - 效果掩码标识哪些效果被应用到目标
+ *
+ * 参数：
+ * - _spellAura: 光环对象指针
+ * - unitTarget: 目标单位
+ * - effectInfo->EffectIndex: 当前效果索引
+ */
 void Spell::EffectApplyAura()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
@@ -1099,6 +1406,23 @@ void Spell::EffectApplyAura()
         aurApp->UpdateApplyEffectMask(aurApp->GetEffectsToApply() | 1 << effectInfo->EffectIndex, false);
 }
 
+/**
+ * @brief 处理遗忘专业技能专精效果（SPELL_EFFECT_UNLEARN_SPECIALIZATION）
+ *
+ * 让玩家遗忘指定的法术技能，常用于专业专精遗忘。
+ *
+ * 处理流程：
+ * 1. 检查是否在命中目标阶段执行
+ * 2. 验证目标是玩家
+ * 3. 移除指定法术
+ *
+ * 参数：
+ * - effectInfo->TriggerSpell: 要遗忘的法术ID
+ *
+ * 用途：
+ * - 遗忘专业技能专精（如锻造武器专精）
+ * - NPC 教学遗忘旧技能
+ */
 void Spell::EffectUnlearnSpecialization()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
@@ -1115,6 +1439,33 @@ void Spell::EffectUnlearnSpecialization()
     TC_LOG_DEBUG("spells", "Spell: Player {} has unlearned spell {} from Npc {}", player->GetGUID().ToString(), spellToUnlearn, m_caster->GetGUID().ToString());
 }
 
+/**
+ * @brief 处理能量抽取效果（SPELL_EFFECT_POWER_DRAIN）
+ *
+ * 从目标身上抽取能量（法力、怒气、能量等），并转移一部分给施法者。
+ *
+ * 处理流程：
+ * 1. 检查是否在命中目标阶段执行
+ * 2. 验证能量类型有效
+ * 3. 验证目标存在、存活且能量类型匹配
+ * 4. 计算伤害加成
+ * 5. 法力抽取受暴击伤害减免影响（2.4版本加入）
+ * 6. 从目标移除能量
+ * 7. 施法者获得部分能量（不能从自己身上抽取）
+ *
+ * 参数：
+ * - effectInfo->MiscValue: 能量类型（Powers 枚举）
+ * - damage: 抽取的能量值
+ * - effectInfo->CalcValueMultiplier(): 能量返还倍率
+ *
+ * 特殊机制：
+ * - 法力抽取受韧性影响，减少抽取量
+ * - 抽取自己的能量不会获得返还
+ *
+ * 用途：
+ * - 术士的法力吸取
+ * - 牧师的法力燃烧（部分效果）
+ */
 void Spell::EffectPowerDrain()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
@@ -1129,6 +1480,7 @@ void Spell::EffectPowerDrain()
 
     Unit* unitCaster = GetUnitCasterForEffectHandlers();
     // add spell damage bonus
+    // 添加法术伤害加成
     if (unitCaster)
     {
         damage = unitCaster->SpellDamageBonusDone(unitTarget, m_spellInfo, uint32(damage), SPELL_DIRECT_DAMAGE, *effectInfo, { });
@@ -1136,6 +1488,7 @@ void Spell::EffectPowerDrain()
     }
 
     // resilience reduce mana draining effect at spell crit damage reduction (added in 2.4)
+    // 韧性通过暴击伤害减免减少法力抽取效果（2.4版本加入）
     int32 power = damage;
     if (powerType == POWER_MANA)
         power -= unitTarget->GetSpellCritDamageReduction(power);
@@ -1143,6 +1496,7 @@ void Spell::EffectPowerDrain()
     int32 newDamage = -(unitTarget->ModifyPower(powerType, -int32(power)));
 
     // Don't restore from self drain
+    // 从自己身上抽取不返还能量
     float gainMultiplier = 0.f;
     if (unitCaster && unitCaster != unitTarget)
     {
@@ -1154,9 +1508,33 @@ void Spell::EffectPowerDrain()
     ExecuteLogEffectTakeTargetPower(effectInfo->EffectIndex, unitTarget, powerType, newDamage, gainMultiplier);
 }
 
+/**
+ * @brief 处理发送事件效果（SPELL_EFFECT_SEND_EVENT）
+ *
+ * 触发脚本事件，用于脚本系统处理法术触发的特殊逻辑。
+ *
+ * 处理流程：
+ * 1. 检查执行模式（命中目标或命中阶段）
+ * 2. 确定事件目标（单位、游戏对象、尸体或焦点对象）
+ * 3. 触发区域脚本或副本脚本的事件处理
+ * 4. 启动数据库脚本（EventScripts 表）
+ *
+ * 参数：
+ * - effectInfo->MiscValue: 事件ID，用于脚本查找
+ *
+ * 用途：
+ * - 触发 BOSS 战斗阶段转换
+ * - 启动任务相关事件
+ * - 处理特殊机关和谜题
+ *
+ * 注意事项：
+ * - 战场旗帜拾取不通过此系统处理
+ * - 避免重复执行（有目标的对象检查）
+ */
 void Spell::EffectSendEvent()
 {
     // we do not handle a flag dropping or clicking on flag in battleground by sendevent system
+    // 我们不通过 sendevent 系统处理战场中的旗帜掉落或点击旗帜
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET
         && effectHandleMode != SPELL_EFFECT_HANDLE_HIT)
         return;
@@ -1164,6 +1542,7 @@ void Spell::EffectSendEvent()
     WorldObject* target = nullptr;
 
     // call events for object target if present
+    // 如果存在对象目标则调用事件
     if (effectHandleMode == SPELL_EFFECT_HANDLE_HIT_TARGET)
     {
         if (unitTarget)
@@ -1179,19 +1558,25 @@ void Spell::EffectSendEvent()
         // this check was requested by scripters, but it has some downsides:
         // now it's impossible to script (using sEventScripts) a cast which misses all targets
         // or to have an ability to script the moment spell hits dest (in a case when there are object targets present)
+        // 防止在法术效果能够以对象为目标时重复执行效果处理
+        // 这个检查是脚本编写者要求的，但有一些缺点：
+        // 现在无法编写（使用 sEventScripts）未命中所有目标的施法脚本
+        // 或者在有对象目标存在时编写法术命中目标的时刻脚本
         if (effectInfo->GetProvidedTargetMask() & (TARGET_FLAG_UNIT_MASK | TARGET_FLAG_GAMEOBJECT_MASK))
             return;
         // some spells have no target entries in dbc and they use focus target
+        // 某些法术在 DBC 中没有目标条目，它们使用焦点目标
         if (focusObject)
             target = focusObject;
         /// @todo there should be a possibility to pass dest target to event script
+        /// @todo 应该有可能将目标位置传递给事件脚本
     }
 
     TC_LOG_DEBUG("spells", "Spell ScriptStart {} for spellid {} in EffectSendEvent ", effectInfo->MiscValue, m_spellInfo->Id);
 
     if (ZoneScript* zoneScript = m_caster->GetZoneScript())
         zoneScript->ProcessEvent(target, effectInfo->MiscValue);
-    else if (InstanceScript* instanceScript = m_caster->GetInstanceScript())    // needed in case Player is the caster
+    else if (InstanceScript* instanceScript = m_caster->GetInstanceScript())    // needed in case Player is the caster // 当施法者是玩家时需要
         instanceScript->ProcessEvent(target, effectInfo->MiscValue);
 
     m_caster->GetMap()->ScriptsStart(sEventScripts, effectInfo->MiscValue, m_caster, target);
@@ -1238,6 +1623,30 @@ void Spell::EffectPowerBurn()
     m_damage += newDamage;
 }
 
+/**
+ * @brief 处理治疗效果（SPELL_EFFECT_HEAL）
+ *
+ * 这是最基础的治疗法术效果，处理各种职业的直接治疗法术。
+ * 根据不同法术特性进行特殊治疗计算和修正。
+ *
+ * 处理流程：
+ * 1. 检查是否在发射目标阶段执行
+ * 2. 验证目标存活且伤害值为正
+ * 3. 获取施法者并验证
+ * 4. 根据法术特性进行特殊处理（如纳鲁的圣杯、迅捷治愈等）
+ * 5. 计算治疗加成（施法者和目标双端加成）
+ * 6. 处理特殊光环移除（如悲痛撕咬）
+ * 7. 累加治疗量到 m_healing
+ *
+ * 特殊案例：
+ * - 纳鲁的圣杯（45064）：消耗圣光能量堆叠增加治疗量
+ * - 迅捷治愈：消耗目标身上的回春或愈合效果，计算额外治疗
+ * - 死亡契约：恢复施法者最大生命值的百分比
+ *
+ * 参数：
+ * - damage: 基础治疗量
+ * - m_spellInfo->TargetAuraState: 目标光环状态（如迅捷治愈需要的 AURA_STATE_SWIFTMEND）
+ */
 void Spell::EffectHeal()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_LAUNCH_TARGET)
@@ -1322,6 +1731,21 @@ void Spell::EffectHeal()
     m_healing += addhealth;
 }
 
+/**
+ * @brief 处理百分比治疗效果（SPELL_EFFECT_HEAL_PCT）
+ *
+ * 按目标最大生命值的百分比进行治疗。
+ *
+ * 处理流程：
+ * 1. 检查是否在命中目标阶段执行
+ * 2. 验证目标存活且百分比值为正
+ * 3. 计算治疗量（最大生命值 * 百分比）
+ * 4. 应用施法者和目标的治疗加成
+ * 5. 累加治疗量到 m_healing
+ *
+ * 参数：
+ * - damage: 治疗百分比（如 30 表示 30% 最大生命值）
+ */
 void Spell::EffectHealPct()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
@@ -1340,6 +1764,21 @@ void Spell::EffectHealPct()
     m_healing += heal;
 }
 
+/**
+ * @brief 处理机械治疗效果（SPELL_EFFECT_HEAL_MECHANICAL）
+ *
+ * 专门用于治疗机械单位的治疗效果。
+ * 功能与 EffectHeal 类似，但专门针对机械目标。
+ *
+ * 处理流程：
+ * 1. 检查是否在命中目标阶段执行
+ * 2. 验证目标存活且伤害值为正
+ * 3. 计算治疗加成（施法者和目标双端加成）
+ * 4. 累加治疗量到 m_healing
+ *
+ * 参数：
+ * - damage: 基础治疗量
+ */
 void Spell::EffectHealMechanical()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
@@ -1358,6 +1797,29 @@ void Spell::EffectHealMechanical()
     m_healing += heal;
 }
 
+/**
+ * @brief 处理生命吸取效果（SPELL_EFFECT_HEALTH_LEECH）
+ *
+ * 对目标造成伤害，并将伤害的一部分转化为施法者的生命值。
+ * 如术士的生命虹吸、死亡骑士的灵界打击等。
+ *
+ * 处理流程：
+ * 1. 检查是否在命中目标阶段执行
+ * 2. 验证目标存活且伤害值为正
+ * 3. 计算伤害加成（施法者和目标双端加成）
+ * 4. 计算吸收和抵抗
+ * 5. 计算实际造成的伤害
+ * 6. 根据实际伤害和治疗倍率计算恢复量
+ * 7. 应用治疗加成，施法者恢复生命值
+ *
+ * 参数：
+ * - damage: 基础伤害值
+ * - effectInfo->CalcValueMultiplier(): 治疗倍率（伤害转化为治疗的比例）
+ *
+ * 注意事项：
+ * - 只计算实际造成的伤害，不计算过量伤害
+ * - 施法者可以从目标身上吸取生命治疗自己
+ */
 void Spell::EffectHealthLeech()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
@@ -1385,6 +1847,7 @@ void Spell::EffectHealthLeech()
     damage -= absorb;
 
     // get max possible damage, don't count overkill for heal
+    // 获取最大可能伤害，不计入过量伤害用于治疗计算
     uint32 healthGain = uint32(-unitTarget->GetHealthGain(-damage) * healMultiplier);
 
     if (unitCaster && unitCaster->IsAlive())
@@ -1397,6 +1860,35 @@ void Spell::EffectHealthLeech()
     }
 }
 
+/**
+ * @brief 创建物品的内部实现函数
+ *
+ * 实际执行物品创建逻辑，处理宝石完美化、专业专精奖励、背包空间检查等。
+ *
+ * 处理流程：
+ * 1. 验证目标是玩家
+ * 2. 获取物品模板
+ * 3. 处理战场奖励特殊逻辑
+ * 4. 检查物品数量和堆叠上限
+ * 5. 处理宝石完美化（珠宝加工）
+ * 6. 处理专业专精额外物品创建
+ * 7. 检查背包空间
+ * 8. 创建并存储物品
+ * 9. 设置制作者签名
+ * 10. 发送物品创建数据包
+ * 11. 更新专业技能熟练度
+ *
+ * @param itemId 要创建的物品ID
+ *
+ * 特殊机制：
+ * - 宝石完美化：珠宝加工有几率制作出完美品质的宝石
+ * - 专业专精：专业技能专精有几率额外创建物品
+ * - 战场奖励：战场勋章有特殊的发放逻辑
+ *
+ * 性能注意事项：
+ * - 涉及多次随机数生成和数据库查询
+ * - 需要检查背包空间，可能触发客户端错误提示
+ */
 void Spell::DoCreateItem(uint32 itemId)
 {
     if (!unitTarget || unitTarget->GetTypeId() != TYPEID_PLAYER)
@@ -1413,6 +1905,7 @@ void Spell::DoCreateItem(uint32 itemId)
     }
 
     // bg reward have some special in code work
+    // 战场奖励有特殊的代码处理
     uint32 bgType = 0;
     switch (m_spellInfo->Id)
     {
@@ -1440,12 +1933,16 @@ void Spell::DoCreateItem(uint32 itemId)
         num_to_add = pProto->GetMaxStackSize();
 
     /* == gem perfection handling == */
+    /* == 宝石完美化处理 == */
 
     // the chance of getting a perfect result
+    // 获得完美结果的几率
     float perfectCreateChance = 0.0f;
     // the resulting perfect item if successful
+    // 成功时的完美物品ID
     uint32 perfectItemType = itemId;
     // get perfection capability and chance
+    // 获取完美化能力和几率
     if (CanCreatePerfectItem(player, m_spellInfo->Id, perfectCreateChance, perfectItemType))
         if (roll_chance_f(perfectCreateChance)) // if the roll succeeds...
             newitemid = perfectItemType;        // the perfect item replaces the regular one
@@ -1453,36 +1950,46 @@ void Spell::DoCreateItem(uint32 itemId)
     /* == gem perfection handling over == */
 
     /* == profession specialization handling == */
+    /* == 专业专精处理 == */
 
     // init items_count to 1, since 1 item will be created regardless of specialization
+    // 初始化物品数量为1，因为无论是否有专精都会创建1个物品
     int items_count=1;
     // the chance to create additional items
+    // 创建额外物品的几率
     float additionalCreateChance=0.0f;
     // the maximum number of created additional items
+    // 创建额外物品的最大数量
     uint8 additionalMaxNum=0;
     // get the chance and maximum number for creating extra items
+    // 获取创建额外物品的几率和最大数量
     if (CanCreateExtraItems(player, m_spellInfo->Id, additionalCreateChance, additionalMaxNum))
         // roll with this chance till we roll not to create or we create the max num
+        // 持续投掷几率直到失败或达到最大数量
         while (roll_chance_f(additionalCreateChance) && items_count <= additionalMaxNum)
             ++items_count;
 
     // really will be created more items
+    // 实际将创建更多物品
     num_to_add *= items_count;
 
     /* == profession specialization handling over == */
 
     // can the player store the new item?
+    // 玩家能否存储新物品？
     ItemPosCountVec dest;
     uint32 no_space = 0;
     InventoryResult msg = player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, newitemid, num_to_add, &no_space);
     if (msg != EQUIP_ERR_OK)
     {
         // convert to possible store amount
+        // 转换为可存储的数量
         if (msg == EQUIP_ERR_INVENTORY_FULL || msg == EQUIP_ERR_CANT_CARRY_MORE_OF_THIS)
             num_to_add -= no_space;
         else
         {
             // if not created by another reason from full inventory or unique items amount limitation
+            // 如果不是因为背包满或唯一物品数量限制而无法创建
             player->SendEquipError(msg, nullptr, nullptr, newitemid);
             return;
         }
@@ -1491,9 +1998,11 @@ void Spell::DoCreateItem(uint32 itemId)
     if (num_to_add)
     {
         // create the new item and store it
+        // 创建新物品并存储
         Item* pItem = player->StoreNewItem(dest, newitemid, true, GenerateItemRandomPropertyId(newitemid));
 
         // was it successful? return error if not
+        // 是否成功？如果失败则返回错误
         if (!pItem)
         {
             player->SendEquipError(EQUIP_ERR_ITEM_NOT_FOUND, nullptr, nullptr);
@@ -1501,19 +2010,23 @@ void Spell::DoCreateItem(uint32 itemId)
         }
 
         // set the "Crafted by ..." property of the item
+        // 设置物品的"由...制作"属性
         if (pItem->GetTemplate()->HasSignature())
             pItem->SetGuidValue(ITEM_FIELD_CREATOR, player->GetGUID());
 
         // send info to the client
+        // 发送信息给客户端
         player->SendNewItem(pItem, num_to_add, true, bgType == 0);
 
         // we succeeded in creating at least one item, so a levelup is possible
+        // 成功创建至少一个物品，可能升级技能
         if (bgType == 0)
             player->UpdateCraftSkill(m_spellInfo->Id);
     }
 
 /*
     // for battleground marks send by mail if not add all expected
+    // 对于战场勋章，如果无法全部添加则通过邮件发送
     if (no_space > 0 && bgType)
     {
         if (Battleground* bg = sBattlegroundMgr->GetBattlegroundTemplate(BattlegroundTypeId(bgType)))
@@ -1522,6 +2035,20 @@ void Spell::DoCreateItem(uint32 itemId)
 */
 }
 
+/**
+ * @brief 处理创建物品效果（SPELL_EFFECT_CREATE_ITEM）
+ *
+ * 直接创建指定物品并放入目标玩家的背包。
+ *
+ * 处理流程：
+ * 1. 检查是否在命中目标阶段执行
+ * 2. 调用 DoCreateItem 创建物品
+ * 3. 记录效果执行日志
+ *
+ * 参数：
+ * - effectInfo->ItemType: 要创建的物品ID
+ * - damage: 创建的物品数量
+ */
 void Spell::EffectCreateItem()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
@@ -1531,6 +2058,23 @@ void Spell::EffectCreateItem()
     ExecuteLogEffectCreateItem(effectInfo->EffectIndex, effectInfo->ItemType);
 }
 
+/**
+ * @brief 处理创建物品2效果（SPELL_EFFECT_CREATE_ITEM_2）
+ *
+ * 创建物品的扩展版本，支持随机战利品或固定物品创建。
+ * 常用于专业技能制作物品。
+ *
+ * 处理流程：
+ * 1. 检查是否在命中目标阶段执行
+ * 2. 验证目标是玩家
+ * 3. 如果法术是制造类（IsLootCrafting），从 spell_loot_template 随机选择物品
+ * 4. 否则创建效果指定的固定物品
+ * 5. 更新专业技能熟练度
+ *
+ * 参数：
+ * - effectInfo->ItemType: 固定物品ID（如果不使用战利品模板）
+ * - m_spellInfo->Id: 法术ID，用于查找战利品模板
+ */
 void Spell::EffectCreateItem2()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
@@ -1558,6 +2102,20 @@ void Spell::EffectCreateItem2()
     /// @todo ExecuteLogEffectCreateItem(effectInfo->EffectIndex, effectInfo->ItemType);
 }
 
+/**
+ * @brief 处理创建随机物品效果（SPELL_EFFECT_CREATE_RANDOM_ITEM）
+ *
+ * 从 spell_loot_template 表中随机创建物品。
+ * 常用于宝箱、袋子等容器类物品。
+ *
+ * 处理流程：
+ * 1. 检查是否在命中目标阶段执行
+ * 2. 验证目标是玩家
+ * 3. 从 spell_loot_template 随机生成战利品并存储到玩家背包
+ *
+ * 参数：
+ * - m_spellInfo->Id: 法术ID，用于查找战利品模板
+ */
 void Spell::EffectCreateRandomItem()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
@@ -1572,6 +2130,31 @@ void Spell::EffectCreateRandomItem()
     /// @todo ExecuteLogEffectCreateItem(effectInfo->EffectIndex, effectInfo->ItemType);
 }
 
+/**
+ * @brief 处理持久区域光环效果（SPELL_EFFECT_PERSISTENT_AREA_AURA）
+ *
+ * 在指定位置创建一个持久性区域光环，对区域内的目标持续施加效果。
+ * 如奉献、暴风雪、治疗之雨等持续性区域法术。
+ *
+ * 处理流程：
+ * 1. 检查是否在命中阶段执行
+ * 2. 验证施法者存在
+ * 3. 只在最后一个持久区域光环效果时处理（避免重复创建）
+ * 4. 计算光环半径
+ * 5. 在目标位置创建动态对象（DynamicObject）
+ * 6. 创建光环并注册目标
+ * 7. 对目标应用效果
+ *
+ * 技术细节：
+ * - 动态对象是游戏世界中代表法术效果的实体
+ * - 持久区域光环需要动态对象作为载体
+ * - 光环会自动检测范围内的目标并应用效果
+ *
+ * 参数：
+ * - destTarget: 目标位置
+ * - effectInfo->CalcRadius(): 光环半径
+ * - m_spellInfo->Id: 法术ID
+ */
 void Spell::EffectPersistentAA()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT)
@@ -1622,6 +2205,32 @@ void Spell::EffectPersistentAA()
     _dynObjAura->_ApplyEffectForTargets(effectInfo->EffectIndex);
 }
 
+/**
+ * @brief 处理能量恢复效果（SPELL_EFFECT_ENERGIZE）
+ *
+ * 恢复目标的能量值（法力、怒气、能量、符文能量等）。
+ *
+ * 处理流程：
+ * 1. 检查是否在命中目标阶段执行
+ * 2. 验证施法者和目标存在且目标存活
+ * 3. 检查能量类型是否有效
+ * 4. 验证目标的能量类型匹配（药水和特殊法术除外）
+ * 5. 处理特殊法术的等级相关修正
+ * 6. 调用 EnergizeBySpell 恢复能量
+ *
+ * 特殊法术处理：
+ * - 恢复能量（9512）：等级相关的能量恢复
+ * - 血性狂怒（24571）：等级相关的法力恢复
+ * - 能量爆发（24532）：等级相关的能量恢复
+ * - 智者审判（31930）：恢复最大法力值的百分比
+ * - 充能（48542）：恢复最大能量的百分比
+ * - 符文法力注射器（67490）：工程师额外25%加成
+ * - 痛苦诅咒雕文（71132）：恢复基础法力值的1%
+ *
+ * 参数：
+ * - damage: 恢复的能量值
+ * - effectInfo->MiscValue: 能量类型（Powers 枚举）
+ */
 void Spell::EffectEnergize()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
@@ -1694,6 +2303,23 @@ void Spell::EffectEnergize()
     unitCaster->EnergizeBySpell(unitTarget, m_spellInfo, damage, power);
 }
 
+/**
+ * @brief 处理百分比能量恢复效果（SPELL_EFFECT_ENERGIZE_PCT）
+ *
+ * 按目标最大能量值的百分比恢复能量。
+ *
+ * 处理流程：
+ * 1. 检查是否在命中目标阶段执行
+ * 2. 验证施法者和目标存在且目标存活
+ * 3. 检查能量类型是否有效
+ * 4. 验证目标的能量类型匹配（特殊法术除外）
+ * 5. 计算恢复量（最大能量值 * 百分比）
+ * 6. 调用 EnergizeBySpell 恢复能量
+ *
+ * 参数：
+ * - damage: 恢复百分比（如 10 表示 10% 最大能量值）
+ * - effectInfo->MiscValue: 能量类型（Powers 枚举）
+ */
 void Spell::EffectEnergizePct()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
@@ -1789,6 +2415,36 @@ void Spell::SendLoot(ObjectGuid guid, LootType loottype)
     player->SendLoot(guid, loottype);
 }
 
+/**
+ * @brief 处理开锁效果（SPELL_EFFECT_OPEN_LOCK）
+ *
+ * 打开锁定的游戏对象或物品，如宝箱、门、锁定的物品等。
+ * 支持专业技能（开锁、采药、采矿等）的技能提升。
+ *
+ * 处理流程：
+ * 1. 检查是否在命中目标阶段执行
+ * 2. 验证施法者是玩家
+ * 3. 获取锁ID和目标GUID
+ * 4. 特殊处理战场旗帜（阿拉希盆地、风暴之眼）
+ * 5. 特殊处理陷阱解除（1842法术）
+ * 6. 特殊处理户外PvP对象
+ * 7. 检查是否可以打开锁
+ * 8. 发送战利品窗口或解锁物品
+ * 9. 更新专业技能熟练度（每个刷新周期最多一次）
+ *
+ * 参数：
+ * - effectInfo: 法术效果信息
+ * - lockId: 锁ID，用于查找锁定信息
+ *
+ * 特殊处理：
+ * - 战场旗帜：触发战场旗帜点击事件
+ * - 陷阱：直接停用陷阱
+ * - 户外PvP对象：调用户外PvP管理器处理
+ *
+ * 技能提升机制：
+ * - 成功开锁后提升相关技能
+ * - 游戏对象每次刷新只能提升一次技能
+ */
 void Spell::EffectOpenLock()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
@@ -1806,6 +2462,7 @@ void Spell::EffectOpenLock()
     ObjectGuid guid;
 
     // Get lockId
+    // 获取锁ID
     if (gameObjTarget)
     {
         GameObjectTemplate const* goInfo = gameObjTarget->GetGOInfo();
@@ -1814,11 +2471,14 @@ void Spell::EffectOpenLock()
             return;
 
         // Arathi Basin banner opening. /// @todo Verify correctness of this check
+        // 阿拉希盆地旗帜开启 /// @todo 验证此检查的正确性
         if ((goInfo->type == GAMEOBJECT_TYPE_BUTTON && goInfo->button.noDamageImmune) ||
             (goInfo->type == GAMEOBJECT_TYPE_GOOBER && goInfo->goober.losOK))
         {
             //CanUseBattlegroundObject() already called in CheckCast()
+            // CanUseBattlegroundObject() 已在 CheckCast() 中调用
             // in battleground check
+            // 战场检查
             if (Battleground* bg = player->GetBattleground())
             {
                 bg->EventPlayerClickedOnFlag(player, gameObjTarget);
@@ -1828,7 +2488,9 @@ void Spell::EffectOpenLock()
         else if (goInfo->type == GAMEOBJECT_TYPE_FLAGSTAND)
         {
             //CanUseBattlegroundObject() already called in CheckCast()
+            // CanUseBattlegroundObject() 已在 CheckCast() 中调用
             // in battleground check
+            // 战场检查
             if (Battleground* bg = player->GetBattleground())
             {
                 if (bg->GetTypeID(true) == BATTLEGROUND_EY)
@@ -1842,8 +2504,11 @@ void Spell::EffectOpenLock()
             return;
         }
         /// @todo Add script for spell 41920 - Filling, becouse server it freze when use this spell
+        /// @todo 为法术 41920 - 填充添加脚本，因为使用此法术时服务器会冻结
         // handle outdoor pvp object opening, return true if go was registered for handling
         // these objects must have been spawned by outdoorpvp!
+        // 处理户外PvP对象开启，如果游戏对象已注册处理则返回true
+        // 这些对象必须由户外PvP生成！
         else if (gameObjTarget->GetGOInfo()->type == GAMEOBJECT_TYPE_GOOBER && sOutdoorPvPMgr->HandleOpenGo(player, gameObjTarget))
             return;
         lockId = goInfo->GetLockId();
@@ -1880,14 +2545,17 @@ void Spell::EffectOpenLock()
     }
 
     // not allow use skill grow at item base open
+    // 不允许在物品基础开启时使用技能成长
     if (!m_CastItem && skillId != SKILL_NONE)
     {
         // update skill if really known
+        // 如果真正已知则更新技能
         if (uint32 pureSkillValue = player->GetPureSkillValue(skillId))
         {
             if (gameObjTarget)
             {
                 // Allow one skill-up until respawned
+                // 允许一次技能提升直到重新刷新
                 if (!gameObjTarget->IsInSkillupList(player->GetGUID()))
                 {
                     player->UpdateGatherSkill(skillId, pureSkillValue, reqSkillValue);
@@ -1897,6 +2565,7 @@ void Spell::EffectOpenLock()
             else if (itemTarget)
             {
                 // Do one skill-up
+                // 执行一次技能提升
                 player->UpdateGatherSkill(skillId, pureSkillValue, reqSkillValue);
             }
         }
@@ -1904,6 +2573,33 @@ void Spell::EffectOpenLock()
     ExecuteLogEffectOpenLock(effectInfo->EffectIndex, gameObjTarget ? (Object*)gameObjTarget : (Object*)itemTarget);
 }
 
+/**
+ * @brief 处理召唤物品变换效果（SPELL_EFFECT_SUMMON_CHANGE_ITEM）
+ *
+ * 将施法使用的物品转换为新的物品。如炼金术转化、制造物品等。
+ *
+ * 处理流程：
+ * 1. 检查是否在命中阶段执行
+ * 2. 验证施法者是玩家
+ * 3. 验证使用了物品施法（m_CastItem）
+ * 4. 验证物品属于施法者
+ * 5. 创建新物品，复制附魔和耐久度
+ * 6. 根据物品位置（背包/银行/装备栏）分别处理
+ * 7. 销毁旧物品，存储新物品
+ * 8. 检查任务物品获取
+ *
+ * 参数：
+ * - effectInfo->ItemType: 新物品ID
+ *
+ * 注意事项：
+ * - 复制所有附魔效果
+ * - 保持相同的耐久度损失
+ * - 清除旧物品引用，防止悬空指针
+ *
+ * 用途：
+ * - 炼金术转化（如元素转化）
+ * - 物品制造系统
+ */
 void Spell::EffectSummonChangeItem()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT)
@@ -1915,10 +2611,12 @@ void Spell::EffectSummonChangeItem()
     Player* player = m_caster->ToPlayer();
 
     // applied only to using item
+    // 仅应用于使用物品
     if (!m_CastItem)
         return;
 
     // ... only to item in own inventory/bank/equip_slot
+    // 仅应用于自己背包/银行/装备槽中的物品
     if (m_CastItem->GetOwnerGUID() != player->GetGUID())
         return;
 
@@ -1932,16 +2630,19 @@ void Spell::EffectSummonChangeItem()
     if (!pNewItem)
         return;
 
+    // 复制附魔效果
     for (uint8 j = PERM_ENCHANTMENT_SLOT; j <= TEMP_ENCHANTMENT_SLOT; ++j)
         if (m_CastItem->GetEnchantmentId(EnchantmentSlot(j)))
             pNewItem->SetEnchantment(EnchantmentSlot(j), m_CastItem->GetEnchantmentId(EnchantmentSlot(j)), m_CastItem->GetEnchantmentDuration(EnchantmentSlot(j)), m_CastItem->GetEnchantmentCharges(EnchantmentSlot(j)));
 
+    // 复制耐久度损失
     if (m_CastItem->GetUInt32Value(ITEM_FIELD_DURABILITY) < m_CastItem->GetUInt32Value(ITEM_FIELD_MAXDURABILITY))
     {
         double lossPercent = 1 - m_CastItem->GetUInt32Value(ITEM_FIELD_DURABILITY) / double(m_CastItem->GetUInt32Value(ITEM_FIELD_MAXDURABILITY));
         player->DurabilityLoss(pNewItem, lossPercent);
     }
 
+    // 背包位置
     if (player->IsInventoryPos(pos))
     {
         ItemPosCountVec dest;
@@ -1951,6 +2652,7 @@ void Spell::EffectSummonChangeItem()
             player->DestroyItem(m_CastItem->GetBagSlot(), m_CastItem->GetSlot(), true);
 
             // prevent crash at access and unexpected charges counting with item update queue corrupt
+            // 防止访问崩溃和物品更新队列损坏导致的意外充能计数
             if (m_CastItem == m_targets.GetItemTarget())
                 m_targets.SetItemTarget(nullptr);
 
@@ -1964,6 +2666,7 @@ void Spell::EffectSummonChangeItem()
             return;
         }
     }
+    // 银行位置
     else if (player->IsBankPos(pos))
     {
         ItemPosCountVec dest;
@@ -1972,6 +2675,7 @@ void Spell::EffectSummonChangeItem()
             player->DestroyItem(m_CastItem->GetBagSlot(), m_CastItem->GetSlot(), true);
 
             // prevent crash at access and unexpected charges counting with item update queue corrupt
+            // 防止访问崩溃和物品更新队列损坏导致的意外充能计数
             if (m_CastItem == m_targets.GetItemTarget())
                 m_targets.SetItemTarget(nullptr);
 
@@ -1983,6 +2687,7 @@ void Spell::EffectSummonChangeItem()
             return;
         }
     }
+    // 装备栏位置
     else if (player->IsEquipmentPos(pos))
     {
         uint16 dest;
@@ -1996,6 +2701,7 @@ void Spell::EffectSummonChangeItem()
             if (msg == EQUIP_ERR_CANT_DO_RIGHT_NOW) dest = EQUIPMENT_SLOT_MAINHAND;
 
             // prevent crash at access and unexpected charges counting with item update queue corrupt
+            // 防止访问崩溃和物品更新队列损坏导致的意外充能计数
             if (m_CastItem == m_targets.GetItemTarget())
                 m_targets.SetItemTarget(nullptr);
 
@@ -2012,9 +2718,34 @@ void Spell::EffectSummonChangeItem()
     }
 
     // fail
+    // 失败
     delete pNewItem;
 }
 
+/**
+ * @brief 处理武器/护甲熟练度效果（SPELL_EFFECT_PROFICIENCY）
+ *
+ * 授予玩家使用特定类型武器或护甲的能力。
+ *
+ * 处理流程：
+ * 1. 检查是否在命中阶段执行
+ * 2. 验证施法者是玩家
+ * 3. 检查是否为武器熟练度，添加并通知客户端
+ * 4. 检查是否为护甲熟练度，添加并通知客户端
+ *
+ * 参数：
+ * - m_spellInfo->EquippedItemClass: 物品类别（武器或护甲）
+ * - m_spellInfo->EquippedItemSubClassMask: 物品子类别掩码
+ *
+ * 用途：
+ * - 职业训练师教授武器技能
+ * - 职业初始武器熟练度
+ * - 护甲穿戴许可
+ *
+ * 注意事项：
+ * - 熟练度一旦学习永久生效
+ * - 需要同步通知客户端更新界面
+ */
 void Spell::EffectProficiency()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT)
@@ -2025,11 +2756,13 @@ void Spell::EffectProficiency()
     Player* p_target = m_caster->ToPlayer();
 
     uint32 subClassMask = m_spellInfo->EquippedItemSubClassMask;
+    // 武器熟练度
     if (m_spellInfo->EquippedItemClass == ITEM_CLASS_WEAPON && !(p_target->GetWeaponProficiency() & subClassMask))
     {
         p_target->AddWeaponProficiency(subClassMask);
         p_target->SendProficiency(ITEM_CLASS_WEAPON, p_target->GetWeaponProficiency());
     }
+    // 护甲熟练度
     if (m_spellInfo->EquippedItemClass == ITEM_CLASS_ARMOR && !(p_target->GetArmorProficiency() & subClassMask))
     {
         p_target->AddArmorProficiency(subClassMask);
@@ -2037,6 +2770,40 @@ void Spell::EffectProficiency()
     }
 }
 
+/**
+ * @brief 处理召唤效果（SPELL_EFFECT_SUMMON）
+ *
+ * 根据召唤属性生成各种类型的召唤单位，如宠物、守护者、图腾、载具等。
+ *
+ * 处理流程：
+ * 1. 检查是否在命中阶段执行
+ * 2. 获取召唤的生物模板ID和召唤属性
+ * 3. 确定施法者和持续时间
+ * 4. 根据召唤属性确定召唤数量
+ * 5. 根据召唤类别（Control）执行不同的召唤逻辑：
+ *    - WILD/ALLY/UNK：野外/盟友/未知
+ *    - PET：宠物
+ *    - PUPPET：傀儡
+ *    - VEHICLE：载具
+ * 6. 设置召唤单位的创建者GUID
+ * 7. 记录召唤日志
+ *
+ * 参数：
+ * - effectInfo->MiscValue: 生物模板ID
+ * - effectInfo->MiscValueB: 召唤属性ID（SummonPropertiesEntry）
+ * - damage: 召唤数量（某些法术）
+ *
+ * 召唤类型：
+ * - 守护者（Guardian）：如法师的水元素
+ * - 宠物（Pet）：术士/猎人的宠物
+ * - 图腾（Totem）：萨满的图腾
+ * - 载具（Vehicle）：可乘坐的载具
+ * - 小宠物（Minipet）：非战斗宠物
+ *
+ * 性能注意事项：
+ * - 召唤涉及对象创建和初始化，开销较大
+ * - 需要同步给周围玩家
+ */
 void Spell::EffectSummonType()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT)
@@ -2067,12 +2834,17 @@ void Spell::EffectSummonType()
     TempSummon* summon = nullptr;
 
     // determine how many units should be summoned
+    // 确定应该召唤多少单位
     uint32 numSummons;
 
     // some spells need to summon many units, for those spells number of summons is stored in effect value
     // however so far noone found a generic check to find all of those (there's no related data in summonproperties.dbc
     // and in spell attributes, possibly we need to add a table for those)
     // so here's a list of MiscValueB values, which is currently most generic check
+    // 某些法术需要召唤多个单位，这些法术的召唤数量存储在效果值中
+    // 然而到目前为止没有人找到通用的检查方法（summonproperties.dbc 和法术属性中没有相关数据）
+    // 可能需要为此添加一个表
+    // 所以这里是一个 MiscValueB 值的列表，这是目前最通用的检查方法
     switch (properties->ID)
     {
         case 64:
@@ -2118,6 +2890,7 @@ void Spell::EffectSummonType()
                     SummonGuardian(*effectInfo, entry, properties, numSummons);
                     break;
                     // Summons a vehicle, but doesn't force anyone to enter it (see SUMMON_CATEGORY_VEHICLE)
+                    // 召唤一个载具，但不强制任何人进入（参见 SUMMON_CATEGORY_VEHICLE）
                 case SUMMON_TYPE_VEHICLE:
                 case SUMMON_TYPE_VEHICLE2:
                 {
@@ -2250,6 +3023,25 @@ void Spell::EffectSummonType()
     }
 }
 
+/**
+ * @brief 处理学习法术效果（SPELL_EFFECT_LEARN_SPELL）
+ *
+ * 教会目标玩家或宠物新的法术技能。
+ *
+ * 处理流程：
+ * 1. 检查是否在命中目标阶段执行
+ * 2. 验证目标存在
+ * 3. 如果目标是宠物，调用 EffectLearnPetSpell
+ * 4. 如果目标是玩家，学习指定法术
+ *
+ * 特殊处理：
+ * - 法术ID 483 和 55884（学习骑术）：使用 damage 作为学习的法术ID
+ * - 其他法术：使用 effectInfo->TriggerSpell 作为学习的法术ID
+ *
+ * 参数：
+ * - effectInfo->TriggerSpell: 要学习的法术ID
+ * - damage: 特殊情况下的法术ID（如骑术）
+ */
 void Spell::EffectLearnSpell()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
@@ -2273,6 +3065,29 @@ void Spell::EffectLearnSpell()
     TC_LOG_DEBUG("spells", "Spell: Player {} has learned spell {} from Npc {}", player->GetGUID().ToString(), spellToLearn, m_caster->GetGUID().ToString());
 }
 
+/**
+ * @brief 处理驱散效果（SPELL_EFFECT_DISPEL）
+ *
+ * 驱散目标身上指定类型的光环效果（魔法、诅咒、疾病、中毒等）。
+ *
+ * 处理流程：
+ * 1. 检查是否在命中目标阶段执行
+ * 2. 验证目标存在
+ * 3. 根据驱散类型创建驱散掩码
+ * 4. 获取目标身上可驱散的光环列表
+ * 5. 随机选择光环进行驱散尝试（次数由 damage 决定）
+ * 6. 计算驱散成功与失败，发送对应的数据包
+ * 7. 移除成功驱散的光环
+ *
+ * 驱散机制：
+ * - 每次驱散尝试有成功概率（由光环属性决定）
+ * - 可以驱散多层光环（每次驱散一层）
+ * - 发送驱散成功和失败的日志包给客户端
+ *
+ * 参数：
+ * - damage: 驱散尝试次数
+ * - effectInfo->MiscValue: 驱散类型（DispelType 枚举）
+ */
 void Spell::EffectDispel()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
@@ -3011,6 +3826,37 @@ void Spell::EffectTaunt()
         mgr.MatchUnitThreatToHighestThreat(unitCaster);
 }
 
+/**
+ * @brief 处理武器伤害效果（SPELL_EFFECT_WEAPON_DAMAGE / WEAPON_DAMAGE_NOSCHOOL / NORMALIZED_WEAPON_DMG / WEAPON_PERCENT_DAMAGE）
+ *
+ * 这是武器攻击类技能的核心处理函数，计算武器造成的伤害。
+ * 包括多种武器伤害类型：固定伤害、百分比伤害、标准化伤害等。
+ *
+ * 处理流程：
+ * 1. 检查是否在发射目标阶段执行
+ * 2. 验证施法者和目标存活
+ * 3. 处理多重武器伤害效果（只执行最后一个）
+ * 4. 根据法术家族进行职业特殊处理（战士、盗贼、圣骑士、萨满、德鲁伊、猎人、死亡骑士）
+ * 5. 计算武器伤害（标准化或非标准化）
+ * 6. 应用固定伤害加成和百分比修正
+ * 7. 应用法术修正和近战伤害加成
+ * 8. 累加最终伤害到 m_damage
+ *
+ * 职业特殊处理示例：
+ * - 战士：毁灭打击（破甲叠加）、嘲讽打击
+ * - 盗贼：刀扇、出血（匕首加成）、毁伤（中毒加成）、毒伤、剔骨
+ * - 圣骑士：命令圣印释放
+ * - 萨满：风暴打击（套装效果）
+ * - 德鲁伊：割碎（连击点）、撕碎/撕咬（流血目标加成）
+ * - 猎人：夺命射击（远程攻击强度加成）
+ * - 死亡骑士：各种打击技能（疾病层数加成、符文能量加成）
+ *
+ * 武器伤害类型：
+ * - WEAPON_DAMAGE: 基础武器伤害 + 固定加成
+ * - WEAPON_DAMAGE_NOSCHOOL: 无学派的武器伤害
+ * - NORMALIZED_WEAPON_DMG: 标准化武器伤害（统一武器速度）
+ * - WEAPON_PERCENT_DAMAGE: 武器伤害的百分比
+ */
 void Spell::EffectWeaponDmg()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_LAUNCH_TARGET)
@@ -3026,6 +3872,8 @@ void Spell::EffectWeaponDmg()
     // multiple weapon dmg effect workaround
     // execute only the last weapon damage
     // and handle all effects at once
+    // 多重武器伤害效果的变通方案
+    // 只执行最后一个武器伤害效果，并一次性处理所有效果
     for (size_t j = effectInfo->EffectIndex + 1; j < m_spellInfo->GetEffects().size(); ++j)
     {
         switch (m_spellInfo->GetEffect(SpellEffIndex(j)).Effect)

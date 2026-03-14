@@ -15,6 +15,70 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file LFGMgr.cpp
+ * @brief 地下城查找系统（LFG）管理器实现
+ *
+ * 本文件实现了TrinityCore的地下城查找系统（Looking For Group）的核心管理逻辑。
+ * LFG系统允许玩家通过自动匹配系统快速组成地下城或团队副本队伍。
+ *
+ * 主要功能模块：
+ *
+ * 1. 队列管理：
+ *    - 玩家和队伍排队进入副本
+ *    - 支持单排和组排
+ *    - 队列状态管理和更新
+ *
+ * 2. 角色检查：
+ *    - 验证队伍角色配置（1坦克+1治疗+3输出）
+ *    - 角色检查超时处理
+ *    - 自动角色分配和调整
+ *
+ * 3. 提案系统：
+ *    - 匹配成功后创建提案
+ *    - 玩家确认加入
+ *    - 提案超时和失败处理
+ *
+ * 4. 投票踢人：
+ *    - LFG队伍内踢人投票
+ *    - 投票结果处理
+ *    - 踢人冷却时间管理
+ *
+ * 5. 奖励系统：
+ *    - 随机副本完成奖励
+ *    - 首次完成和重复完成的不同奖励
+ *    - 等级对应的奖励配置
+ *
+ * 6. 传送功能：
+ *    - 进入副本传送
+ *    - 离开副本传送
+ *    - 传送错误处理
+ *
+ * 7. 数据持久化：
+ *    - 队伍状态保存到数据库
+ *    - 断线重连后恢复状态
+ *    - 副本进度保存
+ *
+ * 核心算法：
+ * - 队列匹配算法（见LFGQueue.cpp）
+ * - 角色兼容性检查
+ * - 玩家屏蔽检查
+ * - 副本条件验证
+ *
+ * 性能优化：
+ * - 使用缓存减少数据库查询
+ * - 定时更新队列状态（每15秒）
+ * - 批量处理提案和踢人
+ *
+ * 线程安全：
+ * - 单例模式，主线程运行
+ * - 所有操作在主循环中执行
+ * - 使用消息队列处理跨线程请求
+ *
+ * 数据流程：
+ * 玩家请求 -> 角色检查 -> 加入队列 -> 匹配算法 -> 创建提案 -> 玩家确认 -> 组建队伍 -> 进入副本
+ */
+
 #include "LFGMgr.h"
 #include "Common.h"
 #include "DatabaseEnv.h"
@@ -43,11 +107,22 @@
 namespace lfg
 {
 
+/**
+ * @brief LFGDungeonData 默认构造函数
+ *
+ * 职责：初始化地下城数据结构，所有成员变量设置为默认值
+ */
 LFGDungeonData::LFGDungeonData() : id(0), name(), map(0), type(0), expansion(0), group(0), minlevel(0),
     maxlevel(0), difficulty(REGULAR_DIFFICULTY), seasonal(false), x(0.0f), y(0.0f), z(0.0f), o(0.0f)
 {
 }
 
+/**
+ * @brief LFGDungeonData 构造函数（从DBC数据初始化）
+ *
+ * 职责：从DBC数据初始化地下城数据结构
+ * @param dbc LFG地下城DBC条目指针
+ */
 LFGDungeonData::LFGDungeonData(LFGDungeonEntry const* dbc) : id(dbc->ID), name(dbc->Name[0]), map(dbc->MapID),
     type(dbc->TypeID), expansion(uint8(dbc->ExpansionLevel)), group(uint8(dbc->GroupID)),
     minlevel(uint8(dbc->MinLevel)), maxlevel(uint8(dbc->MaxLevel)), difficulty(Difficulty(dbc->Difficulty)),
@@ -55,17 +130,40 @@ LFGDungeonData::LFGDungeonData(LFGDungeonEntry const* dbc) : id(dbc->ID), name(d
 {
 }
 
+/**
+ * @brief LFGMgr 构造函数
+ *
+ * 职责：初始化地下城查找器管理器，设置队列定时器和配置选项
+ */
 LFGMgr::LFGMgr(): m_QueueTimer(0), m_lfgProposalId(1),
     m_options(sWorld->getIntConfig(CONFIG_LFG_OPTIONSMASK))
 {
 }
 
+/**
+ * @brief LFGMgr 析构函数
+ *
+ * 职责：清理奖励映射存储，释放动态分配的奖励对象
+ */
 LFGMgr::~LFGMgr()
 {
     for (LfgRewardContainer::iterator itr = RewardMapStore.begin(); itr != RewardMapStore.end(); ++itr)
         delete itr->second;
 }
 
+/**
+ * @brief 从数据库加载LFG数据
+ *
+ * 职责：从数据库字段恢复队伍的LFG状态信息
+ *
+ * @param fields 数据库字段数组
+ * @param guid 队伍GUID
+ *
+ * 主要流程：
+ * 1. 验证输入参数有效性
+ * 2. 设置队伍领袖
+ * 3. 恢复地下城ID和状态
+ */
 void LFGMgr::_LoadFromDB(Field* fields, ObjectGuid guid)
 {
     if (!fields)
@@ -95,6 +193,19 @@ void LFGMgr::_LoadFromDB(Field* fields, ObjectGuid guid)
     }
 }
 
+/**
+ * @brief 保存LFG数据到数据库
+ *
+ * 职责：将队伍的LFG状态信息持久化到数据库
+ *
+ * @param guid 队伍GUID
+ * @param db_guid 数据库中的队伍ID
+ *
+ * 主要流程：
+ * 1. 验证是否为队伍GUID
+ * 2. 删除旧数据
+ * 3. 插入新的地下城和状态数据
+ */
 void LFGMgr::_SaveToDB(ObjectGuid guid, uint32 db_guid)
 {
     if (!guid.IsGroup())
@@ -115,6 +226,17 @@ void LFGMgr::_SaveToDB(ObjectGuid guid, uint32 db_guid)
     CharacterDatabase.CommitTransaction(trans);
 }
 
+/**
+ * @brief 加载地下城完成奖励
+ *
+ * 职责：从数据库加载完成地下城获得的奖励配置
+ *
+ * 主要流程：
+ * 1. 清空现有奖励存储
+ * 2. 从 lfg_dungeon_rewards 表读取数据
+ * 3. 验证地下城、等级、任务的有效性
+ * 4. 存储到奖励映射表
+ */
 /// Load rewards for completing dungeons
 void LFGMgr::LoadRewards()
 {
@@ -176,6 +298,14 @@ void LFGMgr::LoadRewards()
     TC_LOG_INFO("server.loading", ">> Loaded {} lfg dungeon rewards in {} ms", count, GetMSTimeDiffToNow(oldMSTime));
 }
 
+/**
+ * @brief 获取LFG地下城数据
+ *
+ * 职责：根据ID获取地下城数据结构
+ *
+ * @param id 地下城ID
+ * @return 地下城数据指针，不存在则返回nullptr
+ */
 LFGDungeonData const* LFGMgr::GetLFGDungeon(uint32 id)
 {
     LFGDungeonContainer::const_iterator itr = LfgDungeonStore.find(id);
@@ -185,6 +315,19 @@ LFGDungeonData const* LFGMgr::GetLFGDungeon(uint32 id)
     return nullptr;
 }
 
+/**
+ * @brief 加载LFG地下城数据
+ *
+ * 职责：从DBC和数据库加载地下城配置数据，包括传送坐标
+ *
+ * @param reload 是否重新加载（默认为false）
+ *
+ * 主要流程：
+ * 1. 从DBC文件加载地下城基础信息
+ * 2. 从数据库加载传送坐标
+ * 3. 对于没有坐标的地下城，从区域触发器获取入口坐标
+ * 4. 构建地下城缓存映射
+ */
 void LFGMgr::LoadLFGDungeons(bool reload /* = false */)
 {
     uint32 oldMSTime = getMSTime();
@@ -277,12 +420,34 @@ void LFGMgr::LoadLFGDungeons(bool reload /* = false */)
     }
 }
 
+/**
+ * @brief 获取LFGMgr单例实例
+ *
+ * 职责：返回LFGMgr的全局单例对象
+ *
+ * @return LFGMgr单例指针
+ */
 LFGMgr* LFGMgr::instance()
 {
     static LFGMgr instance;
     return &instance;
 }
 
+/**
+ * @brief 更新地下城查找器（主循环）
+ *
+ * 职责：定期更新LFG系统状态，处理超时、匹配和队列更新
+ *
+ * @param diff 距离上次更新的时间差（毫秒）
+ *
+ * 主要流程：
+ * 1. 检查LFG系统是否启用
+ * 2. 清理过期的角色检查
+ * 3. 清理过期的提案
+ * 4. 清理过期的踢人投票
+ * 5. 尝试匹配新队伍
+ * 6. 更新队列等待时间
+ */
 void LFGMgr::Update(uint32 diff)
 {
     if (!isOptionEnabled(LFG_OPTION_ENABLE_DUNGEON_FINDER | LFG_OPTION_ENABLE_RAID_BROWSER))
@@ -385,15 +550,23 @@ void LFGMgr::Update(uint32 diff)
 }
 
 /**
-    Adds the player/group to lfg queue. If player is in a group then it is the leader
-    of the group tying to join the group. Join conditions are checked before adding
-    to the new queue.
-
-   @param[in]     player Player trying to join (or leader of group trying to join)
-   @param[in]     roles Player selected roles
-   @param[in]     dungeons Dungeons the player/group is applying for
-   @param[in]     comment Player selected comment
-*/
+ * @brief 加入地下城查找器队列
+ *
+ * 职责：将玩家或队伍加入LFG队列，进行角色检查和匹配条件验证
+ *
+ * @param player 尝试加入的玩家（或队伍队长）
+ * @param roles 玩家选择的角色（坦克/治疗/输出）
+ * @param dungeons 目标地下城集合
+ * @param comment 玩家备注信息
+ *
+ * 主要流程：
+ * 1. 验证输入参数和角色有效性
+ * 2. 检查玩家/队伍成员的限制条件（逃亡者、冷却时间、战场等）
+ * 3. 验证地下城类型和兼容性
+ * 4. 对于队伍：启动角色检查流程
+ * 5. 对于单人：直接加入队列
+ * 6. 发送加入结果通知
+ */
 void LFGMgr::JoinLfg(Player* player, uint8 roles, LfgDungeonSet& dungeons, const std::string& comment)
 {
     if (!player || !player->GetSession() || dungeons.empty())
@@ -610,11 +783,22 @@ void LFGMgr::JoinLfg(Player* player, uint8 roles, LfgDungeonSet& dungeons, const
 }
 
 /**
-    Leaves Dungeon System. Player/Group is removed from queue, rolechecks, proposals
-    or votekicks. Player or group needs to be not NULL and using Dungeon System
-
-   @param[in]     guid Player or group guid
-*/
+ * @brief 离开地下城查找器系统
+ *
+ * 职责：将玩家或队伍从队列、角色检查、提案或踢人投票中移除
+ *
+ * @param guid 玩家或队伍GUID
+ * @param disconnected 是否因断开连接而离开（默认false）
+ *
+ * 主要流程：
+ * 1. 获取当前LFG状态
+ * 2. 根据状态处理不同情况：
+ *    - 队列中：从队列移除，恢复之前的状态
+ *    - 角色检查中：中止角色检查
+ *    - 提案中：标记为拒绝，移除提案
+ *    - 地下城中：更新状态为NONE
+ * 3. 发送更新通知给相关玩家
+ */
 void LFGMgr::LeaveLfg(ObjectGuid guid, bool disconnected)
 {
     ObjectGuid gguid = guid.IsGroup() ? guid : GetGroup(guid);
@@ -692,12 +876,22 @@ void LFGMgr::LeaveLfg(ObjectGuid guid, bool disconnected)
 }
 
 /**
-   Update the Role check info with the player selected role.
-
-   @param[in]     grp Group guid to update rolecheck
-   @param[in]     guid Player guid (0 = rolecheck failed)
-   @param[in]     roles Player selected roles
-*/
+ * @brief 更新角色检查
+ *
+ * 职责：更新队伍角色检查状态，验证角色分配是否合理
+ *
+ * @param gguid 队伍GUID
+ * @param guid 玩家GUID（为空表示角色检查失败）
+ * @param roles 玩家选择的角色（默认为无）
+ *
+ * 主要流程：
+ * 1. 验证队伍和角色检查数据存在
+ * 2. 过滤无效角色（根据职业限制）
+ * 3. 更新玩家的角色选择
+ * 4. 检查是否所有玩家都已选择角色
+ * 5. 验证角色组合是否满足队伍需求（1坦克1治疗3输出）
+ * 6. 角色检查完成后将队伍加入队列
+ */
 void LFGMgr::UpdateRoleCheck(ObjectGuid gguid, ObjectGuid guid /* = ObjectGuid::Empty */, uint8 roles /* = PLAYER_ROLE_NONE */)
 {
     if (!gguid)
@@ -791,12 +985,21 @@ void LFGMgr::UpdateRoleCheck(ObjectGuid gguid, ObjectGuid guid /* = ObjectGuid::
 }
 
 /**
-   Given a list of dungeons remove the dungeons players have restrictions.
-
-   @param[in, out] dungeons Dungeons to check restrictions
-   @param[in]     players Set of players to check their dungeon restrictions
-   @param[out]    lockMap Map of players Lock status info of given dungeons (Empty if dungeons is not empty)
-*/
+ * @brief 获取兼容的地下城列表
+ *
+ * 职责：从给定地下城列表中移除玩家有限制的地下城
+ *
+ * @param dungeons 地下城集合（输入输出参数）
+ * @param players 玩家集合
+ * @param lockMap 锁定状态映射（输出参数）
+ * @param isContinue 是否继续进行中的副本
+ *
+ * 主要流程：
+ * 1. 遍历所有玩家
+ * 2. 获取每个玩家被锁定的地下城列表
+ * 3. 从可用地下城集合中移除被锁定的地下城
+ * 4. 处理特殊情况：继续进行中的锁定副本
+ */
 void LFGMgr::GetCompatibleDungeons(LfgDungeonSet& dungeons, GuidSet const& players, LfgLockPartyMap& lockMap, bool isContinue)
 {
     lockMap.clear();
@@ -848,11 +1051,19 @@ void LFGMgr::GetCompatibleDungeons(LfgDungeonSet& dungeons, GuidSet const& playe
 }
 
 /**
-   Check if a group can be formed with the given group roles
-
-   @param[in]     groles Map of roles to check
-   @return True if roles are compatible
-*/
+ * @brief 检查队伍角色是否合理
+ *
+ * 职责：验证角色分配是否满足标准队伍配置（1坦克1治疗3输出）
+ *
+ * @param groles 角色映射表
+ * @return 角色是否兼容
+ *
+ * 主要流程：
+ * 1. 遍历所有玩家角色
+ * 2. 统计坦克、治疗、输出数量
+ * 3. 处理多角色玩家（优先尝试特定角色）
+ * 4. 递归检查是否存在有效的角色组合
+ */
 bool LFGMgr::CheckGroupRoles(LfgRolesMap& groles)
 {
     if (groles.empty())
@@ -917,9 +1128,21 @@ bool LFGMgr::CheckGroupRoles(LfgRolesMap& groles)
 }
 
 /**
-   Makes a new group given a proposal
-   @param[in]     proposal Proposal to get info from
-*/
+ * @brief 根据提案创建新队伍
+ *
+ * 职责：根据提案信息组建队伍，设置角色并传送玩家
+ *
+ * @param proposal 提案信息
+ *
+ * 主要流程：
+ * 1. 按角色对玩家排序（队长->坦克->治疗->输出）
+ * 2. 确定需要传送的玩家
+ * 3. 创建或复用队伍
+ * 4. 添加玩家到队伍
+ * 5. 设置地下城难度和状态
+ * 6. 添加随机副本冷却时间
+ * 7. 传送玩家到地下城
+ */
 void LFGMgr::MakeNewGroup(LfgProposal const& proposal)
 {
     GuidList players, tankPlayers, healPlayers, dpsPlayers;
@@ -1013,6 +1236,14 @@ void LFGMgr::MakeNewGroup(LfgProposal const& proposal)
     grp->SendUpdate();
 }
 
+/**
+ * @brief 添加新提案
+ *
+ * 职责：创建新的组队提案并分配唯一ID
+ *
+ * @param proposal 提案信息（引用）
+ * @return 提案ID
+ */
 uint32 LFGMgr::AddProposal(LfgProposal& proposal)
 {
     proposal.id = ++m_lfgProposalId;
@@ -1021,12 +1252,21 @@ uint32 LFGMgr::AddProposal(LfgProposal& proposal)
 }
 
 /**
-   Update Proposal info with player answer
-
-   @param[in]     proposalId Proposal id to be updated
-   @param[in]     guid Player guid to update answer
-   @param[in]     accept Player answer
-*/
+ * @brief 更新提案状态
+ *
+ * 职责：更新玩家对提案的响应，判断是否所有玩家都已接受
+ *
+ * @param proposalId 提案ID
+ * @param guid 玩家GUID
+ * @param accept 是否接受
+ *
+ * 主要流程：
+ * 1. 验证提案和玩家存在
+ * 2. 记录玩家响应
+ * 3. 如果拒绝：移除提案
+ * 4. 如果所有人都接受：组建队伍
+ * 5. 更新等待时间统计
+ */
 void LFGMgr::UpdateProposal(uint32 proposalId, ObjectGuid guid, bool accept)
 {
     // Check if the proposal exists
@@ -1130,11 +1370,20 @@ void LFGMgr::UpdateProposal(uint32 proposalId, ObjectGuid guid, bool accept)
 }
 
 /**
-   Remove a proposal from the pool, remove the group that didn't accept (if needed) and readd the other members to the queue
-
-   @param[in]     itProposal Iterator to the proposal to remove
-   @param[in]     type Type of removal (LFG_UPDATETYPE_PROPOSAL_FAILED, LFG_UPDATETYPE_PROPOSAL_DECLINED)
-*/
+ * @brief 移除提案
+ *
+ * 职责：移除提案，处理拒绝的玩家/队伍，将其他成员重新加入队列
+ *
+ * @param itProposal 提案迭代器
+ * @param type 移除类型（失败/拒绝）
+ *
+ * 主要流程：
+ * 1. 标记未响应的玩家为拒绝
+ * 2. 确定需要移除的玩家/队伍
+ * 3. 通知所有玩家结果
+ * 4. 从队列中移除拒绝的玩家/队伍
+ * 5. 将接受的玩家/队伍重新加入队列
+ */
 void LFGMgr::RemoveProposal(LfgProposalContainer::iterator itProposal, LfgUpdateType type)
 {
     LfgProposal& proposal = itProposal->second;
@@ -1228,13 +1477,23 @@ void LFGMgr::RemoveProposal(LfgProposalContainer::iterator itProposal, LfgUpdate
 }
 
 /**
-   Initialize a boot kick vote
-
-   @param[in]     gguid Group the vote kicks belongs to
-   @param[in]     kicker Kicker guid
-   @param[in]     victim Victim guid
-   @param[in]     reason Kick reason
-*/
+ * @brief 初始化踢人投票
+ *
+ * 职责：启动对某玩家的踢人投票流程
+ *
+ * @param gguid 队伍GUID
+ * @param kicker 发起踢人的玩家GUID
+ * @param victim 被踢的玩家GUID
+ * @param reason 踢人原因
+ *
+ * 主要流程：
+ * 1. 设置踢人投票为活动状态
+ * 2. 初始化投票数据结构
+ * 3. 设置投票超时时间
+ * 4. 初始化所有玩家的投票状态为待定
+ * 5. 被踢者自动投票反对，发起者自动投票赞成
+ * 6. 通知所有玩家踢人投票
+ */
 void LFGMgr::InitBoot(ObjectGuid gguid, ObjectGuid kicker, ObjectGuid victim, std::string const& reason)
 {
     SetVoteKick(gguid, true);
@@ -1263,11 +1522,23 @@ void LFGMgr::InitBoot(ObjectGuid gguid, ObjectGuid kicker, ObjectGuid victim, st
 }
 
 /**
-   Update Boot info with player answer
-
-   @param[in]     guid Player who has answered
-   @param[in]     player answer
-*/
+ * @brief 更新踢人投票
+ *
+ * 职责：记录玩家对踢人投票的响应，判断投票结果
+ *
+ * @param guid 玩家GUID
+ * @param accept 是否同意踢人
+ *
+ * 主要流程：
+ * 1. 获取队伍和踢人投票数据
+ * 2. 验证玩家是否已投票
+ * 3. 记录投票结果
+ * 4. 统计赞成和反对票数
+ * 5. 如果达到所需票数：
+ *    - 赞成票足够：踢出玩家
+ *    - 反对票过多：投票失败
+ * 6. 通知所有玩家结果
+ */
 void LFGMgr::UpdateBoot(ObjectGuid guid, bool accept)
 {
     ObjectGuid gguid = GetGroup(guid);
@@ -1326,12 +1597,23 @@ void LFGMgr::UpdateBoot(ObjectGuid guid, bool accept)
 }
 
 /**
-   Teleports the player in or out the dungeon
-
-   @param[in]     player Player to teleport
-   @param[in]     out Teleport out (true) or in (false)
-   @param[in]     fromOpcode Function called from opcode handlers? (Default false)
-*/
+ * @brief 传送玩家进出地下城
+ *
+ * 职责：将玩家传送进入或离开LFG地下城
+ *
+ * @param player 玩家对象
+ * @param out 是否传送出地下城（true为出，false为进）
+ * @param fromOpcode 是否由操作码处理器调用（默认false）
+ *
+ * 主要流程：
+ * 1. 获取地下城数据
+ * 2. 传送出：将玩家传送回进入点
+ * 3. 传送进：
+ *    - 检查传送条件（存活、不在坠落、无疲劳等）
+ *    - 如果有队友已在副本内，传送到队友位置
+ *    - 否则传送到地下城入口
+ * 4. 发送传送错误信息（如果有错误）
+ */
 void LFGMgr::TeleportPlayer(Player* player, bool out, bool fromOpcode /*= false*/)
 {
     LFGDungeonData const* dungeon = nullptr;
@@ -1418,11 +1700,25 @@ void LFGMgr::TeleportPlayer(Player* player, bool out, bool fromOpcode /*= false*
 }
 
 /**
-   Finish a dungeon and give reward, if any.
-
-   @param[in]     guid Group guid
-   @param[in]     dungeonId Dungeonid
-*/
+ * @brief 完成地下城并发放奖励
+ *
+ * 职责：标记地下城完成，为玩家发放随机副本奖励
+ *
+ * @param gguid 队伍GUID
+ * @param dungeonId 地下城ID
+ * @param currMap 当前地图
+ *
+ * 主要流程：
+ * 1. 验证地下城ID匹配
+ * 2. 检查是否已完成（避免重复奖励）
+ * 3. 更新状态为已完成
+ * 4. 对于随机/季节性副本：
+ *    - 移除冷却时间buff
+ *    - 发放首次奖励任务（首杀奖励）
+ *    - 发放普通奖励任务
+ *    - 更新成就进度
+ * 5. 发送奖励通知给玩家
+ */
 void LFGMgr::FinishDungeon(ObjectGuid gguid, const uint32 dungeonId, Map const* currMap)
 {
     uint32 gDungeonId = GetDungeon(gguid);
@@ -1531,15 +1827,17 @@ void LFGMgr::FinishDungeon(ObjectGuid gguid, const uint32 dungeonId, Map const* 
 }
 
 // --------------------------------------------------------------------------//
-// Auxiliar Functions
+// 辅助函数
 // --------------------------------------------------------------------------//
 
 /**
-   Get the dungeon list that can be done given a random dungeon entry.
-
-   @param[in]     randomdungeon Random dungeon id (if value = 0 will return all dungeons)
-   @returns Set of dungeons that can be done.
-*/
+ * @brief 获取指定随机地下城可完成的地下城列表
+ *
+ * 职责：根据随机地下城ID获取对应的地下城列表
+ *
+ * @param randomdungeon 随机地下城ID（0表示返回所有地下城）
+ * @return 可完成的地下城集合
+ */
 LfgDungeonSet const& LFGMgr::GetDungeonsByRandom(uint32 randomdungeon)
 {
     LFGDungeonData const* dungeon = GetLFGDungeon(randomdungeon);
@@ -1548,12 +1846,14 @@ LfgDungeonSet const& LFGMgr::GetDungeonsByRandom(uint32 randomdungeon)
 }
 
 /**
-   Get the reward of a given random dungeon at a certain level
-
-   @param[in]     dungeon dungeon id
-   @param[in]     level Player level
-   @returns Reward
-*/
+ * @brief 获取指定等级下随机地下城的奖励
+ *
+ * 职责：根据地下城ID和玩家等级获取对应的奖励配置
+ *
+ * @param dungeon 地下城ID
+ * @param level 玩家等级
+ * @return 奖励信息指针
+ */
 LfgReward const* LFGMgr::GetRandomDungeonReward(uint32 dungeon, uint8 level)
 {
     LfgReward const* rew = nullptr;
@@ -1570,11 +1870,13 @@ LfgReward const* LFGMgr::GetRandomDungeonReward(uint32 dungeon, uint8 level)
 }
 
 /**
-   Given a Dungeon id returns the dungeon Type
-
-   @param[in]     dungeon dungeon id
-   @returns Dungeon type
-*/
+ * @brief 获取地下城类型
+ *
+ * 职责：根据地下城ID返回其类型（普通/英雄/团队/随机等）
+ *
+ * @param dungeonId 地下城ID
+ * @return 地下城类型
+ */
 LfgType LFGMgr::GetDungeonType(uint32 dungeonId)
 {
     LFGDungeonData const* dungeon = GetLFGDungeon(dungeonId);
@@ -1584,6 +1886,14 @@ LfgType LFGMgr::GetDungeonType(uint32 dungeonId)
     return LfgType(dungeon->type);
 }
 
+/**
+ * @brief 获取LFG状态
+ *
+ * 职责：获取玩家或队伍当前的LFG状态
+ *
+ * @param guid 玩家或队伍GUID
+ * @return LFG状态
+ */
 LfgState LFGMgr::GetState(ObjectGuid guid)
 {
     LfgState state;
@@ -1601,6 +1911,14 @@ LfgState LFGMgr::GetState(ObjectGuid guid)
     return state;
 }
 
+/**
+ * @brief 获取旧的LFG状态
+ *
+ * 职责：获取玩家或队伍之前的LFG状态（用于状态恢复）
+ *
+ * @param guid 玩家或队伍GUID
+ * @return 旧的LFG状态
+ */
 LfgState LFGMgr::GetOldState(ObjectGuid guid)
 {
     LfgState state;
@@ -1618,6 +1936,14 @@ LfgState LFGMgr::GetOldState(ObjectGuid guid)
     return state;
 }
 
+/**
+ * @brief 检查踢人投票是否激活
+ *
+ * 职责：检查队伍当前是否有正在进行的踢人投票
+ *
+ * @param gguid 队伍GUID
+ * @return 踢人投票是否激活
+ */
 bool LFGMgr::IsVoteKickActive(ObjectGuid gguid)
 {
     ASSERT(gguid.IsGroup());
@@ -1628,6 +1954,15 @@ bool LFGMgr::IsVoteKickActive(ObjectGuid gguid)
     return active;
 }
 
+/**
+ * @brief 获取地下城ID
+ *
+ * 职责：获取队伍当前进行或排队的地下城ID
+ *
+ * @param guid 队伍GUID
+ * @param asId 是否返回ID而非入口ID（默认true）
+ * @return 地下城ID
+ */
 uint32 LFGMgr::GetDungeon(ObjectGuid guid, bool asId /*= true */)
 {
     uint32 dungeon = GroupsStore[guid].GetDungeon(asId);
@@ -1635,6 +1970,14 @@ uint32 LFGMgr::GetDungeon(ObjectGuid guid, bool asId /*= true */)
     return dungeon;
 }
 
+/**
+ * @brief 获取地下城地图ID
+ *
+ * 职责：根据地下城ID获取对应的地图ID
+ *
+ * @param guid 队伍GUID
+ * @return 地图ID
+ */
 uint32 LFGMgr::GetDungeonMapId(ObjectGuid guid)
 {
     uint32 dungeonId = GroupsStore[guid].GetDungeon(true);
@@ -1648,6 +1991,14 @@ uint32 LFGMgr::GetDungeonMapId(ObjectGuid guid)
     return mapId;
 }
 
+/**
+ * @brief 获取玩家角色
+ *
+ * 职责：获取玩家在LFG中选择的角色（坦克/治疗/输出）
+ *
+ * @param guid 玩家GUID
+ * @return 角色标志位
+ */
 uint8 LFGMgr::GetRoles(ObjectGuid guid)
 {
     uint8 roles = PlayersStore[guid].GetRoles();
@@ -1655,18 +2006,49 @@ uint8 LFGMgr::GetRoles(ObjectGuid guid)
     return roles;
 }
 
+/**
+ * @brief 获取玩家备注
+ *
+ * 职责：获取玩家在LFG中设置的备注信息
+ *
+ * @param guid 玩家GUID
+ * @return 备注字符串引用
+ */
 const std::string& LFGMgr::GetComment(ObjectGuid guid)
 {
     TC_LOG_TRACE("lfg.data.player.comment.get", "Player: {}, Comment: {}", guid.ToString(), PlayersStore[guid].GetComment());
     return PlayersStore[guid].GetComment();
 }
 
+/**
+ * @brief 获取玩家选择的地下城列表
+ *
+ * 职责：获取玩家在LFG中选择的地下城集合
+ *
+ * @param guid 玩家GUID
+ * @return 地下城集合引用
+ */
 LfgDungeonSet const& LFGMgr::GetSelectedDungeons(ObjectGuid guid)
 {
     TC_LOG_TRACE("lfg.data.player.dungeons.selected.get", "Player: {}, Selected Dungeons: {}", guid.ToString(), ConcatenateDungeons(PlayersStore[guid].GetSelectedDungeons()));
     return PlayersStore[guid].GetSelectedDungeons();
 }
 
+/**
+ * @brief 获取玩家被锁定的地下城列表
+ *
+ * 职责：获取玩家无法进入的地下城及其原因
+ *
+ * @param guid 玩家GUID
+ * @return 锁定状态映射（地下城ID -> 锁定原因）
+ *
+ * 主要流程：
+ * 1. 检查权限、等级、资料片限制
+ * 2. 检查地图是否被禁用
+ * 3. 检查副本锁定状态
+ * 4. 检查季节性活动
+ * 5. 检查装备等级、成就、任务要求等
+ */
 LfgLockMap const LFGMgr::GetLockedDungeons(ObjectGuid guid)
 {
     TC_LOG_TRACE("lfg.data.player.dungeons.locked.get", "Player: {}, LockedDungeons.", guid.ToString());
@@ -1739,6 +2121,14 @@ LfgLockMap const LFGMgr::GetLockedDungeons(ObjectGuid guid)
     return lock;
 }
 
+/**
+ * @brief 获取剩余踢人次数
+ *
+ * 职责：获取队伍剩余可踢人次数
+ *
+ * @param guid 队伍GUID
+ * @return 剩余踢人次数
+ */
 uint8 LFGMgr::GetKicksLeft(ObjectGuid guid)
 {
     uint8 kicks = GroupsStore[guid].GetKicksLeft();
@@ -1746,6 +2136,14 @@ uint8 LFGMgr::GetKicksLeft(ObjectGuid guid)
     return kicks;
 }
 
+/**
+ * @brief 恢复之前的LFG状态
+ *
+ * 职责：将玩家或队伍恢复到之前的LFG状态
+ *
+ * @param guid 玩家或队伍GUID
+ * @param debugMsg 调试信息
+ */
 void LFGMgr::RestoreState(ObjectGuid guid, char const* debugMsg)
 {
     if (guid.IsGroup())
@@ -1768,6 +2166,14 @@ void LFGMgr::RestoreState(ObjectGuid guid, char const* debugMsg)
     }
 }
 
+/**
+ * @brief 设置LFG状态
+ *
+ * 职责：设置玩家或队伍的LFG状态
+ *
+ * @param guid 玩家或队伍GUID
+ * @param state 新状态
+ */
 void LFGMgr::SetState(ObjectGuid guid, LfgState state)
 {
     if (guid.IsGroup())
@@ -1790,6 +2196,14 @@ void LFGMgr::SetState(ObjectGuid guid, LfgState state)
     }
 }
 
+/**
+ * @brief 设置踢人投票状态
+ *
+ * 职责：设置队伍踢人投票的激活状态
+ *
+ * @param gguid 队伍GUID
+ * @param active 是否激活
+ */
 void LFGMgr::SetVoteKick(ObjectGuid gguid, bool active)
 {
     ASSERT(gguid.IsGroup());
@@ -1801,36 +2215,82 @@ void LFGMgr::SetVoteKick(ObjectGuid gguid, bool active)
     data.SetVoteKick(active);
 }
 
+/**
+ * @brief 设置地下城
+ *
+ * 职责：设置队伍当前进行或排队的地下城
+ *
+ * @param guid 队伍GUID
+ * @param dungeon 地下城ID
+ */
 void LFGMgr::SetDungeon(ObjectGuid guid, uint32 dungeon)
 {
     TC_LOG_TRACE("lfg.data.group.dungeon.set", "Group: {}, Dungeon: {}", guid.ToString(), dungeon);
     GroupsStore[guid].SetDungeon(dungeon);
 }
 
+/**
+ * @brief 设置玩家角色
+ *
+ * 职责：设置玩家在LFG中的角色
+ *
+ * @param guid 玩家GUID
+ * @param roles 角色标志位
+ */
 void LFGMgr::SetRoles(ObjectGuid guid, uint8 roles)
 {
     TC_LOG_TRACE("lfg.data.player.role.set", "Player: {}, Roles: {}", guid.ToString(), roles);
     PlayersStore[guid].SetRoles(roles);
 }
 
+/**
+ * @brief 设置玩家备注
+ *
+ * 职责：设置玩家在LFG中的备注信息
+ *
+ * @param guid 玩家GUID
+ * @param comment 备注内容
+ */
 void LFGMgr::SetComment(ObjectGuid guid, std::string const& comment)
 {
     TC_LOG_TRACE("lfg.data.player.comment.set", "Player: {}, Comment: {}", guid.ToString(), comment);
     PlayersStore[guid].SetComment(comment);
 }
 
+/**
+ * @brief 设置选择的地下城
+ *
+ * 职责：设置玩家在LFG中选择的地下城列表
+ *
+ * @param guid 玩家GUID
+ * @param dungeons 地下城集合
+ */
 void LFGMgr::SetSelectedDungeons(ObjectGuid guid, LfgDungeonSet const& dungeons)
 {
     TC_LOG_TRACE("lfg.data.player.dungeon.selected.set", "Player: {}, Dungeons: {}", guid.ToString(), ConcatenateDungeons(dungeons));
     PlayersStore[guid].SetSelectedDungeons(dungeons);
 }
 
+/**
+ * @brief 减少剩余踢人次数
+ *
+ * 职责：减少队伍剩余可踢人次数
+ *
+ * @param guid 队伍GUID
+ */
 void LFGMgr::DecreaseKicksLeft(ObjectGuid guid)
 {
     GroupsStore[guid].DecreaseKicksLeft();
     TC_LOG_TRACE("lfg.data.group.kicksleft.decrease", "Group: {}, Kicks: {}", guid.ToString(), GroupsStore[guid].GetKicksLeft());
 }
 
+/**
+ * @brief 移除玩家数据
+ *
+ * 职责：从玩家数据存储中移除指定玩家
+ *
+ * @param guid 玩家GUID
+ */
 void LFGMgr::RemovePlayerData(ObjectGuid guid)
 {
     TC_LOG_TRACE("lfg.data.player.remove", "Player: {}", guid.ToString());
@@ -1839,6 +2299,13 @@ void LFGMgr::RemovePlayerData(ObjectGuid guid)
         PlayersStore.erase(it);
 }
 
+/**
+ * @brief 移除队伍数据
+ *
+ * 职责：从队伍数据存储中移除指定队伍及相关玩家状态
+ *
+ * @param guid 队伍GUID
+ */
 void LFGMgr::RemoveGroupData(ObjectGuid guid)
 {
     TC_LOG_TRACE("lfg.data.group.remove", "Group: {}", guid.ToString());
@@ -1861,6 +2328,14 @@ void LFGMgr::RemoveGroupData(ObjectGuid guid)
     GroupsStore.erase(it);
 }
 
+/**
+ * @brief 获取玩家阵营
+ *
+ * 职责：获取玩家的阵营（联盟/部落）
+ *
+ * @param guid 玩家GUID
+ * @return 阵营ID
+ */
 uint8 LFGMgr::GetTeam(ObjectGuid guid)
 {
     uint8 team = PlayersStore[guid].GetTeam();
@@ -1868,6 +2343,15 @@ uint8 LFGMgr::GetTeam(ObjectGuid guid)
     return team;
 }
 
+/**
+ * @brief 过滤职业角色
+ *
+ * 职责：根据玩家职业过滤可选角色（如战士不能选择治疗）
+ *
+ * @param player 玩家对象
+ * @param roles 原始角色标志位
+ * @return 过滤后的角色标志位
+ */
 uint8 LFGMgr::FilterClassRoles(Player* player, uint8 roles)
 {
     roles &= PLAYER_ROLE_ANY;
@@ -1878,21 +2362,54 @@ uint8 LFGMgr::FilterClassRoles(Player* player, uint8 roles)
     return roles;
 }
 
+/**
+ * @brief 从队伍移除玩家
+ *
+ * 职责：从队伍数据中移除指定玩家
+ *
+ * @param gguid 队伍GUID
+ * @param guid 玩家GUID
+ * @return 剩余玩家数量
+ */
 uint8 LFGMgr::RemovePlayerFromGroup(ObjectGuid gguid, ObjectGuid guid)
 {
     return GroupsStore[gguid].RemovePlayer(guid);
 }
 
+/**
+ * @brief 添加玩家到队伍
+ *
+ * 职责：将玩家添加到队伍数据中
+ *
+ * @param gguid 队伍GUID
+ * @param guid 玩家GUID
+ */
 void LFGMgr::AddPlayerToGroup(ObjectGuid gguid, ObjectGuid guid)
 {
     GroupsStore[gguid].AddPlayer(guid);
 }
 
+/**
+ * @brief 设置队伍领袖
+ *
+ * 职责：设置队伍的领袖玩家
+ *
+ * @param gguid 队伍GUID
+ * @param leader 领袖玩家GUID
+ */
 void LFGMgr::SetLeader(ObjectGuid gguid, ObjectGuid leader)
 {
     GroupsStore[gguid].SetLeader(leader);
 }
 
+/**
+ * @brief 设置玩家阵营
+ *
+ * 职责：设置玩家的阵营，考虑跨阵营组队设置
+ *
+ * @param guid 玩家GUID
+ * @param team 阵营ID
+ */
 void LFGMgr::SetTeam(ObjectGuid guid, uint8 team)
 {
     if (sWorld->getBoolConfig(CONFIG_ALLOW_TWO_SIDE_INTERACTION_GROUP))
@@ -1901,31 +2418,80 @@ void LFGMgr::SetTeam(ObjectGuid guid, uint8 team)
     PlayersStore[guid].SetTeam(team);
 }
 
+/**
+ * @brief 获取玩家所在队伍
+ *
+ * 职责：获取玩家所在的队伍GUID
+ *
+ * @param guid 玩家GUID
+ * @return 队伍GUID（无队伍则为空）
+ */
 ObjectGuid LFGMgr::GetGroup(ObjectGuid guid)
 {
     return PlayersStore[guid].GetGroup();
 }
 
+/**
+ * @brief 设置玩家所在队伍
+ *
+ * 职责：设置玩家所属的队伍
+ *
+ * @param guid 玩家GUID
+ * @param group 队伍GUID
+ */
 void LFGMgr::SetGroup(ObjectGuid guid, ObjectGuid group)
 {
     PlayersStore[guid].SetGroup(group);
 }
 
+/**
+ * @brief 获取队伍中的所有玩家
+ *
+ * 职责：获取队伍中所有玩家的GUID集合
+ *
+ * @param guid 队伍GUID
+ * @return 玩家GUID集合引用
+ */
 GuidSet const& LFGMgr::GetPlayers(ObjectGuid guid)
 {
     return GroupsStore[guid].GetPlayers();
 }
 
+/**
+ * @brief 获取队伍玩家数量
+ *
+ * 职责：获取队伍中的玩家数量
+ *
+ * @param guid 队伍GUID
+ * @return 玩家数量
+ */
 uint8 LFGMgr::GetPlayerCount(ObjectGuid guid)
 {
     return GroupsStore[guid].GetPlayerCount();
 }
 
+/**
+ * @brief 获取队伍领袖
+ *
+ * 职责：获取队伍领袖的GUID
+ *
+ * @param guid 队伍GUID
+ * @return 领袖玩家GUID
+ */
 ObjectGuid LFGMgr::GetLeader(ObjectGuid guid)
 {
     return GroupsStore[guid].GetLeader();
 }
 
+/**
+ * @brief 检查两个玩家是否互相屏蔽
+ *
+ * 职责：检查两个玩家之间是否存在屏蔽关系
+ *
+ * @param guid1 第一个玩家GUID
+ * @param guid2 第二个玩家GUID
+ * @return 是否存在屏蔽关系
+ */
 bool LFGMgr::HasIgnore(ObjectGuid guid1, ObjectGuid guid2)
 {
     Player* plr1 = ObjectAccessor::FindConnectedPlayer(guid1);
@@ -1933,59 +2499,140 @@ bool LFGMgr::HasIgnore(ObjectGuid guid1, ObjectGuid guid2)
     return plr1 && plr2 && (plr1->GetSocial()->HasIgnore(guid2) || plr2->GetSocial()->HasIgnore(guid1));
 }
 
+/**
+ * @brief 发送角色选择通知
+ *
+ * 职责：向玩家发送角色选择通知
+ *
+ * @param guid 接收通知的玩家GUID
+ * @param pguid 选择角色的玩家GUID
+ * @param roles 选择的角色
+ */
 void LFGMgr::SendLfgRoleChosen(ObjectGuid guid, ObjectGuid pguid, uint8 roles)
 {
     if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
         player->GetSession()->SendLfgRoleChosen(pguid, roles);
 }
 
+/**
+ * @brief 发送角色检查更新
+ *
+ * 职责：向玩家发送角色检查状态更新
+ *
+ * @param guid 玩家GUID
+ * @param roleCheck 角色检查数据
+ */
 void LFGMgr::SendLfgRoleCheckUpdate(ObjectGuid guid, LfgRoleCheck const& roleCheck)
 {
     if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
         player->GetSession()->SendLfgRoleCheckUpdate(roleCheck);
 }
 
+/**
+ * @brief 发送玩家LFG更新
+ *
+ * 职责：向玩家发送LFG状态更新（单人队列）
+ *
+ * @param guid 玩家GUID
+ * @param data 更新数据
+ */
 void LFGMgr::SendLfgUpdatePlayer(ObjectGuid guid, LfgUpdateData const& data)
 {
     if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
         player->GetSession()->SendLfgUpdatePlayer(data);
 }
 
+/**
+ * @brief 发送队伍LFG更新
+ *
+ * 职责：向玩家发送队伍LFG状态更新
+ *
+ * @param guid 玩家GUID
+ * @param data 更新数据
+ */
 void LFGMgr::SendLfgUpdateParty(ObjectGuid guid, LfgUpdateData const& data)
 {
     if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
         player->GetSession()->SendLfgUpdateParty(data);
 }
 
+/**
+ * @brief 发送加入结果
+ *
+ * 职责：向玩家发送加入LFG的结果
+ *
+ * @param guid 玩家GUID
+ * @param data 加入结果数据
+ */
 void LFGMgr::SendLfgJoinResult(ObjectGuid guid, LfgJoinResultData const& data)
 {
     if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
         player->GetSession()->SendLfgJoinResult(data);
 }
 
+/**
+ * @brief 发送踢人投票更新
+ *
+ * 职责：向玩家发送踢人投票状态更新
+ *
+ * @param guid 玩家GUID
+ * @param boot 踢人投票数据
+ */
 void LFGMgr::SendLfgBootProposalUpdate(ObjectGuid guid, LfgPlayerBoot const& boot)
 {
     if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
         player->GetSession()->SendLfgBootProposalUpdate(boot);
 }
 
+/**
+ * @brief 发送提案更新
+ *
+ * 职责：向玩家发送组队提案状态更新
+ *
+ * @param guid 玩家GUID
+ * @param proposal 提案数据
+ */
 void LFGMgr::SendLfgUpdateProposal(ObjectGuid guid, LfgProposal const& proposal)
 {
     if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
         player->GetSession()->SendLfgUpdateProposal(proposal);
 }
 
+/**
+ * @brief 发送队列状态
+ *
+ * 职责：向玩家发送队列等待时间状态
+ *
+ * @param guid 玩家GUID
+ * @param data 队列状态数据
+ */
 void LFGMgr::SendLfgQueueStatus(ObjectGuid guid, LfgQueueStatusData const& data)
 {
     if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
         player->GetSession()->SendLfgQueueStatus(data);
 }
 
+/**
+ * @brief 检查是否为LFG队伍
+ *
+ * 职责：判断指定GUID是否为LFG队伍
+ *
+ * @param guid 队伍GUID
+ * @return 是否为LFG队伍
+ */
 bool LFGMgr::IsLfgGroup(ObjectGuid guid)
 {
     return guid && guid.IsGroup() && GroupsStore[guid].IsLfgGroup();
 }
 
+/**
+ * @brief 获取LFG队列
+ *
+ * 职责：根据玩家或队伍获取对应的LFG队列（按阵营区分）
+ *
+ * @param guid 玩家或队伍GUID
+ * @return LFG队列引用
+ */
 LFGQueue& LFGMgr::GetQueue(ObjectGuid guid)
 {
     uint8 queueId = 0;
@@ -2001,6 +2648,14 @@ LFGQueue& LFGMgr::GetQueue(ObjectGuid guid)
     return QueuesStore[queueId];
 }
 
+/**
+ * @brief 检查所有GUID是否都在队列中
+ *
+ * 职责：验证所有指定的玩家/队伍是否都处于排队状态
+ *
+ * @param check GUID列表
+ * @return 是否全部在队列中
+ */
 bool LFGMgr::AllQueued(GuidList const& check)
 {
     if (check.empty())
@@ -2020,33 +2675,76 @@ bool LFGMgr::AllQueued(GuidList const& check)
     return true;
 }
 
+/**
+ * @brief 清理所有队列（仅用于调试）
+ *
+ * 职责：清空所有队列存储
+ */
 // Only for debugging purposes
 void LFGMgr::Clean()
 {
     QueuesStore.clear();
 }
 
+/**
+ * @brief 检查选项是否启用
+ *
+ * 职责：检查指定的LFG选项是否启用
+ *
+ * @param option 选项标志位
+ * @return 是否启用
+ */
 bool LFGMgr::isOptionEnabled(uint32 option)
 {
     return (m_options & option) != 0;
 }
 
+/**
+ * @brief 获取LFG选项配置
+ *
+ * 职责：获取当前的LFG选项配置
+ *
+ * @return 选项配置值
+ */
 uint32 LFGMgr::GetOptions()
 {
     return m_options;
 }
 
+/**
+ * @brief 设置LFG选项配置
+ *
+ * 职责：设置LFG选项配置
+ *
+ * @param options 选项配置值
+ */
 void LFGMgr::SetOptions(uint32 options)
 {
     m_options = options;
 }
 
+/**
+ * @brief 获取LFG状态
+ *
+ * 职责：获取玩家的LFG状态数据
+ *
+ * @param guid 玩家GUID
+ * @return LFG更新数据
+ */
 LfgUpdateData LFGMgr::GetLfgStatus(ObjectGuid guid)
 {
     LfgPlayerData& playerData = PlayersStore[guid];
     return LfgUpdateData(LFG_UPDATETYPE_UPDATE_STATUS, playerData.GetState(), playerData.GetSelectedDungeons());
 }
 
+/**
+ * @brief 检查季节性活动是否激活
+ *
+ * 职责：检查指定地下城的季节性活动是否正在进行
+ *
+ * @param dungeonId 地下城ID
+ * @return 季节性活动是否激活
+ */
 bool LFGMgr::IsSeasonActive(uint32 dungeonId)
 {
     switch (dungeonId)
@@ -2063,6 +2761,14 @@ bool LFGMgr::IsSeasonActive(uint32 dungeonId)
     return false;
 }
 
+/**
+ * @brief 导出队列信息
+ *
+ * 职责：导出当前队列状态信息（用于调试/GM命令）
+ *
+ * @param full 是否导出完整信息
+ * @return 队列信息字符串
+ */
 std::string LFGMgr::DumpQueueInfo(bool full)
 {
     uint32 size = uint32(QueuesStore.size());
@@ -2079,6 +2785,14 @@ std::string LFGMgr::DumpQueueInfo(bool full)
     return o.str();
 }
 
+/**
+ * @brief 设置队伍成员
+ *
+ * 职责：为新加入的队伍成员设置LFG数据
+ *
+ * @param guid 玩家GUID
+ * @param gguid 队伍GUID
+ */
 void LFGMgr::SetupGroupMember(ObjectGuid guid, ObjectGuid gguid)
 {
     LfgDungeonSet dungeons;
@@ -2089,6 +2803,14 @@ void LFGMgr::SetupGroupMember(ObjectGuid guid, ObjectGuid gguid)
     AddPlayerToGroup(gguid, guid);
 }
 
+/**
+ * @brief 检查是否选择了随机地下城
+ *
+ * 职责：判断玩家是否选择了随机或季节性地下城
+ *
+ * @param guid 玩家GUID
+ * @return 是否选择了随机地下城
+ */
 bool LFGMgr::selectedRandomLfgDungeon(ObjectGuid guid)
 {
     if (GetState(guid) != LFG_STATE_NONE)
@@ -2105,6 +2827,16 @@ bool LFGMgr::selectedRandomLfgDungeon(ObjectGuid guid)
     return false;
 }
 
+/**
+ * @brief 检查是否在LFG地下城地图中
+ *
+ * 职责：验证玩家是否在指定的LFG地下城地图中
+ *
+ * @param guid 玩家或队伍GUID
+ * @param map 地图ID
+ * @param difficulty 难度
+ * @return 是否在LFG地下城地图中
+ */
 bool LFGMgr::inLfgDungeonMap(ObjectGuid guid, uint32 map, Difficulty difficulty)
 {
     if (!guid.IsGroup())
@@ -2118,6 +2850,14 @@ bool LFGMgr::inLfgDungeonMap(ObjectGuid guid, uint32 map, Difficulty difficulty)
     return false;
 }
 
+/**
+ * @brief 获取LFG地下城入口ID
+ *
+ * 职责：根据地下城ID获取其入口ID
+ *
+ * @param id 地下城ID
+ * @return 入口ID（不存在返回0）
+ */
 uint32 LFGMgr::GetLFGDungeonEntry(uint32 id)
 {
     if (id)
@@ -2127,6 +2867,15 @@ uint32 LFGMgr::GetLFGDungeonEntry(uint32 id)
     return 0;
 }
 
+/**
+ * @brief 获取随机和季节性地下城列表
+ *
+ * 职责：根据玩家等级和资料片版本获取可用的随机和季节性地下城
+ *
+ * @param level 玩家等级
+ * @param expansion 资料片版本
+ * @return 可用的随机和季节性地下城集合
+ */
 LfgDungeonSet LFGMgr::GetRandomAndSeasonalDungeons(uint8 level, uint8 expansion)
 {
     LfgDungeonSet randomDungeons;

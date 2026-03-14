@@ -15,6 +15,21 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file BattlegroundIC.h
+ * @brief 冬拥湖之岛（Isle of Conquest）战场模块头文件
+ *
+ * 本文件定义了冬拥湖之岛战场的具体实现，包括：
+ * - 战场生物和游戏对象枚举
+ * - 世界状态枚举
+ * - 战场事件和音效枚举
+ * - BattlegroundIC类定义
+ *
+ * 冬拥湖之岛是一个40v40的大型战场，位于诺森德大陆。
+ * 战场目标是摧毁敌方将军，或通过占领据点和击杀敌人来消耗敌方增援点数。
+ * 战场包含多个战略要点：码头、机库、车间、矿洞、堡垒等。
+ */
+
 #ifndef __BATTLEGROUNDIC_H
 #define __BATTLEGROUNDIC_H
 
@@ -22,145 +37,159 @@
 #include "BattlegroundScore.h"
 #include "Object.h"
 
+/// 战场阵营ID
 const uint32 BG_IC_Factions[2] =
 {
-    1732, // Alliance
-    1735  // Horde
+    1732, ///< 联盟阵营ID
+    1735  ///< 部落阵营ID
 };
 
+/**
+ * @brief 生物NPC枚举
+ *
+ * 定义战场中各种NPC的ID，包括BOSS、守卫、攻城器械、飞艇炮手等
+ */
 enum creaturesIC
 {
-    NPC_HIGH_COMMANDER_HALFORD_WYRMBANE     = 34924, // Alliance Boss
-    NPC_OVERLORD_AGMAR                      = 34922, // Horde Boss
-    NPC_KOR_KRON_GUARD                      = 34918, // horde guard
-    NPC_SEVEN_TH_LEGION_INFANTRY            = 34919, // alliance guard
-    NPC_KEEP_CANNON                         = 34944,
-    NPC_DEMOLISHER                          = 34775,
-    NPC_SIEGE_ENGINE_H                      = 35069,
-    NPC_SIEGE_ENGINE_A                      = 34776,
-    NPC_GLAIVE_THROWER_A                    = 34802,
-    NPC_GLAIVE_THROWER_H                    = 35273,
-    NPC_CATAPULT                            = 34793,
-    NPC_HORDE_GUNSHIP_CANNON                = 34935,
-    NPC_ALLIANCE_GUNSHIP_CANNON             = 34929,
-    NPC_HORDE_GUNSHIP_CAPTAIN               = 35003,
-    NPC_ALLIANCE_GUNSHIP_CAPTAIN            = 34960,
-    NPC_WORLD_TRIGGER_NOT_FLOATING          = 34984,
-    NPC_WORLD_TRIGGER_ALLIANCE_FRIENDLY     = 20213,
-    NPC_WORLD_TRIGGER_HORDE_FRIENDLY        = 20212
+    NPC_HIGH_COMMANDER_HALFORD_WYRMBANE     = 34924,  ///< 联盟指挥官（联盟BOSS）
+    NPC_OVERLORD_AGMAR                      = 34922,  ///< 阿格玛领主（部落BOSS）
+    NPC_KOR_KRON_GUARD                      = 34918,  ///< 库卡隆守卫（部落守卫）
+    NPC_SEVEN_TH_LEGION_INFANTRY            = 34919,  ///< 第七军团步兵（联盟守卫）
+    NPC_KEEP_CANNON                         = 34944,  ///< 堡垒火炮
+    NPC_DEMOLISHER                          = 34775,  ///< 碎石车
+    NPC_SIEGE_ENGINE_H                      = 35069,  ///< 攻城机车（部落）
+    NPC_SIEGE_ENGINE_A                      = 34776,  ///< 攻城机车（联盟）
+    NPC_GLAIVE_THROWER_A                    = 34802,  ///< 投刃车（联盟）
+    NPC_GLAIVE_THROWER_H                    = 35273,  ///< 投刃车（部落）
+    NPC_CATAPULT                            = 34793,  ///< 投石车
+    NPC_HORDE_GUNSHIP_CANNON                = 34935,  ///< 部落飞艇火炮
+    NPC_ALLIANCE_GUNSHIP_CANNON             = 34929,  ///< 联盟飞艇火炮
+    NPC_HORDE_GUNSHIP_CAPTAIN               = 35003,  ///< 部落飞艇船长
+    NPC_ALLIANCE_GUNSHIP_CAPTAIN            = 34960,  ///< 联盟飞艇船长
+    NPC_WORLD_TRIGGER_NOT_FLOATING          = 34984,  ///< 世界触发器（非浮空）
+    NPC_WORLD_TRIGGER_ALLIANCE_FRIENDLY     = 20213,  ///< 世界触发器（联盟友方）
+    NPC_WORLD_TRIGGER_HORDE_FRIENDLY        = 20212   ///< 世界触发器（部落友方）
 };
 
+/**
+ * @brief 游戏对象枚举
+ *
+ * 定义战场中各种游戏对象的ID，包括旗帜、大门、传送门、装饰物等
+ */
 enum gameobjectsIC
 {
-    GO_ALLIANCE_BANNER                          = 195396,
+    GO_ALLIANCE_BANNER                          = 195396,  ///< 联盟旗帜
 
-    GO_ALLIANCE_GATE_1                          = 195699,
-    GO_ALLIANCE_GATE_2                          = 195698,
-    GO_ALLIANCE_GATE_3                          = 195700,
+    GO_ALLIANCE_GATE_1                          = 195699,  ///< 联盟大门1
+    GO_ALLIANCE_GATE_2                          = 195698,  ///< 联盟大门2
+    GO_ALLIANCE_GATE_3                          = 195700,  ///< 联盟大门3
 
-    GO_ALLIANCE_GUNSHIP_PORTAL                  = 195320,
+    GO_ALLIANCE_GUNSHIP_PORTAL                  = 195320,  ///< 联盟飞艇传送门
 
-    GO_ALLIANCE_GUNSHIP_PORTAL_EFFECTS          = 195705,
+    GO_ALLIANCE_GUNSHIP_PORTAL_EFFECTS          = 195705,  ///< 联盟飞艇传送门效果
 
-    GO_BENCH_1                                  = 186896,
-    GO_BENCH_2                                  = 186922,
-    GO_BENCH_3                                  = 186899,
-    GO_BENCH_4                                  = 186904,
-    GO_BENCH_5                                  = 186897,
+    GO_BENCH_1                                  = 186896,  ///< 长凳1
+    GO_BENCH_2                                  = 186922,  ///< 长凳2
+    GO_BENCH_3                                  = 186899,  ///< 长凳3
+    GO_BENCH_4                                  = 186904,  ///< 长凳4
+    GO_BENCH_5                                  = 186897,  ///< 长凳5
 
-    GO_BONFIRE_1                                = 195376,
-    GO_BONFIRE_2                                = 195208,
-    GO_BONFIRE_3                                = 195210,
-    GO_BONFIRE_4                                = 195207,
-    GO_BONFIRE_5                                = 195209,
-    GO_BONFIRE_6                                = 195377,
+    GO_BONFIRE_1                                = 195376,  ///< 篝火1
+    GO_BONFIRE_2                                = 195208,  ///< 篝火2
+    GO_BONFIRE_3                                = 195210,  ///< 篝火3
+    GO_BONFIRE_4                                = 195207,  ///< 篝火4
+    GO_BONFIRE_5                                = 195209,  ///< 篝火5
+    GO_BONFIRE_6                                = 195377,  ///< 篝火6
 
-    GO_DOCKS_BANNER                             = 195157,
+    GO_DOCKS_BANNER                             = 195157,  ///< 码头旗帜
 
-    GO_DOODAD_HU_PORTCULLIS01                   = 195436,
+    GO_DOODAD_HU_PORTCULLIS01                   = 195436,  ///< 人类城门装饰
 
-    GO_DOODAD_ND_HUMAN_GATE_CLOSEDFX_DOOR01     = 195703,
+    GO_DOODAD_ND_HUMAN_GATE_CLOSEDFX_DOOR01     = 195703,  ///< 人类大门关闭效果
 
-    GO_DOODAD_PORTCULLISACTIVE01                = 195451,
+    GO_DOODAD_PORTCULLISACTIVE01                = 195451,  ///< 活动城门01
 
-    GO_DOODAD_PORTCULLISACTIVE02                = 195452,
+    GO_DOODAD_PORTCULLISACTIVE02                = 195452,  ///< 活动城门02
 
-    GO_DOODAD_VR_PORTCULLIS01                   = 195437,
+    GO_DOODAD_VR_PORTCULLIS01                   = 195437,  ///< 兽人城门装饰
 
-    GO_CHAIR_1                                  = 195410,
-    GO_CHAIR_2                                  = 195414,
-    GO_CHAIR_3                                  = 160415,
-    GO_CHAIR_4                                  = 195418,
-    GO_CHAIR_5                                  = 195416,
-    GO_CHAIR_6                                  = 160410,
-    GO_CHAIR_7                                  = 160418,
-    GO_CHAIR_8                                  = 160416,
-    GO_CHAIR_9                                  = 160419,
+    GO_CHAIR_1                                  = 195410,  ///< 椅子1
+    GO_CHAIR_2                                  = 195414,  ///< 椅子2
+    GO_CHAIR_3                                  = 160415,  ///< 椅子3
+    GO_CHAIR_4                                  = 195418,  ///< 椅子4
+    GO_CHAIR_5                                  = 195416,  ///< 椅子5
+    GO_CHAIR_6                                  = 160410,  ///< 椅子6
+    GO_CHAIR_7                                  = 160418,  ///< 椅子7
+    GO_CHAIR_8                                  = 160416,  ///< 椅子8
+    GO_CHAIR_9                                  = 160419,  ///< 椅子9
 
-    GO_FLAGPOLE_1                               = 195131,
-    GO_FLAGPOLE_2                               = 195439,
+    GO_FLAGPOLE_1                               = 195131,  ///< 旗杆1
+    GO_FLAGPOLE_2                               = 195439,  ///< 旗杆2
 
-    GO_GUNSHIP_PORTAL_1                         = 195371,
-    GO_GUNSHIP_PORTAL_2                         = 196413,
+    GO_GUNSHIP_PORTAL_1                         = 195371,  ///< 飞艇传送门1
+    GO_GUNSHIP_PORTAL_2                         = 196413,  ///< 飞艇传送门2
 
-    GO_HANGAR_BANNER                            = 195158,
+    GO_HANGAR_BANNER                            = 195158,  ///< 机库旗帜
 
-    GO_HORDE_BANNER                             = 195393,
+    GO_HORDE_BANNER                             = 195393,  ///< 部落旗帜
 
-    GO_HORDE_GATE_1                             = 195494,
-    GO_HORDE_GATE_2                             = 195496,
-    GO_HORDE_GATE_3                             = 195495,
+    GO_HORDE_GATE_1                             = 195494,  ///< 部落大门1
+    GO_HORDE_GATE_2                             = 195496,  ///< 部落大门2
+    GO_HORDE_GATE_3                             = 195495,  ///< 部落大门3
 
-    GO_HORDE_GUNSHIP_PORTAL                     = 195326,
+    GO_HORDE_GUNSHIP_PORTAL                     = 195326,  ///< 部落飞艇传送门
 
-    GO_HORDE_GUNSHIP_PORTAL_EFFECTS             = 195706,
+    GO_HORDE_GUNSHIP_PORTAL_EFFECTS             = 195706,  ///< 部落飞艇传送门效果
 
-    GO_HORDE_KEEP_PORTCULLIS                    = 195223,
+    GO_HORDE_KEEP_PORTCULLIS                    = 195223,  ///< 部落堡垒城门
 
-    GO_HUGE_SEAFORIUM_BOMB_A                    = 195332,
-    GO_HUGE_SEAFORIUM_BOMB_H                    = 195333,
+    GO_HUGE_SEAFORIUM_BOMB_A                    = 195332,  ///< 巨型海盐炸弹（联盟）
+    GO_HUGE_SEAFORIUM_BOMB_H                    = 195333,  ///< 巨型海盐炸弹（部落）
 
-    GO_QUARRY_BANNER                            = 195338,
-    GO_REFRESHMENT_PORTAL                       = 186811,
-    GO_SEAFORIUM_BOMBS                          = 195237,
+    GO_QUARRY_BANNER                            = 195338,  ///< 采石场旗帜
+    GO_REFRESHMENT_PORTAL                       = 186811,  ///< 食物传送门
+    GO_SEAFORIUM_BOMBS                          = 195237,  ///< 海盐炸弹
 
-    GO_STOVE_1                                  = 174863,
-    GO_STOVE_2                                  = 160411,
+    GO_STOVE_1                                  = 174863,  ///< 炉子1
+    GO_STOVE_2                                  = 160411,  ///< 炉子2
 
-    GO_TELEPORTER_1                             = 195314, // 195314 H-OUT 66549
-    GO_TELEPORTER_2                             = 195313, // 195313 H-IN 66548
+    GO_TELEPORTER_1                             = 195314,  ///< 传送器1（部落-出口）
+    GO_TELEPORTER_2                             = 195313,  ///< 传送器2（部落-入口）
 
-    GO_TELEPORTER_3                             = 195315, // 195315 A-OUT 66549
-    GO_TELEPORTER_4                             = 195316, // 195316 A-IN 66548
+    GO_TELEPORTER_3                             = 195315,  ///< 传送器3（联盟-出口）
+    GO_TELEPORTER_4                             = 195316,  ///< 传送器4（联盟-入口）
 
-    GO_TELEPORTER_EFFECTS_A                     = 195701,
-    GO_TELEPORTER_EFFECTS_H                     = 195702,
+    GO_TELEPORTER_EFFECTS_A                     = 195701,  ///< 传送器效果（联盟）
+    GO_TELEPORTER_EFFECTS_H                     = 195702,  ///< 传送器效果（部落）
 
-    GO_WORKSHOP_BANNER                          = 195133,
+    GO_WORKSHOP_BANNER                          = 195133,  ///< 车间旗帜
 
-    GO_BRAZIER_1                                = 195402,
-    GO_BRAZIER_2                                = 195403,
-    GO_BRAZIER_3                                = 195425,
-    GO_BRAZIER_4                                = 195424,
+    GO_BRAZIER_1                                = 195402,  ///< 火盆1
+    GO_BRAZIER_2                                = 195403,  ///< 火盆2
+    GO_BRAZIER_3                                = 195425,  ///< 火盆3
+    GO_BRAZIER_4                                = 195424,  ///< 火盆4
 
-    GO_REFINERY_BANNER                          = 195343,
+    GO_REFINERY_BANNER                          = 195343,  ///< 炼油厂旗帜
 
-    GO_DOODAD_ND_WINTERORC_WALL_GATEFX_DOOR01   = 195491,
+    GO_DOODAD_ND_WINTERORC_WALL_GATEFX_DOOR01   = 195491,  ///< 兽人墙门效果
 
-    GO_ALLIANCE_BANNER_DOCK                     = 195153,
-    GO_ALLIANCE_BANNER_DOCK_CONT                = 195154,
-    GO_HORDE_BANNER_DOCK                        = 195155,
-    GO_HORDE_BANNER_DOCK_CONT                   = 195156,
+    // 码头旗帜（联盟/部落）
+    GO_ALLIANCE_BANNER_DOCK                     = 195153,  ///< 码头联盟旗帜
+    GO_ALLIANCE_BANNER_DOCK_CONT                = 195154,  ///< 码头联盟旗帜（争夺中）
+    GO_HORDE_BANNER_DOCK                        = 195155,  ///< 码头部落旗帜
+    GO_HORDE_BANNER_DOCK_CONT                   = 195156,  ///< 码头部落旗帜（争夺中）
 
-    GO_HORDE_BANNER_HANGAR                      = 195130,
-    GO_HORDE_BANNER_HANGAR_CONT                 = 195145,
-    GO_ALLIANCE_BANNER_HANGAR                   = 195132,
-    GO_ALLIANCE_BANNER_HANGAR_CONT              = 195144,
+    // 机库旗帜（部落/联盟）
+    GO_HORDE_BANNER_HANGAR                      = 195130,  ///< 机库部落旗帜
+    GO_HORDE_BANNER_HANGAR_CONT                 = 195145,  ///< 机库部落旗帜（争夺中）
+    GO_ALLIANCE_BANNER_HANGAR                   = 195132,  ///< 机库联盟旗帜
+    GO_ALLIANCE_BANNER_HANGAR_CONT              = 195144,  ///< 机库联盟旗帜（争夺中）
 
-    GO_ALLIANCE_BANNER_QUARRY                   = 195334,
-    GO_ALLIANCE_BANNER_QUARRY_CONT              = 195335,
-    GO_HORDE_BANNER_QUARRY                      = 195336,
-    GO_HORDE_BANNER_QUARRY_CONT                 = 195337,
+    // 采石场旗帜（联盟/部落）
+    GO_ALLIANCE_BANNER_QUARRY                   = 195334,  ///< 采石场联盟旗帜
+    GO_ALLIANCE_BANNER_QUARRY_CONT              = 195335,  ///< 采石场联盟旗帜（争夺中）
+    GO_HORDE_BANNER_QUARRY                      = 195336,  ///< 采石场部落旗帜
+    GO_HORDE_BANNER_QUARRY_CONT                 = 195337,  ///< 采石场部落旗帜（争夺中）
 
     GO_ALLIANCE_BANNER_REFINERY                 = 195339,
     GO_ALLIANCE_BANNER_REFINERY_CONT            = 195340,
@@ -907,21 +936,36 @@ enum HonorRewards
     WINNER_HONOR_AMOUNT     = 500
 };
 
+/**
+ * @struct BattlegroundICScore
+ * @brief 冬拥湖之岛玩家分数结构体
+ *
+ * 继承自BattlegroundScore，添加冬拥湖之岛特有的分数统计
+ */
 struct BattlegroundICScore final : public BattlegroundScore
 {
     friend class BattlegroundIC;
 
     protected:
+        /**
+         * @brief 构造函数
+         * @param playerGuid 玩家GUID
+         */
         BattlegroundICScore(ObjectGuid playerGuid) : BattlegroundScore(playerGuid), BasesAssaulted(0), BasesDefended(0) { }
 
+        /**
+         * @brief 更新分数
+         * @param type 分数类型
+         * @param value 分数值
+         */
         void UpdateScore(uint32 type, uint32 value) override
         {
             switch (type)
             {
-                case SCORE_BASES_ASSAULTED:
+                case SCORE_BASES_ASSAULTED:  ///< 进攻基地次数
                     BasesAssaulted += value;
                     break;
-                case SCORE_BASES_DEFENDED:
+                case SCORE_BASES_DEFENDED:   ///< 防守基地次数
                     BasesDefended += value;
                     break;
                 default:
@@ -930,65 +974,213 @@ struct BattlegroundICScore final : public BattlegroundScore
             }
         }
 
+        /**
+         * @brief 构建目标数据块
+         * @param data 数据包引用
+         */
         void BuildObjectivesBlock(WorldPacket& data) final override;
 
+        /**
+         * @brief 获取属性1（进攻基地次数）
+         * @return 进攻基地次数
+         */
         uint32 GetAttr1() const final override { return BasesAssaulted; }
+
+        /**
+         * @brief 获取属性2（防守基地次数）
+         * @return 防守基地次数
+         */
         uint32 GetAttr2() const final override { return BasesDefended; }
 
-        uint32 BasesAssaulted;
-        uint32 BasesDefended;
+        uint32 BasesAssaulted;  ///< 进攻基地次数
+        uint32 BasesDefended;   ///< 防守基地次数
 };
 
+/**
+ * @class BattlegroundIC
+ * @brief 冬拥湖之岛战场类
+ *
+ * 继承自Battleground类，实现冬拥湖之岛战场的具体逻辑，包括：
+ * - 码头、机库、车间、采石场、炼油厂等战略要点的占领
+ * - 攻城器械的生成和使用
+ * - 飞艇的使用
+ * - 大门的破坏
+ * - 将军的击杀
+ * - 增援点数的管理
+ *
+ * 冬拥湖之岛特点：
+ * - 40v40大型战场
+ * - 目标：摧毁敌方将军或消耗敌方增援点数
+ * - 多个战略要点，每个要点提供不同的战略优势
+ * - 码头：投刃车和投石车
+ * - 机库：飞艇和空降
+ * - 车间：碎石车
+ * - 采石场/炼油厂：增援点数加成
+ */
 class BattlegroundIC : public Battleground
 {
     public:
+        /**
+         * @brief 构造函数
+         *
+         * 初始化战场成员变量
+         */
         BattlegroundIC();
+
+        /**
+         * @brief 析构函数
+         */
         ~BattlegroundIC();
 
-        /* inherited from BattlegroundClass */
+        /* inherited from BattlegroundClass - 继承自战场基类的方法 */
+
+        /**
+         * @brief 添加玩家到战场
+         * @param player 玩家指针
+         */
         void AddPlayer(Player* player) override;
+
+        /**
+         * @brief 开始事件 - 关闭大门
+         */
         void StartingEventCloseDoors() override;
+
+        /**
+         * @brief 开始事件 - 打开大门
+         */
         void StartingEventOpenDoors() override;
+
+        /**
+         * @brief 战场更新实现
+         * @param diff 距离上次更新的时间间隔（毫秒）
+         */
         void PostUpdateImpl(uint32 diff) override;
 
+        /**
+         * @brief 移除玩家
+         * @param player 玩家指针
+         * @param guid 玩家GUID
+         * @param team 队伍ID
+         */
         void RemovePlayer(Player* player, ObjectGuid guid, uint32 team) override;
+
+        /**
+         * @brief 处理区域触发器
+         * @param player 玩家指针
+         * @param trigger 触发器ID
+         */
         void HandleAreaTrigger(Player* player, uint32 trigger) override;
+
+        /**
+         * @brief 设置战场
+         * @return 成功返回true，失败返回false
+         */
         bool SetupBattleground() override;
+
+        /**
+         * @brief 生成领袖
+         * @param teamid 团队ID
+         */
         void SpawnLeader(uint32 teamid);
+
+        /**
+         * @brief 处理击杀单位
+         * @param unit 被击杀的单位
+         * @param killer 击杀者
+         */
         void HandleKillUnit(Creature* unit, Player* killer) override;
+
+        /**
+         * @brief 处理击杀玩家
+         * @param player 被击杀的玩家
+         * @param killer 击杀者
+         */
         void HandleKillPlayer(Player* player, Player* killer) override;
+
+        /**
+         * @brief 玩家点击旗帜事件
+         * @param source 玩家指针
+         * @param target_obj 旗帜游戏对象
+         */
         void EventPlayerClickedOnFlag(Player* source, GameObject* /*target_obj*/) override;
 
+        /**
+         * @brief 摧毁大门
+         * @param player 玩家指针
+         * @param go 游戏对象（大门）
+         */
         void DestroyGate(Player* player, GameObject* go) override;
 
+        /**
+         * @brief 获取最近的墓地
+         * @param player 玩家指针
+         * @return 墓地信息
+         */
         WorldSafeLocsEntry const* GetClosestGraveyard(Player* player) override;
 
-        /* Scorekeeping */
+        /* Scorekeeping - 分数记录 */
+
+        /**
+         * @brief 填充初始世界状态
+         * @param packet 世界状态数据包引用
+         */
         void FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& packet) override;
 
+        /**
+         * @brief 处理玩家复活
+         * @param player 玩家指针
+         */
         void HandlePlayerResurrect(Player* player) override;
 
+        /**
+         * @brief 获取节点状态
+         * @param nodeType 节点类型
+         * @return 节点状态
+         */
         uint32 GetNodeState(uint8 nodeType) const { return (uint8)nodePoint[nodeType].nodeState; }
 
+        /**
+         * @brief 检查是否所有节点被同一阵营控制
+         * @param team 团队ID
+         * @return 是返回true
+         */
         bool IsAllNodesControlledByTeam(uint32 team) const override;
 
+        /**
+         * @brief 检查法术是否被允许
+         * @param spellId 法术ID
+         * @param player 玩家指针
+         * @return 允许返回true
+         */
         bool IsSpellAllowed(uint32 spellId, Player const* player) const override;
 
     private:
-        uint32 closeFortressDoorsTimer;
-        bool doorsClosed;
-        uint32 docksTimer;
-        uint32 resourceTimer;
-        uint32 siegeEngineWorkshopTimer;
-        uint16 factionReinforcements[2];
-        BG_IC_GateState GateStatus[6];
-        ICNodePoint nodePoint[7];
+        uint32 closeFortressDoorsTimer;       ///< 关闭堡垒大门计时器
+        bool doorsClosed;                     ///< 大门是否已关闭
+        uint32 docksTimer;                    ///< 码头计时器
+        uint32 resourceTimer;                 ///< 资源计时器
+        uint32 siegeEngineWorkshopTimer;      ///< 攻城机车间计时器
+        uint16 factionReinforcements[2];      ///< 阵营增援点数[联盟, 部落]
+        BG_IC_GateState GateStatus[6];        ///< 大门状态[6扇门]
+        ICNodePoint nodePoint[7];             ///< 节点信息[7个节点]
 
-        Transport* gunshipAlliance;
-        Transport* gunshipHorde;
+        Transport* gunshipAlliance;           ///< 联盟飞艇
+        Transport* gunshipHorde;              ///< 部落飞艇
 
+        /**
+         * @brief 获取下一个旗帜
+         * @param node 节点指针
+         * @param team 团队ID
+         * @param returnDefinitve 是否返回确定状态
+         * @return 旗帜ID
+         */
         uint32 GetNextBanner(ICNodePoint* node, uint32 team, bool returnDefinitve);
 
+        /**
+         * @brief 根据游戏对象ID获取大门ID
+         * @param id 游戏对象ID
+         * @return 大门ID
+         */
         uint32 GetGateIDFromEntry(uint32 id)
         {
             uint32 i = 0;
@@ -1004,6 +1196,12 @@ class BattlegroundIC : public Battleground
             return i;
         }
 
+        /**
+         * @brief 根据大门游戏对象ID获取世界状态
+         * @param id 游戏对象ID
+         * @param open 是否打开
+         * @return 世界状态ID
+         */
         uint32 GetWorldStateFromGateEntry(uint32 id, bool open)
         {
             uint32 uws = 0;
@@ -1032,8 +1230,23 @@ class BattlegroundIC : public Battleground
             return uws;
         }
 
+        /**
+         * @brief 更新节点世界状态
+         * @param node 节点指针
+         */
         void UpdateNodeWorldState(ICNodePoint* node);
+
+        /**
+         * @brief 处理已占领的节点
+         * @param node 节点指针
+         * @param recapture 是否是重新占领
+         */
         void HandleCapturedNodes(ICNodePoint* node, bool recapture);
+
+        /**
+         * @brief 处理争夺中的节点
+         * @param node 节点指针
+         */
         void HandleContestedNodes(ICNodePoint* node);
 };
 

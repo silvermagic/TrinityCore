@@ -15,6 +15,24 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file boss_shade_of_akama.cpp
+ * @brief 阿卡玛之影Boss战脚本
+ *
+ * 本模块实现了阿卡玛之影的完整战斗逻辑，包括：
+ * - 多阶段战斗：被束缚阶段和自由阶段
+ * - 阿卡玛的协助战斗机制
+ * - 灰舌引导者、法师、防御者、盗贼、元素师、灵魂绑定者的生成和AI
+ * - 战斗结束后破碎者的剧情事件
+ *
+ * 战斗机制：
+ * 1. 初始阶段：阿卡玛之影被灰舌引导者束缚，无法移动和攻击
+ * 2. 玩家与阿卡玛对话后，阿卡玛会引导法术削弱束缚
+ * 3. 杀死灰舌引导者后，阿卡玛之影解除束缚，进入正常战斗
+ * 4. 期间会不断刷新灰舌增援怪物
+ * 5. 击杀阿卡玛之影后，灰舌破碎者出现并进行剧情对话
+ */
+
 #include "ScriptMgr.h"
 #include "black_temple.h"
 #include "GridNotifiers.h"
@@ -29,127 +47,151 @@
 #include "SpellScript.h"
 #include "TemporarySummon.h"
 
+/**
+ * @brief 对白枚举
+ */
 enum Says
 {
     // Akama
-    SAY_BROKEN_FREE_0  = 0,
-    SAY_BROKEN_FREE_1  = 1,
-    SAY_BROKEN_FREE_2  = 2,
-    SAY_LOW_HEALTH     = 3,
-    SAY_DEAD           = 4,
+    SAY_BROKEN_FREE_0  = 0,  ///< 阿卡玛：破碎者自由了！
+    SAY_BROKEN_FREE_1  = 1,  ///< 阿卡玛：光明即将来临...
+    SAY_BROKEN_FREE_2  = 2,  ///< 阿卡玛：黑暗终结了...
+    SAY_LOW_HEALTH     = 3,  ///< 阿卡玛：低血量警告
+    SAY_DEAD           = 4,  ///< 阿卡玛：死亡
     // Ashtongue Broken
-    SAY_BROKEN_SPECIAL = 0,
-    SAY_BROKEN_HAIL    = 1
+    SAY_BROKEN_SPECIAL = 0,  ///< 破碎者：特殊台词
+    SAY_BROKEN_HAIL    = 1   ///< 破碎者：向阿卡玛致敬
 };
 
+/**
+ * @brief 技能枚举
+ */
 enum Spells
 {
     // Akama
-    SPELL_STEALTH                    = 34189,
-    SPELL_AKAMA_SOUL_CHANNEL         = 40447,
-    SPELL_FIXATE                     = 40607,
-    SPELL_CHAIN_LIGHTNING            = 39945,
-    SPELL_DESTRUCTIVE_POISON         = 40874,
-    SPELL_AKAMA_SOUL_RETRIEVE        = 40902,
+    SPELL_STEALTH                    = 34189,  ///< 潜行
+    SPELL_AKAMA_SOUL_CHANNEL         = 40447,  ///< 阿卡玛灵魂引导
+    SPELL_FIXATE                     = 40607,  ///< 固定目标
+    SPELL_CHAIN_LIGHTNING            = 39945,  ///< 闪电链
+    SPELL_DESTRUCTIVE_POISON         = 40874,  ///< 毁灭毒药
+    SPELL_AKAMA_SOUL_RETRIEVE        = 40902,  ///< 阿卡玛灵魂取回
     // Shade
-    SPELL_THREAT                     = 41602,
-    SPELL_SHADE_OF_AKAMA_TRIGGER     = 40955,
-    SPELL_AKAMA_SOUL_EXPEL_CHANNEL   = 40927,
+    SPELL_THREAT                     = 41602,  ///< 威胁
+    SPELL_SHADE_OF_AKAMA_TRIGGER     = 40955,  ///< 阿卡玛之影触发
+    SPELL_AKAMA_SOUL_EXPEL_CHANNEL   = 40927,  ///< 阿卡玛灵魂驱逐引导
     // Ashtongue Channeler
-    SPELL_SHADE_SOUL_CHANNEL         = 40401,
-    SPELL_SHADE_SOUL_CHANNEL_2       = 40520,
+    SPELL_SHADE_SOUL_CHANNEL         = 40401,  ///< 阿卡玛之影灵魂引导（服务器端）
+    SPELL_SHADE_SOUL_CHANNEL_2       = 40520,  ///< 阿卡玛之影灵魂引导
     // Creature Spawner
-    SPELL_ASHTONGUE_WAVE_B           = 42035,
-    SPELL_SUMMON_ASHTONGUE_SORCERER  = 40476,
-    SPELL_SUMMON_ASHTONGUE_DEFENDER  = 40474,
+    SPELL_ASHTONGUE_WAVE_B           = 42035,  ///< 灰舌波次B
+    SPELL_SUMMON_ASHTONGUE_SORCERER  = 40476,  ///< 召唤灰舌法师
+    SPELL_SUMMON_ASHTONGUE_DEFENDER  = 40474,  ///< 召唤灰舌防御者
     // Ashtongue Defender
-    SPELL_DEBILITATING_STRIKE        = 41178,
-    SPELL_HEROIC_STRIKE              = 41975,
-    SPELL_SHIELD_BASH                = 41180,
-    SPELL_WINDFURY                   = 38229,
+    SPELL_DEBILITATING_STRIKE        = 41178,  ///< 致残打击
+    SPELL_HEROIC_STRIKE              = 41975,  ///< 英勇打击
+    SPELL_SHIELD_BASH                = 41180,  ///< 盾击
+    SPELL_WINDFURY                   = 38229,  ///< 风怒
     // Ashtongue Rogue
-    SPELL_DEBILITATING_POISON        = 41978,
-    SPELL_EVISCERATE                 = 41177,
+    SPELL_DEBILITATING_POISON        = 41978,  ///< 致残毒药
+    SPELL_EVISCERATE                 = 41177,  ///< 剔骨
     // Ashtongue Elementalist
-    SPELL_RAIN_OF_FIRE               = 42023,
-    SPELL_LIGHTNING_BOLT             = 42024,
+    SPELL_RAIN_OF_FIRE               = 42023,  ///< 火焰之雨
+    SPELL_LIGHTNING_BOLT             = 42024,  ///< 闪电箭
     // Ashtongue Spiritbinder
-    SPELL_SPIRIT_MEND                = 42025,
-    SPELL_CHAIN_HEAL                 = 42027,
-    SPELL_SPIRITBINDER_SPIRIT_HEAL   = 42317
+    SPELL_SPIRIT_MEND                = 42025,  ///< 灵魂治疗
+    SPELL_CHAIN_HEAL                 = 42027,  ///< 治疗链
+    SPELL_SPIRITBINDER_SPIRIT_HEAL   = 42317   ///< 灵魂治疗者治疗
 };
 
+/**
+ * @brief 生物枚举
+ */
 enum Creatures
 {
-    NPC_ASHTONGUE_CHANNELER    = 23421,
-    NPC_ASHTONGUE_BROKEN       = 23319,
-    NPC_CREATURE_SPAWNER_AKAMA = 23210
+    NPC_ASHTONGUE_CHANNELER    = 23421,  ///< 灰舌引导者
+    NPC_ASHTONGUE_BROKEN       = 23319,  ///< 灰舌破碎者
+    NPC_CREATURE_SPAWNER_AKAMA = 23210   ///< 阿卡玛生物生成器
 };
 
+/**
+ * @brief 动作枚举
+ */
 enum Actions
 {
-    ACTION_START_SPAWNING      = 0,
-    ACTION_STOP_SPAWNING       = 1,
-    ACTION_DESPAWN_ALL_SPAWNS  = 2,
-    ACTION_SHADE_OF_AKAMA_DEAD = 3,
-    ACTION_BROKEN_SPECIAL      = 4,
-    ACTION_BROKEN_EMOTE        = 5,
-    ACTION_BROKEN_HAIL         = 6
+    ACTION_START_SPAWNING      = 0,  ///< 开始生成
+    ACTION_STOP_SPAWNING       = 1,  ///< 停止生成
+    ACTION_DESPAWN_ALL_SPAWNS  = 2,  ///< 消失所有生成物
+    ACTION_SHADE_OF_AKAMA_DEAD = 3,  ///< 阿卡玛之影死亡
+    ACTION_BROKEN_SPECIAL      = 4,  ///< 破碎者特殊动作
+    ACTION_BROKEN_EMOTE        = 5,  ///< 破碎者表情
+    ACTION_BROKEN_HAIL         = 6   ///< 破碎者致敬
 };
 
+/**
+ * @brief 事件枚举
+ */
 enum Events
 {
     // Akama
-    EVENT_SHADE_START                    =  1,
-    EVENT_SHADE_CHANNEL                  =  2,
-    EVENT_FIXATE                         =  3,
-    EVENT_CHAIN_LIGHTNING                =  4,
-    EVENT_DESTRUCTIVE_POISON             =  5,
-    EVENT_START_BROKEN_FREE              =  6,
-    EVENT_START_SOUL_RETRIEVE            =  7,
-    EVENT_EVADE_CHECK                    =  8,
-    EVENT_BROKEN_FREE_1                  =  9,
-    EVENT_BROKEN_FREE_2                  = 10,
-    EVENT_BROKEN_FREE_3                  = 11,
-    EVENT_BROKEN_FREE_4                  = 12,
+    EVENT_SHADE_START                    =  1,  ///< 阿卡玛之影开始
+    EVENT_SHADE_CHANNEL                  =  2,  ///< 阿卡玛之影引导
+    EVENT_FIXATE                         =  3,  ///< 固定
+    EVENT_CHAIN_LIGHTNING                =  4,  ///< 闪电链
+    EVENT_DESTRUCTIVE_POISON             =  5,  ///< 毁灭毒药
+    EVENT_START_BROKEN_FREE              =  6,  ///< 开始破碎者自由
+    EVENT_START_SOUL_RETRIEVE            =  7,  ///< 开始灵魂取回
+    EVENT_EVADE_CHECK                    =  8,  ///< 脱战检查
+    EVENT_BROKEN_FREE_1                  =  9,  ///< 破碎者自由1
+    EVENT_BROKEN_FREE_2                  = 10,  ///< 破碎者自由2
+    EVENT_BROKEN_FREE_3                  = 11,  ///< 破碎者自由3
+    EVENT_BROKEN_FREE_4                  = 12,  ///< 破碎者自由4
     // Shade of Akama
-    EVENT_INITIALIZE_SPAWNERS            = 13,
-    EVENT_START_CHANNELERS_AND_SPAWNERS  = 14,
-    EVENT_ADD_THREAT                     = 15,
+    EVENT_INITIALIZE_SPAWNERS            = 13,  ///< 初始化生成器
+    EVENT_START_CHANNELERS_AND_SPAWNERS  = 14,  ///< 启动引导者和生成器
+    EVENT_ADD_THREAT                     = 15,  ///< 增加威胁
     // Creature spawner
-    EVENT_SPAWN_WAVE_B                   = 16,
-    EVENT_SUMMON_ASHTONGUE_SORCERER      = 17,
-    EVENT_SUMMON_ASHTONGUE_DEFENDER      = 18,
+    EVENT_SPAWN_WAVE_B                   = 16,  ///< 生成波次B
+    EVENT_SUMMON_ASHTONGUE_SORCERER      = 17,  ///< 召唤灰舌法师
+    EVENT_SUMMON_ASHTONGUE_DEFENDER      = 18,  ///< 召唤灰舌防御者
     // Ashtongue Defender
-    EVENT_DEBILITATING_STRIKE            = 19,
-    EVENT_HEROIC_STRIKE                  = 20,
-    EVENT_SHIELD_BASH                    = 21,
-    EVENT_WINDFURY                       = 22,
+    EVENT_DEBILITATING_STRIKE            = 19,  ///< 致残打击
+    EVENT_HEROIC_STRIKE                  = 20,  ///< 英勇打击
+    EVENT_SHIELD_BASH                    = 21,  ///< 盾击
+    EVENT_WINDFURY                       = 22,  ///< 风怒
     // Ashtongue Rogue
-    EVENT_DEBILITATING_POISON            = 23,
-    EVENT_EVISCERATE                     = 24,
+    EVENT_DEBILITATING_POISON            = 23,  ///< 致残毒药
+    EVENT_EVISCERATE                     = 24,  ///< 剔骨
     // Ashtongue Elementalist
-    EVENT_RAIN_OF_FIRE                   = 25,
-    EVENT_LIGHTNING_BOLT                 = 26,
+    EVENT_RAIN_OF_FIRE                   = 25,  ///< 火焰之雨
+    EVENT_LIGHTNING_BOLT                 = 26,  ///< 闪电箭
     // Ashtongue Spiritbinder
-    EVENT_SPIRIT_HEAL                    = 27,
-    EVENT_SPIRIT_MEND_RESET              = 28,
-    EVENT_CHAIN_HEAL_RESET               = 29
+    EVENT_SPIRIT_HEAL                    = 27,  ///< 灵魂治疗
+    EVENT_SPIRIT_MEND_RESET              = 28,  ///< 灵魂治疗重置
+    EVENT_CHAIN_HEAL_RESET               = 29   ///< 治疗链重置
 };
 
+/**
+ * @brief 杂项枚举
+ */
 enum Misc
 {
-    AKAMA_CHANNEL_WAYPOINT = 0,
-    AKAMA_INTRO_WAYPOINT   = 1,
-    SUMMON_GROUP_RESET     = 1
+    AKAMA_CHANNEL_WAYPOINT = 0,   ///< 阿卡玛引导路径点
+    AKAMA_INTRO_WAYPOINT   = 1,   ///< 阿卡玛介绍路径点
+    SUMMON_GROUP_RESET     = 1    ///< 重置召唤组
 };
 
+/**
+ * @brief 阿卡玛路径点坐标
+ */
 Position const AkamaWP[2] =
 {
-    { 517.4877f, 400.7993f, 112.7837f },
-    { 468.4435f, 401.1062f, 118.5379f }
+    { 517.4877f, 400.7993f, 112.7837f },  ///< 引导位置
+    { 468.4435f, 401.1062f, 118.5379f }   ///< 介绍位置
 };
 
+/**
+ * @brief 破碎者生成位置（18个）
+ */
 Position const BrokenPos[18] =
 {
     { 495.5628f, 462.7089f, 112.8169f, 4.1808090f },
@@ -172,6 +214,9 @@ Position const BrokenPos[18] =
     { 496.8722f, 338.0152f, 112.8673f, 0.5428222f }
 };
 
+/**
+ * @brief 破碎者路径点坐标（18个）
+ */
 Position const BrokenWP[18] =
 {
     { 479.1884f, 434.8635f, 112.7838f },
@@ -194,23 +239,55 @@ Position const BrokenWP[18] =
     { 478.8986f, 370.1895f, 112.7839f }
 };
 
+/// 房间中心Y坐标，用于判断生成器位置
 static float const MIDDLE_OF_ROOM    = 400.0f;
+/// 面向门的角度
 static float const FACE_THE_DOOR     = 0.08726646f;
+/// 面向平台的角度
 static float const FACE_THE_PLATFORM = 3.118662f;
 
+/**
+ * @struct boss_shade_of_akama
+ * @brief 阿卡玛之影AI结构体
+ *
+ * 继承自BossAI，实现阿卡玛之影的战斗逻辑
+ *
+ * 战斗流程：
+ * 1. 初始状态：被灰舌引导者束缚，免疫PC，无法交互
+ * 2. 阿卡玛施放灵魂引导后，开始战斗
+ * 3. 启动引导者和生成器，不断刷新增援
+ * 4. 当接近阿卡玛时解除束缚，进入正常战斗
+ * 5. 死亡后触发阿卡玛的灵魂取回事件
+ */
 struct boss_shade_of_akama : public BossAI
 {
+    /**
+     * @brief 构造函数
+     * @param creature 生物指针
+     */
     boss_shade_of_akama(Creature* creature) : BossAI(creature, DATA_SHADE_OF_AKAMA)
     {
         Initialize();
     }
 
+    /**
+     * @brief 初始化成员变量
+     */
     void Initialize()
     {
         _spawners.clear();
-        _isInPhaseOne = true;
+        _isInPhaseOne = true;  // 初始处于第一阶段（被束缚）
     }
 
+    /**
+     * @brief 重置战斗
+     *
+     * 重置Boss状态：
+     * - 设置免疫PC和无法交互标志
+     * - 设置昏迷表情
+     * - 初始化生成器
+     * - 召唤重置组生物（灰舌引导者）
+     */
     void Reset() override
     {
         _Reset();
@@ -223,6 +300,12 @@ struct boss_shade_of_akama : public BossAI
         me->SummonCreatureGroup(SUMMON_GROUP_RESET);
     }
 
+    /**
+     * @brief 进入脱战模式
+     * @param why 脱战原因
+     *
+     * 清除所有事件和召唤物，通知生成器消失所有生成物
+     */
     void EnterEvadeMode(EvadeReason /*why*/) override
     {
         events.Reset();
@@ -235,6 +318,15 @@ struct boss_shade_of_akama : public BossAI
         _DespawnAtEvade();
     }
 
+    /**
+     * @brief 法术命中回调
+     * @param caster 施法者
+     * @param spellInfo 法术信息
+     *
+     * 处理关键法术：
+     * - 灵魂引导：开始战斗，激活引导者和生成器
+     * - 灵魂取回：施放灵魂驱逐引导
+     */
     void SpellHit(WorldObject* /*caster*/, SpellInfo const* spellInfo) override
     {
         if (spellInfo->Id == SPELL_AKAMA_SOUL_CHANNEL)
@@ -250,6 +342,13 @@ struct boss_shade_of_akama : public BossAI
             DoCastSelf(SPELL_AKAMA_SOUL_EXPEL_CHANNEL);
     }
 
+    /**
+     * @brief 移动通知回调
+     * @param motionType 移动类型
+     * @param pointId 路径点ID
+     *
+     * 当追上阿卡玛时，解除束缚状态，进入正常战斗
+     */
     void MovementInform(uint32 motionType, uint32 /*pointId*/) override
     {
         if (_isInPhaseOne && motionType == CHASE_MOTION_TYPE)
@@ -260,12 +359,22 @@ struct boss_shade_of_akama : public BossAI
             me->SetWalk(false);
             events.ScheduleEvent(EVENT_ADD_THREAT, Milliseconds(100));
 
+            // 停止生成器生成新怪物
             for (ObjectGuid spawnerGuid : _spawners)
                 if (Creature* spawner = ObjectAccessor::GetCreature(*me, spawnerGuid))
                     spawner->AI()->DoAction(ACTION_STOP_SPAWNING);
         }
     }
 
+    /**
+     * @brief 死亡回调
+     * @param killer 击杀者
+     *
+     * 触发死亡事件：
+     * - 施放阿卡玛之影触发法术
+     * - 通知阿卡玛开始后续剧情
+     * - 清除所有生成物
+     */
     void JustDied(Unit* /*killer*/) override
     {
         DoCastSelf(SPELL_SHADE_OF_AKAMA_TRIGGER);
@@ -282,6 +391,11 @@ struct boss_shade_of_akama : public BossAI
         instance->SetBossState(DATA_SHADE_OF_AKAMA, DONE);
     }
 
+    /**
+     * @brief 检查是否需要脱战
+     *
+     * 如果区域内没有存活的非GM玩家，则脱战
+     */
     void EnterEvadeModeIfNeeded()
     {
         Map::PlayerList const& players = me->GetMap()->GetPlayers();
@@ -293,6 +407,12 @@ struct boss_shade_of_akama : public BossAI
         EnterEvadeMode(EVADE_REASON_NO_HOSTILES);
     }
 
+    /**
+     * @brief 更新AI
+     * @param diff 时间差（毫秒）
+     *
+     * 处理战斗中的事件
+     */
     void UpdateAI(uint32 diff) override
     {
         events.Update(diff);
@@ -306,6 +426,7 @@ struct boss_shade_of_akama : public BossAI
             {
                 case EVENT_INITIALIZE_SPAWNERS:
                 {
+                    // 查找所有生成器并保存GUID
                     std::list<Creature*> SpawnerList;
                     me->GetCreatureListWithEntryInGrid(SpawnerList, NPC_CREATURE_SPAWNER_AKAMA);
                     for (Creature* spawner : SpawnerList)
@@ -315,10 +436,12 @@ struct boss_shade_of_akama : public BossAI
                 }
                 case EVENT_START_CHANNELERS_AND_SPAWNERS:
                 {
+                    // 激活所有引导者
                     for (ObjectGuid summonGuid : summons)
                         if (Creature* channeler = ObjectAccessor::GetCreature(*me, summonGuid))
                             channeler->RemoveUnitFlag(UNIT_FLAG_UNINTERACTIBLE);
 
+                    // 启动所有生成器
                     for (ObjectGuid spawnerGuid : _spawners)
                         if (Creature* spawner = ObjectAccessor::GetCreature(*me, spawnerGuid))
                             spawner->AI()->DoAction(ACTION_START_SPAWNING);
@@ -342,18 +465,38 @@ struct boss_shade_of_akama : public BossAI
     }
 
 private:
-    GuidVector _spawners;
-    bool _isInPhaseOne;
+    GuidVector _spawners;      ///< 生成器GUID列表
+    bool _isInPhaseOne;        ///< 是否在第一阶段（被束缚）
 };
 
+/**
+ * @struct npc_akama_shade
+ * @brief 阿卡玛（阿卡玛之影战）AI结构体
+ *
+ * 继承自ScriptedAI，实现阿卡玛在阿卡玛之影战中的AI逻辑
+ *
+ * 战斗流程：
+ * 1. 玩家与阿卡玛对话，开始事件
+ * 2. 阿卡玛移动到平台，施放灵魂引导削弱束缚
+ * 3. 对阿卡玛之影施放固定法术
+ * 4. 被威胁法术命中后，进入战斗状态
+ * 5. 阿卡玛之影死亡后，进行后续剧情：灵魂取回、召唤破碎者、台词
+ */
 struct npc_akama_shade : public ScriptedAI
 {
+    /**
+     * @brief 构造函数
+     * @param creature 生物指针
+     */
     npc_akama_shade(Creature* creature) : ScriptedAI(creature), _summons(me)
     {
         Initialize();
         _instance = creature->GetInstanceScript();
     }
 
+    /**
+     * @brief 初始化成员变量
+     */
     void Initialize()
     {
         _isInCombat = false;
@@ -363,6 +506,14 @@ struct npc_akama_shade : public ScriptedAI
         _events.Reset();
     }
 
+    /**
+     * @brief 重置AI
+     *
+     * 设置阿卡玛的初始状态：
+     * - 阵营：灰舌死亡誓约
+     * - 施放潜行
+     * - 如果Boss未死，显示Gossip标志
+     */
     void Reset() override
     {
         Initialize();
@@ -380,6 +531,13 @@ struct npc_akama_shade : public ScriptedAI
 
     void EnterEvadeMode(EvadeReason /*why*/) override { }
 
+    /**
+     * @brief 法术命中回调
+     * @param caster 施法者
+     * @param spellInfo 法术信息
+     *
+     * 当被威胁法术命中时，进入战斗状态
+     */
     void SpellHit(WorldObject* /*caster*/, SpellInfo const* spellInfo) override
     {
         if (spellInfo->Id == SPELL_THREAT && !_isInCombat)
@@ -397,6 +555,15 @@ struct npc_akama_shade : public ScriptedAI
         }
     }
 
+    /**
+     * @brief 受到伤害回调
+     * @param who 伤害来源
+     * @param damage 伤害值
+     * @param damageType 伤害类型
+     * @param spellInfo 法术信息
+     *
+     * 当血量低于20%时，播放低血量台词
+     */
     void DamageTaken(Unit* /*who*/, uint32& /*damage*/, DamageEffectType /*damageType*/, SpellInfo const* /*spellInfo = nullptr*/) override
     {
         if (me->HealthBelowPct(20) && !_hasYelledOnce)
@@ -406,6 +573,12 @@ struct npc_akama_shade : public ScriptedAI
         }
     }
 
+    /**
+     * @brief 执行动作回调
+     * @param actionId 动作ID
+     *
+     * 处理阿卡玛之影死亡后的后续事件
+     */
     void DoAction(int32 actionId) override
     {
         if (actionId == ACTION_SHADE_OF_AKAMA_DEAD)
@@ -419,6 +592,13 @@ struct npc_akama_shade : public ScriptedAI
         }
     }
 
+    /**
+     * @brief 移动通知回调
+     * @param motionType 移动类型
+     * @param pointId 路径点ID
+     *
+     * 处理到达路径点后的动作
+     */
     void MovementInform(uint32 motionType, uint32 pointId) override
     {
         if (motionType != POINT_MOTION_TYPE)
@@ -434,6 +614,11 @@ struct npc_akama_shade : public ScriptedAI
         }
     }
 
+    /**
+     * @brief 召唤破碎者
+     *
+     * 召唤18个灰舌破碎者，并让第10个破碎者说特殊台词
+     */
     void SummonBrokens()
     {
         for (uint8 i = 0; i < 18; i++)
@@ -442,12 +627,19 @@ struct npc_akama_shade : public ScriptedAI
             {
                 summoned->SetWalk(true);
                 summoned->GetMotionMaster()->MovePoint(0, BrokenWP[i]);
-                if (i == 9) //On Sniffs, npc that Yell "Special" is the tenth to be created
+                // 根据抓包数据，第10个生成的NPC说"特殊"台词
+                if (i == 9)
                     _chosen = summoned->GetGUID();
             }
         }
     }
 
+    /**
+     * @brief 更新AI
+     * @param diff 时间差（毫秒）
+     *
+     * 处理所有事件，包括战斗技能和后续剧情
+     */
     void UpdateAI(uint32 diff) override
     {
         _events.Update(diff);
@@ -523,6 +715,10 @@ struct npc_akama_shade : public ScriptedAI
         }
     }
 
+    /**
+     * @brief 死亡回调
+     * @param killer 击杀者
+     */
     void JustDied(Unit* /*killer*/) override
     {
         _summons.DespawnAll();
@@ -532,6 +728,15 @@ struct npc_akama_shade : public ScriptedAI
                 shade->AI()->EnterEvadeMode(EVADE_REASON_OTHER);
     }
 
+    /**
+     * @brief Gossip选择回调
+     * @param player 玩家指针
+     * @param menuId 菜单ID
+     * @param gossipListId Gossip列表ID
+     * @return 是否处理
+     *
+     * 玩家选择Gossip选项后开始事件
+     */
     bool OnGossipSelect(Player* player, uint32 /*menuId*/, uint32 gossipListId) override
     {
         if (gossipListId == 0)
@@ -543,13 +748,13 @@ struct npc_akama_shade : public ScriptedAI
     }
 
 private:
-    InstanceScript* _instance;
-    EventMap _events;
-    SummonList _summons;
-    DummyEntryCheckPredicate _pred;
-    ObjectGuid _chosen; //Creature that should yell the speech special.
-    bool _isInCombat;
-    bool _hasYelledOnce;
+    InstanceScript* _instance;              ///< 副本实例脚本
+    EventMap _events;                       ///< 事件映射
+    SummonList _summons;                    ///< 召唤列表
+    DummyEntryCheckPredicate _pred;         ///< 虚拟条目检查谓词
+    ObjectGuid _chosen;                     ///< 被选中说特殊台词的破碎者GUID
+    bool _isInCombat;                       ///< 是否在战斗中
+    bool _hasYelledOnce;                    ///< 是否已经说过一次台词
 };
 
 struct npc_ashtongue_channeler : public PassiveAI

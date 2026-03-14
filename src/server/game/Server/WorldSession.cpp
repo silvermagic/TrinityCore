@@ -15,6 +15,24 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file WorldSession.cpp
+ * @brief 世界会话实现模块 - 实现玩家会话管理的核心功能
+ *
+ * 本模块实现了WorldSession类的所有功能，包括：
+ * 1. 会话生命周期管理（创建、更新、销毁）
+ * 2. 网络数据包的接收、处理和发送
+ * 3. 玩家登入登出流程
+ * 4. 权限验证和安全检查
+ * 5. 各种游戏操作的处理函数
+ *
+ * 关键设计：
+ * - 使用数据包过滤器区分线程安全和非线程安全的操作
+ * - 异步数据库查询支持
+ * - DoS攻击防护机制
+ * - 完善的日志记录
+ */
+
 /** \file
     \ingroup u2w
 */
@@ -59,19 +77,33 @@
 
 namespace {
 
-std::string const DefaultPlayerName = "<none>";
+std::string const DefaultPlayerName = "<none>";  // 默认玩家名称 - 用于未登录或玩家对象为空时
 
 } // namespace
 
+/**
+ * @brief MapSessionFilter::Process - 判断数据包是否可以在地图线程中处理
+ *
+ * 此过滤器用于Map::Update()中，确定哪些数据包可以在地图线程中安全处理。
+ * 只有线程安全且玩家已在世界中的数据包才能处理。
+ *
+ * @param packet 待处理的数据包指针
+ * @return true表示可以处理，false表示不能处理
+ *
+ * 处理规则：
+ * 1. PROCESS_INPLACE的数据包总是可以处理
+ * 2. PROCESS_THREADUNSAFE的数据包不能在地图线程处理
+ * 3. 玩家未登录或不在世界中时不能处理
+ */
 bool MapSessionFilter::Process(WorldPacket* packet)
 {
     ClientOpcodeHandler const* opHandle = opcodeTable[static_cast<OpcodeClient>(packet->GetOpcode())];
 
-    //let's check if our opcode can be really processed in Map::Update()
+    // 检查操作码是否可以在Map::Update()中处理
     if (opHandle->ProcessingPlace == PROCESS_INPLACE)
         return true;
 
-    //we do not process thread-unsafe packets
+    // 不处理非线程安全的数据包
     if (opHandle->ProcessingPlace == PROCESS_THREADUNSAFE)
         return false;
 
@@ -79,33 +111,65 @@ bool MapSessionFilter::Process(WorldPacket* packet)
     if (!player)
         return false;
 
-    //in Map::Update() we do not process packets where player is not in world!
+    // 在Map::Update()中不处理玩家不在世界中的数据包
     return player->IsInWorld();
 }
 
+/**
+ * @brief WorldSessionFilter::Process - 判断数据包是否应该在世界线程中处理
+ *
+ * 此过滤器用于World::UpdateSessions()中，确定哪些数据包需要在世界线程中处理。
+ * 主要处理非线程安全的数据包和玩家未在世界中的情况。
+ *
+ * @param packet 待处理的数据包指针
+ * @return true表示应该处理，false表示不应处理
+ *
+ * 处理规则：
+ * 1. PROCESS_INPLACE的数据包总是可以处理
+ * 2. PROCESS_THREADUNSAFE的数据包必须在World::UpdateSessions()中处理
+ * 3. 玩家未登录时处理所有数据包
+ * 4. 玩家不在世界中时处理线程安全的数据包
+ */
 //we should process ALL packets when player is not in world/logged in
 //OR packet handler is not thread-safe!
 bool WorldSessionFilter::Process(WorldPacket* packet)
 {
     ClientOpcodeHandler const* opHandle = opcodeTable[static_cast<OpcodeClient>(packet->GetOpcode())];
 
-    //check if packet handler is supposed to be safe
+    // 检查数据包处理器是否安全
     if (opHandle->ProcessingPlace == PROCESS_INPLACE)
         return true;
 
-    //thread-unsafe packets should be processed in World::UpdateSessions()
+    // 非线程安全的数据包应该在World::UpdateSessions()中处理
     if (opHandle->ProcessingPlace == PROCESS_THREADUNSAFE)
         return true;
 
-    //no player attached? -> our client! ^^
+    // 没有玩家对象？处理所有数据包
     Player* player = m_pSession->GetPlayer();
     if (!player)
         return true;
 
-    //lets process all packets for non-in-the-world player
+    // 处理不在世界中的玩家的所有数据包
     return (player->IsInWorld() == false);
 }
 
+/**
+ * @brief WorldSession构造函数 - 初始化玩家会话
+ *
+ * 创建一个新的WorldSession对象，初始化所有成员变量。
+ * 这是每个玩家连接到服务器的入口点。
+ *
+ * @param id 账号ID
+ * @param name 账号名称（右值引用）
+ * @param sock 网络套接字连接
+ * @param sec 账号安全等级
+ * @param expansion 客户端资料片版本
+ * @param mute_time 禁言结束时间
+ * @param timezoneOffset 时区偏移
+ * @param locale 客户端语言设置
+ * @param recruiter 招募者ID
+ * @param isARecruiter 是否为招募者
+ */
 /// WorldSession constructor
 WorldSession::WorldSession(uint32 id, std::string&& name, std::shared_ptr<WorldSocket> sock, AccountTypes sec, uint8 expansion, time_t mute_time,
     Minutes timezoneOffset, LocaleConstant locale, uint32 recruiter, bool isARecruiter):
@@ -133,7 +197,7 @@ WorldSession::WorldSession(uint32 id, std::string&& name, std::shared_ptr<WorldS
     recruiterId(recruiter),
     isRecruiter(isARecruiter),
     _RBACData(nullptr),
-    expireTime(60000), // 1 min after socket loss, session is deleted
+    expireTime(60000), // Socket丢失后1分钟删除会话
     forceExit(false),
     m_currentBankerGUID(),
     _timeSyncClockDeltaQueue(std::make_unique<boost::circular_buffer<std::pair<int64, uint32>>>(6)),
@@ -144,48 +208,75 @@ WorldSession::WorldSession(uint32 id, std::string&& name, std::shared_ptr<WorldS
     _calendarEventCreationCooldown(0),
     _gameClient(new GameClient(this))
 {
+    // 初始化教程数据为0
     memset(m_Tutorials, 0, sizeof(m_Tutorials));
 
+    // 如果有有效的Socket连接
     if (m_Socket)
     {
-        m_Address = m_Socket->GetRemoteIpAddress().to_string();
-        ResetTimeOutTime(false);
-        LoginDatabase.PExecute("UPDATE account SET online = 1 WHERE id = {};", GetAccountId());     // One-time query
+        m_Address = m_Socket->GetRemoteIpAddress().to_string();  // 获取客户端IP地址
+        ResetTimeOutTime(false);                                   // 重置超时计时器
+        LoginDatabase.PExecute("UPDATE account SET online = 1 WHERE id = {};", GetAccountId());     // 一次性查询：标记账号在线
     }
 
 }
 
+/**
+ * @brief WorldSession析构函数 - 清理会话资源
+ *
+ * 销毁WorldSession对象，执行必要的清理工作：
+ * 1. 强制玩家登出（如果还在游戏中）
+ * 2. 关闭网络连接
+ * 3. 释放权限数据
+ * 4. 清空数据包队列
+ * 5. 更新数据库标记账号离线
+ */
 /// WorldSession destructor
 WorldSession::~WorldSession()
 {
-    ///- unload player if not unloaded
+    ///- 如果玩家未登出，强制登出
     if (_player)
         LogoutPlayer (true);
 
-    /// - If have unclosed socket, close it
+    /// - 如果有未关闭的Socket，关闭它
     if (m_Socket)
     {
         m_Socket->CloseSocket();
         m_Socket = nullptr;
     }
 
+    // 释放RBAC权限数据
     delete _RBACData;
 
+    // 释放游戏客户端对象
     delete _gameClient;
 
-    ///- empty incoming packet queue
+    ///- 清空接收队列中的数据包
     WorldPacket* packet = nullptr;
     while (_recvQueue.next(packet))
         delete packet;
 
-    LoginDatabase.PExecute("UPDATE account SET online = 0 WHERE id = {};", GetAccountId());     // One-time query
+    // 一次性查询：标记账号离线
+    LoginDatabase.PExecute("UPDATE account SET online = 0 WHERE id = {};", GetAccountId());
 }
 
+/**
+ * @brief GetPlayerName - 获取玩家名称
+ * @return 玩家名称字符串引用
+ *
+ * 如果玩家对象存在，返回玩家名称；否则返回默认名称"<none>"。
+ */
 std::string const & WorldSession::GetPlayerName() const
 {
     return _player != nullptr ? _player->GetName() : DefaultPlayerName;
 }
 
+/**
+ * @brief GetPlayerInfo - 获取玩家信息字符串
+ * @return 格式化的玩家信息字符串
+ *
+ * 用于日志输出，格式：[Player: 玩家名 GUID, Account: 账号ID]
+ */
 std::string WorldSession::GetPlayerInfo() const
 {
     std::ostringstream ss;

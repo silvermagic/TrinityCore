@@ -15,6 +15,30 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file npc_arthas.cpp
+ * @brief 斯坦索姆的抉择副本 - 阿萨斯王子NPC脚本
+ *
+ * 本模块实现阿萨斯王子的AI行为，他是整个副本剧情的核心角色。
+ * 阿萨斯贯穿副本的整个过程，引导玩家经历斯坦索姆的净化事件。
+ *
+ * 主要功能：
+ * - 剧情事件编排（RP1-RP5）
+ * - 与其他角色的交互（乌瑟尔、吉安娜、玛尔加尼斯等）
+ * - 战斗AI（对天灾军团和无限龙军团）
+ * - 路径移动和位置管理
+ * - 玩家交互（对话选项）
+ *
+ * 剧情事件概述：
+ * - RP1: 阿萨斯与乌瑟尔、吉安娜在城门外的对话
+ * - RP2: 阿萨斯进入斯坦索姆，杀死被感染的市民
+ * - RP3: 城镇大厅内与无限龙军团的战斗
+ * - RP4: 通过隐藏通道
+ * - RP5: 与玛尔加尼斯的最终对决
+ *
+ * @note 阿萨斯是魔兽争霸III剧情中堕落的王子，这个副本重现了他的堕落过程
+ */
+
 #include "culling_of_stratholme.h"
 #include "Containers.h"
 #include "GameObject.h"
@@ -38,73 +62,81 @@
 #include <unordered_map>
 #include <vector>
 
+/**
+ * @brief NPC和游戏对象条目ID枚举
+ */
 enum Entries
 {
-    NPC_MALGANIS_BUNNY = 20562,
-    NPC_UTHER = 26528,
-    NPC_JAINA = 26497,
-    NPC_CITIZEN = 28167,
-    NPC_RESIDENT = 28169,
-    NPC_FOOTMAN = 27745,
-    NPC_KNIGHT = 27746,
-    NPC_PRIEST = 27747,
-    NPC_SORCERESS = 27752,
-    NPC_RISEN_ZOMBIE = 27737,
-    NPC_CITIZEN_INFINITE = 28340,
-    NPC_RESIDENT_INFINITE = 28341,
-    NPC_TIME_RIFT = 28409,
-    NPC_TIME_RIFT_LARGE = 28439,
-    NPC_INFINITE_ADVERSARY = 27742,
-    NPC_INFINITE_HUNTER = 27743,
-    NPC_INFINITE_AGENT = 27744,
-    NPC_EPOCH = 26532,
-    NPC_MALGANIS = 26533,
-    NPC_CHROMIE_3 = 30997,
+    NPC_MALGANIS_BUNNY = 20562,        // 玛尔加尼斯兔怪（用于特效触发）
+    NPC_UTHER = 26528,                 // 乌瑟尔·光明使者
+    NPC_JAINA = 26497,                 // 吉安娜·普罗德摩尔
+    NPC_CITIZEN = 28167,               // 斯坦索姆市民
+    NPC_RESIDENT = 28169,              // 斯坦索姆居民
+    NPC_FOOTMAN = 27745,               // 步兵
+    NPC_KNIGHT = 27746,                // 骑士
+    NPC_PRIEST = 27747,                // 牧师
+    NPC_SORCERESS = 27752,             // 女巫
+    NPC_RISEN_ZOMBIE = 27737,          // 复活的僵尸
+    NPC_CITIZEN_INFINITE = 28340,      // 无限市民（伪装）
+    NPC_RESIDENT_INFINITE = 28341,     // 无限居民（伪装）
+    NPC_TIME_RIFT = 28409,             // 时间裂隙
+    NPC_TIME_RIFT_LARGE = 28439,       // 大型时间裂隙
+    NPC_INFINITE_ADVERSARY = 27742,    // 无限敌对者
+    NPC_INFINITE_HUNTER = 27743,       // 无限猎手
+    NPC_INFINITE_AGENT = 27744,        // 无限特工
+    NPC_EPOCH = 26532,                 // 时空领主·艾波克
+    NPC_MALGANIS = 26533,              // 玛尔加尼斯
+    NPC_CHROMIE_3 = 30997,             // 克罗米（第三个，结局出现）
 
-    SPELL_HOLY_LIGHT = 52444,
-    SPELL_EXORCISM = 52445,
-    SPELL_DEVOTION_AURA = 52442,
-    SPELL_CRUSADER_STRIKE = 50773,
-    SPELL_SHADOWSTEP_VISUAL = 51908,
-    SPELL_TRANSFORM_VISUAL = 33133,
-    SPELL_MALGANIS_QUEST_CREDIT = 58124,
-    SPELL_MALGANIS_KILL_CREDIT = 58630,
-    SPELL_CHROMIE_3_TRANSFORM = 58986,
-    GO_CHEST_NORMAL = 190663,
-    GO_CHEST_HEROIC = 193597
+    SPELL_HOLY_LIGHT = 52444,          // 圣光术 - 阿萨斯的治疗技能
+    SPELL_EXORCISM = 52445,            // 驱邪术 - 阿萨斯的攻击技能
+    SPELL_DEVOTION_AURA = 52442,       // 虔诚光环 - 阿萨斯的Buff
+    SPELL_CRUSADER_STRIKE = 50773,     // 十字军打击 - 阿萨斯的攻击技能（对市民一击必杀）
+    SPELL_SHADOWSTEP_VISUAL = 51908,   // 暗影步视觉效果 - 玛尔加尼斯出现/消失
+    SPELL_TRANSFORM_VISUAL = 33133,    // 变形视觉效果 - 无限龙变形
+    SPELL_MALGANIS_QUEST_CREDIT = 58124, // 玛尔加尼斯任务信用
+    SPELL_MALGANIS_KILL_CREDIT = 58630,   // 玛尔加尼斯击杀信用
+    SPELL_CHROMIE_3_TRANSFORM = 58986,    // 克罗米变形法术
+    GO_CHEST_NORMAL = 190663,             // 普通难度宝箱
+    GO_CHEST_HEROIC = 193597              // 英雄难度宝箱
 };
 
+/**
+ * @brief 样条链ID枚举（路径移动）
+ *
+ * 定义阿萨斯和其他角色在各剧情阶段的移动路径
+ */
 enum SplineChains
 {
-    // RP1: Arthas/Jaina/Uther, outside Stratholme gates
-    RP1_CHAIN_ARTHAS1   = 1, // Initial movement
-    RP1_CHAIN_UTHER1    = 1, // Initial movement
-    RP1_CHAIN_JAINA1    = 1, // Initial movement
-    RP1_CHAIN_ARTHAS2   = 2, // Arthas moves up the hill to look out over Stratholme
-    RP1_CHAIN_UTHER2    = 2, // Uther follows
-    RP1_CHAIN_JAINA2    = 2, // Jaina follows
-    RP1_CHAIN_UTHER3    = 3, // Uther leaves
-    RP1_CHAIN_JAINA3    = 3, // Jaina turns to leave, but is stopped by Arthas
-    RP1_CHAIN_JAINA4    = 4, // Jaina leaves for real
-    RP1_CHAIN_ARTHAS3   = 3, // Arthas moves down the hill to the bridge
-    RP1_CHAIN_ARTHAS4   = 4, // Arthas moves to the Stratholme entrance
+    // RP1: 阿萨斯/吉安娜/乌瑟尔，斯坦索姆城门外
+    RP1_CHAIN_ARTHAS1   = 1,  // 初始移动
+    RP1_CHAIN_UTHER1    = 1,  // 初始移动
+    RP1_CHAIN_JAINA1    = 1,  // 初始移动
+    RP1_CHAIN_ARTHAS2   = 2,  // 阿萨斯上坡俯瞰斯坦索姆
+    RP1_CHAIN_UTHER2    = 2,  // 乌瑟尔跟随
+    RP1_CHAIN_JAINA2    = 2,  // 吉安娜跟随
+    RP1_CHAIN_UTHER3    = 3,  // 乌瑟尔离开
+    RP1_CHAIN_JAINA3    = 3,  // 吉安娜转身欲离开，被阿萨斯叫住
+    RP1_CHAIN_JAINA4    = 4,  // 吉安娜真正离开
+    RP1_CHAIN_ARTHAS3   = 3,  // 阿萨斯下坡到桥边
+    RP1_CHAIN_ARTHAS4   = 4,  // 阿萨斯移动到斯坦索姆入口
 
-    // RP2: Arthas/Mal'ganis, at Stratholme gates
-    RP2_CHAIN_ARTHAS1   = 5, // Arthas enters Stratholme proper
-    RP2_CHAIN_CITIZEN1  = 1, // A Stratholme citizen greets Arthas
-    RP2_CHAIN_ARTHAS2   = 6, // Arthas advances towards the approaching citizen
-    RP2_CHAIN_ARTHAS3   = 7, // Arthas moves on to a nearby resident
+    // RP2: 阿萨斯/玛尔加尼斯，斯坦索姆城门处
+    RP2_CHAIN_ARTHAS1   = 5,  // 阿萨斯正式进入斯坦索姆
+    RP2_CHAIN_CITIZEN1  = 1,  // 斯坦索姆市民迎接阿萨斯
+    RP2_CHAIN_ARTHAS2   = 6,  // 阿萨斯向市民靠近
+    RP2_CHAIN_ARTHAS3   = 7,  // 阿萨斯转向附近的居民
 
-    // RP3: Arthas/Infinites, in Stratholme Town Hall
-    RP3_CHAIN_ARTHAS1   = 91, // Arthas enters Stratholme Town Hall
-    RP3_CHAIN_ARTHAS2   = 92, // Arthas approaches one of the disguised Infinites
-    RP3_CHAIN_ARTHAS3   = 95, // Arthas proceeds up the stairs
-    RP3_CHAIN_ARTHAS3_2 = 96, // Arthas encounters more Infinite resistance
-    RP3_CHAIN_ARTHAS4   = 97, // Arthas presses onward into a hallway
-    RP3_CHAIN_ARTHAS5   = 98, // Arthas advances into the boss room
-    RP3_CHAIN_EPOCH     = 1,  // Chrono-Lord Epoch advances out of the portal
+    // RP3: 阿萨斯/无限龙军团，斯坦索姆城镇大厅内
+    RP3_CHAIN_ARTHAS1   = 91, // 阿萨斯进入城镇大厅
+    RP3_CHAIN_ARTHAS2   = 92, // 阿萨斯接近伪装的无限龙成员
+    RP3_CHAIN_ARTHAS3   = 95, // 阿萨斯上楼梯
+    RP3_CHAIN_ARTHAS3_2 = 96, // 阿萨斯遭遇更多无限龙抵抗
+    RP3_CHAIN_ARTHAS4   = 97, // 阿萨斯继续进入走廊
+    RP3_CHAIN_ARTHAS5   = 98, // 阿萨斯进入Boss房间
+    RP3_CHAIN_EPOCH     = 1,  // 时空领主·艾波克从传送门走出
 
-    // Spawn motions (all on 27742, infinite adversary)
+    // 生成移动（都在27742无限敌对者上）
     RP3_CHAIN_SPAWN1_LOC1 = 4,
     RP3_CHAIN_SPAWN1_LOC2 = 2,
     RP3_CHAIN_SPAWN1_LOC3 = 1,
@@ -118,19 +150,24 @@ enum SplineChains
     RP3_CHAIN_SPAWN3_LOC3 = 11,
     RP3_CHAIN_SPAWN3_LOC4 = 12,
 
-    // RP4: Arthas moving towards Gauntlet
-    RP4_CHAIN_ARTHAS1   = 101, // Arthas moves up to the bookcase
-    RP4_CHAIN_ARTHAS2   = 128, // Arthas advances to the start of the Gauntlet section
-    RP4_CHAIN_GAUNTLET1 = 1024, // Arthas charges to the halfway point of the Gauntlet
-    RP4_CHAIN_GAUNTLET2 = 1025, // Arthas continues to Market Row
+    // RP4: 阿萨斯前往通道
+    RP4_CHAIN_ARTHAS1   = 101,  // 阿萨斯移动到书架前
+    RP4_CHAIN_ARTHAS2   = 128,  // 阿萨斯前进到通道起点
+    RP4_CHAIN_GAUNTLET1 = 1024, // 阿萨斯冲刺到通道中点
+    RP4_CHAIN_GAUNTLET2 = 1025, // 阿萨斯继续到市集街
 
-    // RP5: Arthas advances on Crusader Square and faces off against Mal'ganis
-    RP5_CHAIN_ARTHAS1   = 121, // Arthas moves into Crusader Square
-    RP5_CHAIN_ARTHAS2   = 124, // After Mal'ganis' defeat, Arthas attempts to chase him down
-    RP5_CHAIN_ARTHAS3   = 125, // Arthas departs...
-    RP5_CHAIN_ARTHAS4   = 127  // ...and then finally despawns
+    // RP5: 阿萨斯进入十字军广场并与玛尔加尼斯对决
+    RP5_CHAIN_ARTHAS1   = 121, // 阿萨斯进入十字军广场
+    RP5_CHAIN_ARTHAS2   = 124, // 玛尔加尼斯战败后阿萨斯试图追击
+    RP5_CHAIN_ARTHAS3   = 125, // 阿萨斯离开...
+    RP5_CHAIN_ARTHAS4   = 127  // ...然后最终消失
 };
 
+/**
+ * @brief 移动点ID枚举
+ *
+ * 用于标识移动完成时的特定点，主要在MovementInform回调中使用
+ */
 enum PointIDs
 {
     RP1_POINTID_UTHER1 = 1,
@@ -163,20 +200,28 @@ enum PointIDs
     RP5_POINTID_ARTHAS4
 };
 
+/**
+ * @brief 动作ID枚举
+ *
+ * 定义战斗结束后需要执行的动作，用于推进剧情
+ */
 enum Actions
 {
     ACTION_NONE = 0,
-    RP3_ACTION_AFTER_INITIAL,
-    RP3_ACTION_AFTER_SPAWN1,
-    RP3_ACTION_AFTER_SPAWN2,
-    RP3_ACTION_AFTER_SPAWN3,
-    RP3_ACTION_AFTER_EPOCH,
-    RP5_ACTION_AFTER_MALGANIS
+    RP3_ACTION_AFTER_INITIAL,   // RP3初始战斗后
+    RP3_ACTION_AFTER_SPAWN1,    // RP3第一波生成后
+    RP3_ACTION_AFTER_SPAWN2,    // RP3第二波生成后
+    RP3_ACTION_AFTER_SPAWN3,    // RP3第三波生成后
+    RP3_ACTION_AFTER_EPOCH,     // RP3艾波克战斗后
+    RP5_ACTION_AFTER_MALGANIS   // RP5玛尔加尼斯战斗后
 };
 
+/**
+ * @brief 数据ID枚举
+ */
 enum Data
 {
-    DATA_RP_DUMMY_MOVED
+    DATA_RP_DUMMY_MOVED  // RP傀儡移动完成标记
 };
 
 enum RPEvents
@@ -1585,6 +1630,16 @@ public:
             me->DespawnOrUnsummon(5s);
         }
 
+        /**
+         * @brief 单位出现回调
+         *
+         * 调用时机：阿萨斯被生成或重新出现时
+         *
+         * 执行操作：
+         * - 标记RP进度为true
+         * - 根据当前实例进度推进到对应状态
+         * - 施放虔诚光环Buff
+         */
         void JustAppeared() override
         {
             _progressRP = true;
@@ -1592,12 +1647,36 @@ public:
             DoCastSelf(SPELL_DEVOTION_AURA);
         }
 
+        /**
+         * @brief 推进副本进度
+         * @param cause 触发推进的玩家
+         * @param from 当前需要的状态
+         * @param command 要执行的命令
+         *
+         * 辅助函数：如果当前进度匹配from状态，则通过实例脚本推进进度
+         */
         void AdvanceDungeon(Player* cause, COSProgressStates from, COSInstanceData command)
         {
             if (instance->GetData(DATA_INSTANCE_PROGRESS) == from)
                 instance->SetGuidData(command, cause->GetGUID());
         }
 
+        /**
+         * @brief 对话选项选择回调
+         * @param player 选择对话的玩家
+         * @param sender 发送者ID（未使用）
+         * @param listId 选项列表ID
+         * @return 是否处理成功
+         *
+         * 调用时机：玩家选择对话选项时
+         *
+         * 根据当前进度推进到下一阶段：
+         * - PURGE_PENDING -> 开始净化（RP2）
+         * - TOWN_HALL_PENDING -> 进入城镇大厅（RP3）
+         * - TOWN_HALL_COMPLETE -> 前往通道（RP4）
+         * - GAUNTLET_PENDING -> 开始通道战斗（RP4-2）
+         * - GAUNTLET_COMPLETE -> 开始玛尔加尼斯战斗（RP5）
+         */
         bool OnGossipSelect(Player* player, uint32 /*sender*/, uint32 listId) override
         {
             uint32 const action = GetGossipActionFor(player, listId);
@@ -1611,28 +1690,46 @@ public:
             return true;
         }
 
+        /**
+         * @brief 对话问候回调
+         * @param player 与NPC交互的玩家
+         * @return 是否处理（返回false表示使用默认行为）
+         */
         bool OnGossipHello(Player* /*player*/) override
         {
             return false;
         }
 
         private:
-            InstanceScript* const instance;
-            EventMap events;
-            ObjectGuid _eventStarterGuid;
-            uint32 _exorcismCooldown; // no EventMap entry for this, it's reserved for RP handling
+            InstanceScript* const instance;      // 实例脚本指针
+            EventMap events;                     // 事件调度器（用于RP事件）
+            ObjectGuid _eventStarterGuid;        // 事件触发者GUID
+            uint32 _exorcismCooldown;            // 驱邪术冷却时间（不使用EventMap，保留用于RP处理）
 
-            bool _progressRP;
-            Actions _afterCombat;
-            SplineChainResumeInfo _resumeMovement;
+            bool _progressRP;                    // 是否正在进行RP事件
+            Actions _afterCombat;                // 战斗后要执行的动作
+            SplineChainResumeInfo _resumeMovement; // 移动恢复信息（战斗中断后恢复）
     };
 
+    /**
+     * @brief 获取AI实例
+     * @param creature 需要AI的生物对象
+     * @return 创建的AI实例指针
+     */
     CreatureAI* GetAI(Creature* creature) const override
     {
         return GetCullingOfStratholmeAI<npc_arthas_stratholmeAI>(creature);
     }
 };
 
+/**
+ * @brief 获取阿萨斯的回退位置
+ * @param state 副本进度状态
+ * @return 对应状态的阿萨斯位置引用
+ *
+ * 根据实例进度状态查找阿萨斯应该出现的位置。
+ * 用于实例重置或阿萨斯重生时的定位。
+ */
 Position const& GetArthasSnapbackFor(COSProgressStates state)
 {
     auto itr = ArthasSnapbackPositions.find(state);
@@ -1641,11 +1738,34 @@ Position const& GetArthasSnapbackFor(COSProgressStates state)
     return *(itr->second.SnapbackPosition);
 }
 
-// Arthas' AI is the one controlling everything, all this AI does is report any movementinforms back to Arthas AI
+/**
+ * @brief 斯坦索姆RP傀儡AI结构体
+ *
+ * 继承自NullCreatureAI，实现一个被动的NPC AI。
+ * 主要作用是将移动完成通知转发给召唤者（阿萨斯）的AI。
+ *
+ * @note 阿萨斯的AI控制所有逻辑，这个AI只是将MovementInform回调转发给阿萨斯
+ */
 struct npc_stratholme_rp_dummy : NullCreatureAI
 {
+    /**
+     * @brief 构造函数
+     * @param creature 关联的生物对象指针
+     */
     npc_stratholme_rp_dummy(Creature* creature) : NullCreatureAI(creature) { }
 
+    /**
+     * @brief 移动完成通知回调
+     * @param type 移动类型
+     * @param id 移动点ID
+     *
+     * 调用时机：NPC完成移动时
+     *
+     * 处理逻辑：
+     * - 如果是点移动、效果移动或样条链移动
+     * - 且NPC是临时召唤生物
+     * - 则将移动完成通知转发给召唤者（阿萨斯）的AI
+     */
     void MovementInform(uint32 type, uint32 id) override
     {
         if (type == POINT_MOTION_TYPE || type == EFFECT_MOTION_TYPE || type == SPLINE_CHAIN_MOTION_TYPE)
@@ -1654,11 +1774,26 @@ struct npc_stratholme_rp_dummy : NullCreatureAI
     }
 };
 
-// 50773 - Crusader Strike
+/**
+ * @brief 十字军打击法术脚本
+ *
+ * 处理阿萨斯的十字军打击技能，该技能对斯坦索姆市民和居民有一击必杀效果。
+ * 法术ID：50773
+ */
 class spell_stratholme_crusader_strike : public SpellScript
 {
     PrepareSpellScript(spell_stratholme_crusader_strike);
 
+    /**
+     * @brief 处理法术效果
+     * @param effIndex 效果索引（未使用）
+     *
+     * 调用时机：法术命中目标时
+     *
+     * 处理逻辑：
+     * - 如果目标是斯坦索姆市民或居民
+     * - 则直接杀死目标（模拟阿萨斯的剧情击杀）
+     */
     void HandleDummy(SpellEffIndex /*effIndex*/)
     {
         if (Unit* target = GetHitUnit())
@@ -1666,12 +1801,23 @@ class spell_stratholme_crusader_strike : public SpellScript
                 Unit::Kill(GetCaster(), target);
     }
 
+    /**
+     * @brief 注册法术效果处理函数
+     */
     void Register() override
     {
         OnEffectHitTarget += SpellEffectFn(spell_stratholme_crusader_strike::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
     }
 };
 
+/**
+ * @brief 注册阿萨斯相关脚本
+ *
+ * 注册以下脚本：
+ * - npc_arthas_stratholme: 阿萨斯NPC脚本
+ * - npc_stratholme_rp_dummy: RP傀儡NPC脚本
+ * - spell_stratholme_crusader_strike: 十字军打击法术脚本
+ */
 void AddSC_npc_arthas_stratholme()
 {
     new npc_arthas_stratholme();

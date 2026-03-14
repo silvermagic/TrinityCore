@@ -22,6 +22,23 @@ Comment: All learn related commands
 Category: commandscripts
 EndScriptData */
 
+/**
+ * @file cs_learn.cpp
+ * @brief 技能学习命令模块
+ *
+ * 本模块提供了与技能学习相关的GM命令，用于管理和调试玩家的技能、天赋和配方。
+ * 主要功能包括：
+ * - 学习单个技能或技能链（包括所有等级）
+ * - 学习GM专用技能、调试技能
+ * - 学习职业训练师技能、任务奖励技能
+ * - 学习所有天赋、宠物天赋
+ * - 学习所有语言
+ * - 学习专业配方和职业技能
+ * - 遗忘技能
+ *
+ * 这些命令主要用于GM调试、测试和辅助玩家。
+ */
+
 #include "ScriptMgr.h"
 #include "Chat.h"
 #include "DBCStores.h"
@@ -35,11 +52,45 @@ EndScriptData */
 #include "WorldSession.h"
 
 using namespace Trinity::ChatCommands;
+
+/**
+ * @class learn_commandscript
+ * @brief 技能学习命令脚本类
+ *
+ * 继承自CommandScript，提供所有与技能学习相关的GM命令。
+ * 该类注册并实现了技能学习、天赋学习、配方学习等命令的处理函数。
+ */
 class learn_commandscript : public CommandScript
 {
 public:
+    /**
+     * @brief 构造函数
+     *
+     * 初始化命令脚本，设置脚本名称为"learn_commandscript"
+     */
     learn_commandscript() : CommandScript("learn_commandscript") { }
 
+    /**
+     * @brief 获取命令表
+     * @return 返回命令表的映射关系
+     *
+     * 注册所有技能学习相关命令及其对应的处理函数和权限要求。
+     * 包括：
+     * - learn: 学习单个技能
+     * - learn all: 学习批量技能的子命令组
+     *   - blizzard: GM技能
+     *   - debug: 调试技能
+     *   - crafts: 所有专业配方
+     *   - default: 默认技能
+     *   - languages: 所有语言
+     *   - recipes: 指定专业的所有配方
+     *   - talents: 所有天赋
+     *   - pettalents: 宠物天赋
+     * - learn my: 学习玩家相关技能
+     *   - trainer: 训练师技能
+     *   - quests: 任务奖励技能
+     * - unlearn: 遗忘技能
+     */
     ChatCommandTable GetCommands() const override
     {
         static ChatCommandTable learnAllCommandTable =

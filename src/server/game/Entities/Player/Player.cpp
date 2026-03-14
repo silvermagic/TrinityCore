@@ -15,6 +15,90 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file Player.cpp
+ * @brief 玩家实体类实现文件
+ *
+ * 本文件实现了 Player 类的所有功能，是 TrinityCore 中最复杂和最重要的文件之一。
+ *
+ * 主要功能模块实现：
+ *
+ * 1. 玩家生命周期管理
+ *    - 玩家对象的创建和销毁
+ *    - 角色创建和加载
+ *    - 登录和登出流程
+ *    - 数据保存和持久化
+ *
+ * 2. 环境交互系统
+ *    - 水下呼吸和疲劳系统
+ *    - 环境伤害处理（岩浆、摔落、溺水等）
+ *    - 醉酒状态管理
+ *    - 镜像计时器
+ *
+ * 3. 传送和定位系统
+ *    - 世界传送逻辑
+ *    - 飞行路径管理
+ *    - 炉石和绑定位置
+ *    - 实例进入和退出
+ *
+ * 4. 物品和背包系统
+ *    - 物品存储和管理
+ *    - 装备穿脱
+ *    - 银行和背包操作
+ *    - 物品交易
+ *
+ * 5. 技能和天赋系统
+ *    - 技能学习和遗忘
+ *    - 天赋分配和重置
+ *    - 法术修改器
+ *    - 符文系统（死亡骑士）
+ *
+ * 6. 任务系统
+ *    - 任务接受和完成
+ *    - 任务进度跟踪
+ *    - 日常/周常/月常任务
+ *    - 任务奖励发放
+ *
+ * 7. 社交系统
+ *    - 组队和团队
+ *    - 公会管理
+ *    - 好友列表
+ *    - 交易和决斗
+ *
+ * 8. 战斗系统
+ *    - PVP状态管理
+ *    - 战场和竞技场
+ *    - 伤害和死亡处理
+ *    - 威胁和仇恨管理
+ *
+ * 9. 声望和成就系统
+ *    - 声望获取和查询
+ *    - 成就进度跟踪
+ *    - 称号管理
+ *
+ * 10. 其他功能
+ *     - 邮件系统
+ *     - 拍卖行
+ *     - 专业技能
+ *     - 宠物管理
+ *     - 坐骑和召唤
+ *
+ * 性能考虑：
+ * - Player::Update() 每帧调用，需要高度优化
+ * - 避免在频繁调用的函数中进行字符串操作
+ * - 使用缓存减少数据库查询
+ * - 合理使用定时器和延迟操作
+ *
+ * 线程安全：
+ * - 大部分操作在地图线程中执行
+ * - 数据库操作使用异步查询
+ * - 跨线程操作需要使用消息队列
+ *
+ * @see Player.h - 玩家类头文件
+ * @see Unit - 玩家的基类
+ * @see WorldSession - 网络会话管理
+ */
+
 #include "Player.h"
 #include "AccountMgr.h"
 #include "AchievementMgr.h"
@@ -106,102 +190,162 @@
 #include "WorldSession.h"
 #include "WorldStatePackets.h"
 
+/** @brief 区域更新间隔（毫秒） */
 #define ZONE_UPDATE_INTERVAL (1*IN_MILLISECONDS)
 
+/** @brief 计算技能索引在玩家字段中的位置 */
 #define PLAYER_SKILL_INDEX(x)       (PLAYER_SKILL_INFO_1_1 + ((x)*3))
+/** @brief 计算技能值索引 */
 #define PLAYER_SKILL_VALUE_INDEX(x) (PLAYER_SKILL_INDEX(x)+1)
+/** @brief 计算技能奖励索引 */
 #define PLAYER_SKILL_BONUS_INDEX(x) (PLAYER_SKILL_INDEX(x)+2)
 
+/** @brief 从技能值字段提取当前技能值（低16位） */
 #define SKILL_VALUE(x)         PAIR32_LOPART(x)
+/** @brief 从技能值字段提取最大技能值（高16位） */
 #define SKILL_MAX(x)           PAIR32_HIPART(x)
+/** @brief 组合技能值和最大值 */
 #define MAKE_SKILL_VALUE(v, m) MAKE_PAIR32(v, m)
 
+/** @brief 从技能奖励字段提取临时奖励（低16位） */
 #define SKILL_TEMP_BONUS(x)    int16(PAIR32_LOPART(x))
+/** @brief 从技能奖励字段提取永久奖励（高16位） */
 #define SKILL_PERM_BONUS(x)    int16(PAIR32_HIPART(x))
+/** @brief 组合临时和永久奖励 */
 #define MAKE_SKILL_BONUS(t, p) MAKE_PAIR32(t, p)
 
+/**
+ * @enum CharacterFlags
+ * @brief 角色标志枚举
+ *
+ * 定义角色在数据库中存储的标志位
+ * 这些标志影响角色的显示和行为
+ */
 enum CharacterFlags
 {
-    CHARACTER_FLAG_NONE                 = 0x00000000,
-    CHARACTER_FLAG_UNK1                 = 0x00000001,
-    CHARACTER_FLAG_UNK2                 = 0x00000002,
-    CHARACTER_LOCKED_FOR_TRANSFER       = 0x00000004,
-    CHARACTER_FLAG_UNK4                 = 0x00000008,
-    CHARACTER_FLAG_UNK5                 = 0x00000010,
-    CHARACTER_FLAG_UNK6                 = 0x00000020,
-    CHARACTER_FLAG_UNK7                 = 0x00000040,
-    CHARACTER_FLAG_UNK8                 = 0x00000080,
-    CHARACTER_FLAG_UNK9                 = 0x00000100,
-    CHARACTER_FLAG_UNK10                = 0x00000200,
-    CHARACTER_FLAG_HIDE_HELM            = 0x00000400,
-    CHARACTER_FLAG_HIDE_CLOAK           = 0x00000800,
-    CHARACTER_FLAG_UNK13                = 0x00001000,
-    CHARACTER_FLAG_GHOST                = 0x00002000,
-    CHARACTER_FLAG_RENAME               = 0x00004000,
-    CHARACTER_FLAG_UNK16                = 0x00008000,
-    CHARACTER_FLAG_UNK17                = 0x00010000,
-    CHARACTER_FLAG_UNK18                = 0x00020000,
-    CHARACTER_FLAG_UNK19                = 0x00040000,
-    CHARACTER_FLAG_UNK20                = 0x00080000,
-    CHARACTER_FLAG_UNK21                = 0x00100000,
-    CHARACTER_FLAG_UNK22                = 0x00200000,
-    CHARACTER_FLAG_UNK23                = 0x00400000,
-    CHARACTER_FLAG_UNK24                = 0x00800000,
-    CHARACTER_FLAG_LOCKED_BY_BILLING    = 0x01000000,
-    CHARACTER_FLAG_DECLINED             = 0x02000000,
-    CHARACTER_FLAG_UNK27                = 0x04000000,
-    CHARACTER_FLAG_UNK28                = 0x08000000,
-    CHARACTER_FLAG_UNK29                = 0x10000000,
-    CHARACTER_FLAG_UNK30                = 0x20000000,
-    CHARACTER_FLAG_UNK31                = 0x40000000,
-    CHARACTER_FLAG_UNK32                = 0x80000000
+    CHARACTER_FLAG_NONE                 = 0x00000000,  ///< 无标志
+    CHARACTER_FLAG_UNK1                 = 0x00000001,  ///< 未知标志1
+    CHARACTER_FLAG_UNK2                 = 0x00000002,  ///< 未知标志2
+    CHARACTER_LOCKED_FOR_TRANSFER       = 0x00000004,  ///< 锁定用于转移（角色服务）
+    CHARACTER_FLAG_UNK4                 = 0x00000008,  ///< 未知标志4
+    CHARACTER_FLAG_UNK5                 = 0x00000010,  ///< 未知标志5
+    CHARACTER_FLAG_UNK6                 = 0x00000020,  ///< 未知标志6
+    CHARACTER_FLAG_UNK7                 = 0x00000040,  ///< 未知标志7
+    CHARACTER_FLAG_UNK8                 = 0x00000080,  ///< 未知标志8
+    CHARACTER_FLAG_UNK9                 = 0x00000100,  ///< 未知标志9
+    CHARACTER_FLAG_UNK10                = 0x00000200,  ///< 未知标志10
+    CHARACTER_FLAG_HIDE_HELM            = 0x00000400,  ///< 隐藏头盔显示
+    CHARACTER_FLAG_HIDE_CLOAK           = 0x00000800,  ///< 隐藏披风显示
+    CHARACTER_FLAG_UNK13                = 0x00001000,  ///< 未知标志13
+    CHARACTER_FLAG_GHOST                = 0x00002000,  ///< 灵魂状态
+    CHARACTER_FLAG_RENAME               = 0x00004000,  ///< 需要重命名
+    CHARACTER_FLAG_UNK16                = 0x00008000,  ///< 未知标志16
+    CHARACTER_FLAG_UNK17                = 0x00010000,  ///< 未知标志17
+    CHARACTER_FLAG_UNK18                = 0x00020000,  ///< 未知标志18
+    CHARACTER_FLAG_UNK19                = 0x00040000,  ///< 未知标志19
+    CHARACTER_FLAG_UNK20                = 0x00080000,  ///< 未知标志20
+    CHARACTER_FLAG_UNK21                = 0x00100000,  ///< 未知标志21
+    CHARACTER_FLAG_UNK22                = 0x00200000,  ///< 未知标志22
+    CHARACTER_FLAG_UNK23                = 0x00400000,  ///< 未知标志23
+    CHARACTER_FLAG_UNK24                = 0x00800000,  ///< 未知标志24
+    CHARACTER_FLAG_LOCKED_BY_BILLING    = 0x01000000,  ///< 被账单锁定
+    CHARACTER_FLAG_DECLINED             = 0x02000000,  ///< 名字变格
+    CHARACTER_FLAG_UNK27                = 0x04000000,  ///< 未知标志27
+    CHARACTER_FLAG_UNK28                = 0x08000000,  ///< 未知标志28
+    CHARACTER_FLAG_UNK29                = 0x10000000,  ///< 未知标志29
+    CHARACTER_FLAG_UNK30                = 0x20000000,  ///< 未知标志30
+    CHARACTER_FLAG_UNK31                = 0x40000000,  ///< 未知标志31
+    CHARACTER_FLAG_UNK32                = 0x80000000   ///< 未知标志32
 };
 
+/**
+ * @enum CharacterCustomizeFlags
+ * @brief 角色自定义标志枚举
+ *
+ * 用于角色服务（外观修改、种族变更、阵营变更）
+ */
 enum CharacterCustomizeFlags
 {
-    CHAR_CUSTOMIZE_FLAG_NONE            = 0x00000000,
-    CHAR_CUSTOMIZE_FLAG_CUSTOMIZE       = 0x00000001,       // name, gender, etc...
-    CHAR_CUSTOMIZE_FLAG_FACTION         = 0x00010000,       // name, gender, faction, etc...
-    CHAR_CUSTOMIZE_FLAG_RACE            = 0x00100000        // name, gender, race, etc...
+    CHAR_CUSTOMIZE_FLAG_NONE            = 0x00000000,  ///< 无自定义
+    CHAR_CUSTOMIZE_FLAG_CUSTOMIZE       = 0x00000001,  ///< 自定义外观（名字、性别等）
+    CHAR_CUSTOMIZE_FLAG_FACTION         = 0x00010000,  ///< 阵营变更（名字、性别、阵营等）
+    CHAR_CUSTOMIZE_FLAG_RACE            = 0x00100000   ///< 种族变更（名字、性别、种族等）
 };
 
-// corpse reclaim times
+/** @brief 死亡过期步长（5分钟） */
 #define DEATH_EXPIRE_STEP (5*MINUTE)
+/** @brief 最大死亡次数（用于计算尸体回收延迟） */
 #define MAX_DEATH_COUNT 3
 
+/** @brief 尸体回收延迟数组（根据连续死亡次数增加延迟） */
 static uint32 corpseReclaimDelay[MAX_DEATH_COUNT] = { 30, 60, 120 };
 
+/** @brief 最大金钱数量（2^31 - 1） */
 uint32 const MAX_MONEY_AMOUNT = static_cast<uint32>(std::numeric_limits<int32>::max());
 
+/**
+ * @brief 构造函数 - 初始化玩家对象
+ *
+ * 创建一个新的玩家对象，初始化所有成员变量为默认值
+ *
+ * @param session 玩家的网络会话指针
+ *
+ * 初始化流程：
+ * 1. 设置对象类型和ID
+ * 2. 初始化所有计时器
+ * 3. 初始化背包和物品槽位
+ * 4. 初始化社交系统
+ * 5. 初始化任务系统
+ * 6. 初始化天赋和技能系统
+ * 7. 初始化战场和竞技场数据
+ * 8. 初始化休息和声望系统
+ * 9. 初始化成就和电影管理器
+ *
+ * 注意：构造函数只进行基本的初始化，不涉及数据库加载
+ * 玩家数据的加载由 LoadFromDB 等函数完成
+ *
+ * 性能考虑：
+ * - 使用 memset 初始化数组比循环更快
+ * - 避免在构造函数中进行复杂的计算
+ */
 Player::Player(WorldSession* session): Unit(true)
 {
+    // 设置对象类型为玩家
     m_objectType |= TYPEMASK_PLAYER;
     m_objectTypeId = TYPEID_PLAYER;
 
+    // 设置玩家字段数量
     m_valuesCount = PLAYER_END;
 
+    // 保存网络会话指针
     m_session = session;
 
+    // 初始化游戏时间
     m_ingametime = 0;
     m_sharedQuestId = 0;
 
+    // 初始化额外标志
     m_ExtraFlags = 0;
 
+    // 初始化法术修改器
     m_spellModTakingSpell = nullptr;
     //m_pad = 0;
 
-    // players always accept
+    // 默认接受密语（除非有权限过滤）
     if (!GetSession()->HasPermission(rbac::RBAC_PERM_CAN_FILTER_WHISPERS))
         SetAcceptWhispers(true);
 
+    // 初始化天赋计数
     m_usedTalentCount = 0;
     m_questRewardTalentCount = 0;
 
+    // 初始化回复计时器
     m_regenTimer = 0;
     m_regenTimerCount = 0;
     m_foodEmoteTimerCount = 0;
     m_weaponChangeTimer = 0;
 
+    // 初始化区域更新相关
     m_zoneUpdateId = uint32(-1);
     m_zoneUpdateTimer = 0;
 
@@ -210,53 +354,66 @@ Player::Player(WorldSession* session): Unit(true)
 
     m_needsZoneUpdate = false;
 
+    // 设置下次保存时间
     m_nextSave = sWorld->getIntConfig(CONFIG_INTERVAL_SAVE);
 
+    // 初始化所有物品槽位为空
     memset(m_items, 0, sizeof(Item*)*PLAYER_SLOTS_COUNT);
 
+    // 初始化社交列表
     m_social = nullptr;
 
-    // group is initialized in the reference constructor
+    // 初始化队伍相关（队伍在引用构造函数中初始化）
     SetGroupInvite(nullptr);
     m_groupUpdateMask = 0;
     m_auraRaidUpdateMask = 0;
     m_bPassOnGroupLoot = false;
 
+    // 初始化公会和竞技场邀请
     m_GuildIdInvited = 0;
     m_ArenaTeamIdInvited = 0;
 
+    // 初始化登录标志
     m_atLoginFlags = AT_LOGIN_NONE;
 
+    // 初始化传送信号量
     mSemaphoreTeleport_Near = false;
     mSemaphoreTeleport_Far = false;
 
+    // 初始化延迟操作
     m_DelayedOperations = 0;
     m_bCanDelayTeleport = false;
     m_bHasDelayedTeleport = false;
     m_teleport_options = 0;
 
+    // 初始化交易数据
     m_trade = nullptr;
 
+    // 初始化电影ID
     m_cinematic = 0;
-
     m_movie = 0;
 
+    // 创建玩家对话菜单
     PlayerTalkClass = new PlayerMenu(GetSession());
+    // 设置当前回购槽位
     m_currentBuybackSlot = BUYBACK_SLOT_START;
 
+    // 初始化日常任务
     m_DailyQuestChanged = false;
     m_lastDailyQuestTime = 0;
 
-    // Init rune flags
+    // 初始化符文计时器（死亡骑士）
     for (uint8 i = 0; i < MAX_RUNES; ++i)
     {
         SetRuneTimer(i, 0xFFFFFFFF);
         SetLastRuneGraceTimer(i, 0);
     }
 
+    // 初始化镜像计时器
     for (uint8 i=0; i < MAX_TIMERS; i++)
         m_MirrorTimer[i] = DISABLED_MIRROR_TIMER;
 
+    // 初始化水下状态
     m_MirrorTimerFlags = UNDERWATER_NONE;
     m_MirrorTimerFlagsLast = UNDERWATER_NONE;
     m_hostileReferenceCheckTimer = 0;
@@ -264,61 +421,75 @@ Player::Player(WorldSession* session): Unit(true)
     m_deathTimer = 0;
     m_deathExpireTime = 0;
 
+    // 初始化挥舞错误消息
     m_swingErrorMsg = 0;
 
+    // 初始化战场队列
     for (uint8 j = 0; j < PLAYER_MAX_BATTLEGROUND_QUEUES; ++j)
     {
         m_bgBattlegroundQueueID[j].bgQueueTypeId = BATTLEGROUND_QUEUE_NONE;
         m_bgBattlegroundQueueID[j].invitedToInstance = 0;
     }
 
+    // 初始化游戏时间统计
     m_logintime = GameTime::GetGameTime();
     m_Last_tick = m_logintime;
     m_Played_time[PLAYED_TIME_TOTAL] = 0;
     m_Played_time[PLAYED_TIME_LEVEL] = 0;
+
+    // 初始化武器和护甲熟练度
     m_WeaponProficiency = 0;
     m_ArmorProficiency = 0;
+
+    // 初始化战斗能力
     m_canParry = false;
     m_canBlock = false;
     m_canTitanGrip = false;
     m_titanGripPenaltySpellId = 0;
     m_ammoDPS = 0.0f;
 
+    // 初始化宠物相关
     m_temporaryUnsummonedPetNumber = 0;
-    //cache for UNIT_CREATED_BY_SPELL to allow
-    //returning reagents for temporarily removed pets
-    //when dying/logging out
+    // 缓存UNIT_CREATED_BY_SPELL以允许
+    // 为临时移除的宠物返回材料
+    // 当死亡或登出时
     m_oldpetspell = 0;
     m_lastpetnumber = 0;
 
-    ////////////////////Rest System/////////////////////
+    ////////////////////休息系统/////////////////////
     _restTime = 0;
     inn_triggerId = 0;
     m_rest_bonus = 0;
     _restFlagMask = 0;
-    ////////////////////Rest System/////////////////////
+    ////////////////////休息系统/////////////////////
 
+    // 初始化邮件系统
     m_mailsUpdated = false;
     unReadMails = 0;
     m_nextMailDelivereTime = 0;
 
+    // 初始化天赋重置成本
     m_resetTalentsCost = 0;
     m_resetTalentsTime = 0;
     m_itemUpdateQueueBlocked = false;
 
-    /////////////////// Instance System /////////////////////
+    ///////////////////实例系统/////////////////////
 
+    // 初始化实例绑定计时器
     m_HomebindTimer = 0;
     m_InstanceValid = true;
     m_dungeonDifficulty = DUNGEON_DIFFICULTY_NORMAL;
     m_raidDifficulty = RAID_DIFFICULTY_10MAN_NORMAL;
     m_raidMapDifficulty = RAID_DIFFICULTY_10MAN_NORMAL;
 
+    // 初始化药剂冷却
     m_lastPotionId = 0;
 
+    // 初始化专精系统（双天赋）
     m_activeSpec = 0;
     m_specsCount = 1;
 
+    // 初始化天赋和雕文
     for (uint8 i = 0; i < MAX_TALENT_SPECS; ++i)
     {
         for (uint8 g = 0; g < MAX_GLYPH_SLOT_INDEX; ++g)
@@ -327,91 +498,135 @@ Player::Player(WorldSession* session): Unit(true)
         m_talents[i] = new PlayerTalentMap();
     }
 
+    // 初始化基础属性修改器
     for (uint8 i = 0; i < BASEMOD_END; ++i)
     {
         m_auraBaseFlatMod[i] = 0.0f;
         m_auraBasePctMod[i] = 1.0f;
     }
 
+    // 初始化战斗等级
     for (uint8 i = 0; i < MAX_COMBAT_RATING; i++)
         m_baseRatingValue[i] = 0;
 
+    // 初始化基础属性
     m_baseSpellPower = 0;
     m_baseFeralAP = 0;
     m_baseManaRegen = 0;
     m_baseHealthRegen = 0;
     m_spellPenetrationItemMod = 0;
 
-    // Honor System
+    // 初始化荣誉系统
     m_lastHonorUpdateTime = GameTime::GetGameTime();
 
+    // 初始化战场随机获胜标志
     m_IsBGRandomWinner = false;
 
-    // Player summoning
+    // 初始化玩家召唤
     m_summon_expire = 0;
 
+    // 初始化观察者
     m_seer = this;
 
+    // 初始化炉石绑定位置
     m_homebindMapId = 0;
     m_homebindAreaId = 0;
     m_homebindX = 0;
     m_homebindY = 0;
     m_homebindZ = 0;
 
+    // 初始化争夺中的PVP计时器
     m_contestedPvPTimer = 0;
 
+    // 初始化名字变格
     m_declinedname = nullptr;
 
+    // 设置为活跃状态
     m_isActive = true;
 
+    // 初始化符文数据（死亡骑士专用）
     m_runes = nullptr;
 
+    // 初始化摔落数据
     m_lastFallTime = 0;
     m_lastFallZ = 0;
 
+    // 初始化RAF赠送等级
     m_grantableLevels = 0;
     m_fishingSteps = 0;
 
+    // 标记为玩家控制
     m_ControlledByPlayer = true;
 
+    // 增加世界玩家计数
     sWorld->IncreasePlayerCount();
 
+    // 初始化冠军阵营
     m_ChampioningFaction = 0;
 
+    // 初始化能量分数
     for (uint8 i = 0; i < MAX_POWERS; ++i)
         m_powerFraction[i] = 0;
 
+    // 初始化区域触发调试标志
     isDebugAreaTriggers = false;
 
+    // 初始化任务变更标志
     m_WeeklyQuestChanged = false;
-
     m_MonthlyQuestChanged = false;
-
     m_SeasonalQuestChanged = false;
 
+    // 设置待绑定实例
     SetPendingBind(0, 0);
 
+    // 初始化作弊标志
     _activeCheats = CHEAT_NONE;
     healthBeforeDuel = 0;
     manaBeforeDuel = 0;
 
+    // 创建电影管理器
     _cinematicMgr = new CinematicMgr(this);
 
+    // 创建成就和声望管理器
     m_achievementMgr = new AchievementMgr(this);
     m_reputationMgr = new ReputationMgr(this);
 
+    // 重置队伍更新计时器（5秒）
     m_groupUpdateTimer.Reset(5000);
 }
 
+/**
+ * @brief 析构函数 - 清理玩家资源
+ *
+ * 释放玩家对象占用的所有资源
+ *
+ * 清理流程：
+ * 1. 删除所有物品槽位中的物品
+ * 2. 清理天赋数据
+ * 3. 删除邮件和邮件物品
+ * 4. 删除各种管理器对象
+ * 5. 减少世界玩家计数
+ *
+ * 注意：
+ * - 社交列表应该在 PlayerLogout 中卸载，不在此处清理
+ * - 回购物品的删除已在玩家保存时完成
+ * - 邮件物品如果重复可能导致服务器崩溃，但必须释放
+ *
+ * 性能考虑：
+ * - 使用循环删除数组元素
+ * - 避免在析构函数中抛出异常
+ */
 Player::~Player()
 {
-    // it must be unloaded already in PlayerLogout and accessed only for logged in player
+    // 社交列表应该在 PlayerLogout 中卸载，仅登录玩家可访问
     //m_social = nullptr;
 
-    // Note: buy back item already deleted from DB when player was saved
+    // 删除所有物品槽位中的物品
+    // 注意：回购物品已在玩家保存时从数据库删除
     for (uint8 i = 0; i < PLAYER_SLOTS_COUNT; ++i)
         delete m_items[i];
 
+    // 删除所有专精的天赋数据
     for (uint8 i = 0; i < MAX_TALENT_SPECS; ++i)
     {
         for (PlayerTalentMap::const_iterator itr = m_talents[i]->begin(); itr != m_talents[i]->end(); ++itr)
@@ -419,49 +634,114 @@ Player::~Player()
         delete m_talents[i];
     }
 
-    //all mailed items should be deleted, also all mail should be deallocated
+    // 删除所有邮件和邮件物品
+    // 所有邮件物品应该被删除，所有邮件应该被释放
     for (PlayerMails::iterator itr = m_mail.begin(); itr != m_mail.end(); ++itr)
         delete *itr;
 
+    // 删除M物品映射中的物品
     for (ItemMap::iterator iter = mMitems.begin(); iter != mMitems.end(); ++iter)
-        delete iter->second;                                //if item is duplicated... then server may crash ... but that item should be deallocated
+        delete iter->second;  // 如果物品重复，服务器可能崩溃，但该物品应该被释放
 
+    // 删除玩家对话菜单
     delete PlayerTalkClass;
 
+    // 删除套装效果
     for (size_t x = 0; x < ItemSetEff.size(); x++)
         delete ItemSetEff[x];
 
+    // 删除名字变格数据
     delete m_declinedname;
+    // 删除符文数据（死亡骑士）
     delete m_runes;
+    // 删除成就管理器
     delete m_achievementMgr;
+    // 删除声望管理器
     delete m_reputationMgr;
+    // 删除电影管理器
     delete _cinematicMgr;
 
+    // 减少世界玩家计数
     sWorld->DecreasePlayerCount();
 }
 
+/**
+ * @brief 删除前的清理工作
+ *
+ * 在删除玩家对象之前执行必要的清理操作
+ *
+ * @param finalCleanup 是否执行最终清理
+ *
+ * 清理流程：
+ * 1. 取消所有正在进行的交易
+ * 2. 中断所有决斗
+ * 3. 调用基类的清理函数
+ * 4. 清理玩家-实例绑定，可能卸载一些实例存档
+ *
+ * 调用时机：
+ * - 玩家角色删除前
+ * - 服务器关闭时
+ * - 角色转移前
+ */
 void Player::CleanupsBeforeDelete(bool finalCleanup)
 {
+    // 取消交易（不回退交易）
     TradeCancel(false);
+    // 中断决斗
     DuelComplete(DUEL_INTERRUPTED);
 
+    // 调用基类的清理函数
     Unit::CleanupsBeforeDelete(finalCleanup);
 
-    // clean up player-instance binds, may unload some instance saves
+    // 清理玩家-实例绑定，可能卸载一些实例存档
     for (uint8 i = 0; i < MAX_DIFFICULTY; ++i)
         for (BoundInstancesMap::iterator itr = m_boundInstances[i].begin(); itr != m_boundInstances[i].end(); ++itr)
             itr->second.save->RemovePlayer(this);
 }
 
+/**
+ * @brief 创建新角色
+ *
+ * 创建一个全新的玩家角色，设置初始属性和物品
+ *
+ * @param guidlow 角色GUID的低32位
+ * @param createInfo 角色创建信息结构体
+ * @return 创建成功返回true，失败返回false
+ *
+ * 创建流程：
+ * 1. 验证种族/职业组合的有效性
+ * 2. 设置角色的基础属性（种族、职业、性别、外观等）
+ * 3. 初始化位置和地图
+ * 4. 设置初始等级、金钱、荣誉点数等
+ * 5. 学习初始技能和法术
+ * 6. 添加初始物品和装备
+ * 7. 设置动作条
+ *
+ * 验证检查：
+ * - 种族/职业组合是否合法
+ * - 性别是否有效
+ * - 外观属性是否合法
+ *
+ * 性能考虑：
+ * - 避免在创建过程中进行数据库查询
+ * - 使用预定义的初始物品列表
+ *
+ * 安全注意：
+ * - 需要防止数据包修改攻击
+ * - 所有客户端发送的数据都需要验证
+ */
 bool Player::Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo)
 {
-    //FIXME: outfitId not used in player creating
-    /// @todo need more checks against packet modifications
+    // FIXME: outfitId 在玩家创建中未使用
+    /// @todo 需要更多检查来防止数据包修改
 
+    // 创建对象基础
     Object::_Create(guidlow, 0, HighGuid::Player);
 
+    // 设置角色名称
     m_name = createInfo->Name;
 
+    // 获取玩家信息（初始位置、技能等）
     PlayerInfo const* info = sObjectMgr->GetPlayerInfo(createInfo->Race, createInfo->Class);
     if (!info)
     {
@@ -470,11 +750,14 @@ bool Player::Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo
         return false;
     }
 
+    // 初始化所有物品槽位为空
     for (uint8 i = 0; i < PLAYER_SLOTS_COUNT; i++)
         m_items[i] = nullptr;
 
+    // 设置初始位置和朝向
     Relocate(info->positionX, info->positionY, info->positionZ, info->orientation);
 
+    // 获取职业信息
     ChrClassesEntry const* cEntry = sChrClassesStore.LookupEntry(createInfo->Class);
     if (!cEntry)
     {
@@ -483,14 +766,19 @@ bool Player::Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo
         return false;
     }
 
+    // 设置所在地图
     SetMap(sMapMgr->CreateMap(info->mapId, this));
 
+    // 获取能量类型
     uint8 powertype = cEntry->DisplayPower;
 
+    // 设置对象缩放比例
     SetObjectScale(1.0f);
 
+    // 根据种族设置阵营
     SetFactionForRace(createInfo->Race);
 
+    // 验证性别是否有效
     if (!IsValidGender(createInfo->Gender))
     {
         TC_LOG_ERROR("entities.player.cheat", "Player::Create: Possible hacking attempt: Account {} tried to create a character named '{}' with an invalid gender ({}) - refusing to do so",
@@ -498,6 +786,7 @@ bool Player::Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo
         return false;
     }
 
+    // 验证外观属性是否合法
     if (!ValidateAppearance(createInfo->Race, createInfo->Class, createInfo->Gender, createInfo->HairStyle, createInfo->HairColor, createInfo->Face, createInfo->FacialHair, createInfo->Skin, true))
     {
         TC_LOG_ERROR("entities.player.cheat", "Player::Create: Possible hacking attempt: Account {} tried to create a character named '{}' with invalid appearance attributes - refusing to do so",
@@ -505,49 +794,61 @@ bool Player::Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo
         return false;
     }
 
+    // 设置种族、职业、性别
     SetRace(createInfo->Race);
     SetClass(createInfo->Class);
     SetGender(Gender(createInfo->Gender));
     SetPowerType(Powers(powertype), false);
     InitDisplayIds();
+
+    // 如果是PVP或RPPVP服务器，设置PVP标志
     if (sWorld->getIntConfig(CONFIG_GAME_TYPE) == REALM_TYPE_PVP || sWorld->getIntConfig(CONFIG_GAME_TYPE) == REALM_TYPE_RPPVP)
     {
         SetPvpFlag(UNIT_BYTE2_FLAG_PVP);
         SetUnitFlag(UNIT_FLAG_PLAYER_CONTROLLED);
     }
+
+    // 设置单位标志
     SetUnitFlag2(UNIT_FLAG2_REGENERATE_POWER);
-    SetModCastingSpeed(1.0f);               // fix cast time showed in spell tooltip on client
-    SetHoverHeight(1.0f);            // default for players in 3.0.3
+    SetModCastingSpeed(1.0f);               // 修复客户端法术提示中显示的施法时间
+    SetHoverHeight(1.0f);                   // 3.0.3中玩家的默认悬停高度
 
-    SetInt32Value(PLAYER_FIELD_WATCHED_FACTION_INDEX, uint32(-1));  // -1 is default value
+    // 设置监视的阵营索引（-1为默认值，表示无）
+    SetInt32Value(PLAYER_FIELD_WATCHED_FACTION_INDEX, uint32(-1));
 
-    SetSkinId(createInfo->Skin);
-    SetFaceId(createInfo->Face);
-    SetHairStyleId(createInfo->HairStyle);
-    SetHairColorId(createInfo->HairColor);
-    SetFacialStyle(createInfo->FacialHair);
+    // 设置外观属性
+    SetSkinId(createInfo->Skin);            // 皮肤ID
+    SetFaceId(createInfo->Face);            // 脸型ID
+    SetHairStyleId(createInfo->HairStyle);  // 发型ID
+    SetHairColorId(createInfo->HairColor);  // 发色ID
+    SetFacialStyle(createInfo->FacialHair); // 面部样式（胡须等）
     SetRestState((GetSession()->IsARecruiter() || GetSession()->GetRecruiterId() != 0) ? REST_STATE_RAF_LINKED : REST_STATE_NOT_RAF_LINKED);
     SetNativeGender(Gender(createInfo->Gender));
     SetArenaFaction(0);
 
+    // 初始化公会信息（无公会）
     SetUInt32Value(PLAYER_GUILDID, 0);
     SetRank(0);
     SetUInt32Value(PLAYER_GUILD_TIMESTAMP, 0);
 
+    // 初始化称号（无称号）
     for (int i = 0; i < KNOWN_TITLES_SIZE; ++i)
-        SetUInt64Value(PLAYER__FIELD_KNOWN_TITLES + i, 0);  // 0=disabled
+        SetUInt64Value(PLAYER__FIELD_KNOWN_TITLES + i, 0);  // 0=禁用
     SetUInt32Value(PLAYER_CHOSEN_TITLE, 0);
 
+    // 初始化击杀和荣誉数据
     SetUInt32Value(PLAYER_FIELD_KILLS, 0);
     SetUInt32Value(PLAYER_FIELD_LIFETIME_HONORABLE_KILLS, 0);
     SetUInt32Value(PLAYER_FIELD_TODAY_CONTRIBUTION, 0);
     SetUInt32Value(PLAYER_FIELD_YESTERDAY_CONTRIBUTION, 0);
 
-    // set starting level
+    // 设置起始等级
+    // 死亡骑士有特殊的起始等级
     uint32 start_level = GetClass() != CLASS_DEATH_KNIGHT
         ? sWorld->getIntConfig(CONFIG_START_PLAYER_LEVEL)
         : sWorld->getIntConfig(CONFIG_START_DEATH_KNIGHT_PLAYER_LEVEL);
 
+    // 如果玩家有GM权限，可以使用GM起始等级
     if (m_session->HasPermission(rbac::RBAC_PERM_USE_START_GM_LEVEL))
     {
         uint32 gm_level = GetClass() != CLASS_DEATH_KNIGHT
@@ -558,40 +859,45 @@ bool Player::Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo
             start_level = gm_level;
     }
 
+    // 设置等级
     SetLevel(start_level, false);
 
+    // 初始化符文（死亡骑士）
     InitRunes();
 
+    // 设置初始金钱、荣誉点数和竞技场点数
     SetMoney(sWorld->getIntConfig(CONFIG_START_PLAYER_MONEY));
     SetHonorPoints(sWorld->getIntConfig(CONFIG_START_HONOR_POINTS));
     SetArenaPoints(sWorld->getIntConfig(CONFIG_START_ARENA_POINTS));
 
-    // Played time
+    // 初始化游戏时间
     m_Last_tick = GameTime::GetGameTime();
     m_Played_time[PLAYED_TIME_TOTAL] = 0;
     m_Played_time[PLAYED_TIME_LEVEL] = 0;
 
-    // base stats and related field values
+    // 初始化基础属性和相关字段值
     InitStatsForLevel();
     InitTaxiNodesForLevel();
     InitGlyphsForLevel();
     InitTalentForLevel();
-    InitPrimaryProfessions();                               // to max set before any spell added
+    InitPrimaryProfessions();               // 在添加任何法术前设置为最大
 
-    // apply original stats mods before spell loading or item equipment that call before equip _RemoveStatsMods()
-    UpdateMaxHealth();                                      // Update max Health (for add bonus from stamina)
+    // 在加载法术或装备物品前应用原始属性修改器
+    UpdateMaxHealth();                      // 更新最大生命值（添加耐力加成）
     SetFullHealth();
     SetFullPower(POWER_MANA);
 
-    // original spells
+    // 学习默认技能
     LearnDefaultSkills();
+    // 学习自定义法术
     LearnCustomSpells();
 
-    // original action bar
+    // 设置原始动作条
     for (PlayerCreateInfoActions::const_iterator action_itr = info->action.begin(); action_itr != info->action.end(); ++action_itr)
         addActionButton(action_itr->button, action_itr->action, action_itr->type);
 
-    // original items
+    // 添加初始物品
+    // 从角色初始装备表中获取物品
     if (CharStartOutfitEntry const* oEntry = GetCharStartOutfitEntry(createInfo->Race, createInfo->Class, createInfo->Gender))
     {
         for (int j = 0; j < MAX_OUTFIT_ITEMS; ++j)
@@ -601,52 +907,54 @@ bool Player::Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo
 
             uint32 itemId = oEntry->ItemID[j];
 
-            // just skip, reported in ObjectMgr::LoadItemTemplates
+            // 跳过无效物品（已在ObjectMgr::LoadItemTemplates中报告）
             ItemTemplate const* iProto = sObjectMgr->GetItemTemplate(itemId);
             if (!iProto)
                 continue;
 
-            // BuyCount by default
+            // 默认使用物品的购买数量
             uint32 count = iProto->BuyCount;
 
-            // special amount for food/drink
+            // 为食物/饮料设置特殊数量
             if (iProto->Class == ITEM_CLASS_CONSUMABLE && iProto->SubClass == ITEM_SUBCLASS_FOOD)
             {
                 switch (iProto->Spells[0].SpellCategory)
                 {
-                    case SPELL_CATEGORY_FOOD:                                // food
+                    case SPELL_CATEGORY_FOOD:  // 食物
                         count = GetClass() == CLASS_DEATH_KNIGHT ? 10 : 4;
                         break;
-                    case SPELL_CATEGORY_DRINK:                                // drink
+                    case SPELL_CATEGORY_DRINK: // 饮料
                         count = 2;
                         break;
                 }
                 if (iProto->GetMaxStackSize() < count)
                     count = iProto->GetMaxStackSize();
             }
+            // 在最佳槽位存储新物品
             StoreNewItemInBestSlots(itemId, count);
         }
     }
 
+    // 添加种族/职业特定的初始物品
     for (PlayerCreateInfoItems::const_iterator item_id_itr = info->item.begin(); item_id_itr != info->item.end(); ++item_id_itr)
         StoreNewItemInBestSlots(item_id_itr->item_id, item_id_itr->item_amount);
 
-    // bags and main-hand weapon must equipped at this moment
-    // now second pass for not equipped (offhand weapon/shield if it attempt equipped before main-hand weapon)
-    // or ammo not equipped in special bag
+    // 此时背包和主手武器必须已装备
+    // 第二次处理未装备的物品（副手武器/盾牌如果在主手武器前尝试装备）
+    // 或未在特殊背包中装备的弹药
     for (uint8 i = INVENTORY_SLOT_ITEM_START; i < INVENTORY_SLOT_ITEM_END; i++)
     {
         if (Item* pItem = GetItemByPos(INVENTORY_SLOT_BAG_0, i))
         {
             uint16 eDest;
-            // equip offhand weapon/shield if it attempt equipped before main-hand weapon
+            // 如果副手武器/盾牌在主手武器前尝试装备，则装备它
             InventoryResult msg = CanEquipItem(NULL_SLOT, eDest, pItem, false);
             if (msg == EQUIP_ERR_OK)
             {
                 RemoveItem(INVENTORY_SLOT_BAG_0, i, true);
                 EquipItem(eDest, pItem, true);
             }
-            // move other items to more appropriate slots (ammo not equipped in special bag)
+            // 将其他物品移动到更合适的槽位（未在特殊背包中装备的弹药）
             else
             {
                 ItemPosCountVec sDest;
@@ -657,15 +965,16 @@ bool Player::Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo
                     StoreItem(sDest, pItem, true);
                 }
 
-                // if  this is ammo then use it
+                // 如果是弹药则使用它
                 msg = CanUseAmmo(pItem->GetEntry());
                 if (msg == EQUIP_ERR_OK)
                     SetAmmo(pItem->GetEntry());
             }
         }
     }
-    // all item positions resolved
+    // 所有物品位置已解决
 
+    // 初始化威胁管理器
     GetThreatManager().Initialize();
 
     return true;
@@ -1014,6 +1323,35 @@ void Player::UpdateInvisibilityDrunkDetect()
         UpdateObjectVisibility();
 }
 
+// ============================================================================
+// Player::Update - 玩家更新主循环
+// ============================================================================
+// 职责：驱动玩家的每帧更新，处理邮件、战斗、任务、状态恢复等核心逻辑
+//
+// 参数：
+//   p_time - 距离上一帧的时间差（毫秒），由 WorldSession::Update() 传入
+//
+// 调用时机：由 WorldSession::Update() 每帧调用，频率取决于服务器 tick rate
+//
+// 性能注意：
+//   - 此函数是性能关键路径，应避免阻塞操作
+//   - 数据库操作应异步或延迟执行
+//   - 避免在此函数中进行复杂计算
+//
+// 主要处理内容：
+//   1. 邮件投递检查
+//   2. 过场动画更新
+//   3. PvP/决斗状态更新
+//   4. 定时任务检查
+//   5. 近战攻击处理
+//   6. 休息状态计算
+//   7. 区域更新
+//   8. 生命/法力恢复
+//   9. 死亡状态处理
+//  10. 自动保存
+//  11. 溺水处理
+//  12. 死亡骑士符文更新
+// ============================================================================
 void Player::Update(uint32 p_time)
 {
     if (!IsInWorld())
@@ -2458,6 +2796,26 @@ void Player::SendLogXPGain(uint32 GivenXP, Unit* victim, uint32 BonusXP, bool re
     SendDirectMessage(&data);
 }
 
+// ============================================================================
+// Player::GiveXP - 给予玩家经验值
+// ============================================================================
+// 职责：给予玩家经验值，处理休息加成、RaF加成，并处理升级
+//
+// 参数：
+//   xp         - 基础经验值
+//   victim     - 击杀的目标单位（可为nullptr，如任务奖励）
+//   group_rate - 组队经验倍率
+//
+// 调用时机：
+//   - 击杀怪物获得经验时
+//   - 完成任务获得经验时
+//   - 探索区域获得经验时
+//
+// 注意事项：
+//   - RaF（招募好友）加成与休息加成不叠加
+//   - 最大等级时经验值不再增加
+//   - 可能触发多次升级
+// ============================================================================
 void Player::GiveXP(uint32 xp, Unit* victim, float group_rate)
 {
     if (xp < 1)
@@ -4476,6 +4834,25 @@ void Player::BuildPlayerRepop()
     sScriptMgr->OnPlayerRepop(this);
 }
 
+// ============================================================================
+// Player::ResurrectPlayer - 玩家复活
+// ============================================================================
+// 职责：处理玩家复活，恢复生命/法力，应用复活虚弱
+//
+// 参数：
+//   restore_percent - 生命/法力恢复百分比（0.0-1.0）
+//   applySickness   - 是否应用复活虚弱效果
+//
+// 调用时机：
+//   - 玩家接受复活（灵魂医者、技能复活等）
+//   - 使用复活道具
+//   - GM 命令复活
+//
+// 复活虚弱规则：
+//   - 1-10级：不受影响
+//   - 11-19级：每超过10级一级，虚弱1分钟
+//   - 20级及以上：虚弱10分钟
+// ============================================================================
 void Player::ResurrectPlayer(float restore_percent, bool applySickness)
 {
     WorldPackets::Misc::DeathReleaseLoc packet;
@@ -4561,6 +4938,26 @@ void Player::RemoveGhoul()
     RemoveAura(SPELL_DK_RAISE_ALLY);
 }
 
+// ============================================================================
+// Player::KillPlayer - 处理玩家死亡
+// ============================================================================
+// 职责：处理玩家死亡时的状态转换和尸体相关逻辑
+//
+// 参数：无
+// 返回值：无
+//
+// 调用时机：
+//   - 由 Player::Update() 检测到 m_deathState == JUST_DIED 时调用
+//   - 由 setDeathState(JUST_DIED) 触发
+//
+// 处理内容：
+//   1. 处理飞行中死亡（开始下落）
+//   2. 设置移动状态为定身
+//   3. 停止各种计时器（呼吸、疲劳等）
+//   4. 设置死亡状态为尸体
+//   5. 计算6分钟的尸体回收倒计时
+//   6. 发送尸体回收延迟信息
+// ============================================================================
 void Player::KillPlayer()
 {
     if (IsFlying() && !GetTransport())
@@ -17067,6 +17464,26 @@ bool Player::IsLoading() const
     return GetSession()->PlayerLoading();
 }
 
+// ============================================================================
+// Player::LoadFromDB - 从数据库加载角色数据
+// ============================================================================
+// 职责：从数据库加载角色的所有数据，包括基础属性、装备、技能、任务等
+//
+// 参数：
+//   guid   - 角色的全局唯一标识符
+//   holder - 预先查询好的数据库结果集容器
+//
+// 返回值：
+//   true  - 加载成功
+//   false - 加载失败（角色不存在、账号不匹配、被禁封等）
+//
+// 调用时机：玩家登录时，在验证账号后调用
+//
+// 性能注意：
+//   - 使用 QueryHolder 预加载数据，减少数据库查询次数
+//   - 加载过程是同步的，应确保数据库响应迅速
+//   - 加载失败会导致玩家无法进入游戏
+// ============================================================================
 bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& holder)
 {
     //                                                       0     1        2     3     4      5       6      7   8      9     10    11         12         13           14         15         16
@@ -19190,6 +19607,19 @@ bool Player::_LoadHomeBind(PreparedQueryResult result)
 /***                   SAVE SYSTEM                     ***/
 /*********************************************************/
 
+// ============================================================================
+// Player::SaveToDB - 保存角色数据到数据库（无事务版本）
+// ============================================================================
+// 职责：创建事务并保存角色数据，是简化版的保存接口
+//
+// 参数：
+//   create - 是否为新创建的角色（true=INSERT，false=UPDATE）
+//
+// 调用时机：
+//   - 自动保存定时器触发时
+//   - 角色登出时
+//   - 手动调用保存时
+// ============================================================================
 void Player::SaveToDB(bool create /*=false*/)
 {
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();

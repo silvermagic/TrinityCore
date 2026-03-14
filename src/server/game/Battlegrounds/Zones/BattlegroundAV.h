@@ -15,6 +15,23 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file BattlegroundAV.h
+ * @brief 奥特兰克山谷战场头文件
+ *
+ * 本文件定义了奥特兰克山谷（Alterac Valley）战场的核心数据结构和类。
+ * 奥特兰克山谷是一个大型40v40的战场，联盟和部落为了争夺奥特兰克山谷的控制权而战。
+ *
+ * 主要特点：
+ * - 摧毁敌方碉堡/塔楼可以获得优势
+ * - 占领墓地可以控制复活点
+ * - 击杀敌方将军可以获胜
+ * - 矿井资源采集系统
+ * - 空袭和骑兵等特殊战术
+ *
+ * @author TrinityCore Team
+ */
+
 #ifndef __BATTLEGROUNDAV_H
 #define __BATTLEGROUNDAV_H
 
@@ -23,352 +40,479 @@
 #include "GameObjectData.h"
 #include "Object.h"
 
-#define BG_AV_CAPTIME                    240000  //4:00
-#define BG_AV_SNOWFALL_FIRSTCAP          300000  //5:00 but i also have seen 4:05
+/**
+ * @name 战场计时器常量
+ * @{
+ */
+#define BG_AV_CAPTIME                    240000  ///< 占领旗帜所需时间：4分钟（4:00）
+#define BG_AV_SNOWFALL_FIRSTCAP          300000  ///< 雪落墓地首次占领时间：5分钟（5:00），但也曾出现过4:05的情况
+/** @} */
 
-#define BG_AV_SCORE_INITIAL_POINTS       600
-#define SEND_MSG_NEAR_LOSE               120
+/**
+ * @name 分数相关常量
+ * @{
+ */
+#define BG_AV_SCORE_INITIAL_POINTS       600     ///< 初始分数：600分
+#define SEND_MSG_NEAR_LOSE               120     ///< 接近失败时发送警告消息的分数阈值：120分
+/** @} */
 
-#define BG_AV_KILL_BOSS                 4
-#define BG_AV_REP_BOSS                  350
+/**
+ * @name 击杀首领奖励常量
+ * @{
+ */
+#define BG_AV_KILL_BOSS                 4        ///< 击杀敌方将军获得的荣誉点数
+#define BG_AV_REP_BOSS                  350      ///< 击杀敌方将军获得的声望值
+/** @} */
 
-#define BG_AV_KILL_CAPTAIN              3
-#define BG_AV_REP_CAPTAIN               125
-#define BG_AV_RES_CAPTAIN               100
+/**
+ * @name 击杀队长奖励常量
+ * @{
+ */
+#define BG_AV_KILL_CAPTAIN              3        ///< 击杀敌方队长获得的荣誉点数
+#define BG_AV_REP_CAPTAIN               125      ///< 击杀敌方队长获得的声望值
+#define BG_AV_RES_CAPTAIN               100      ///< 击杀敌方队长获得的资源值
+/** @} */
 
-#define BG_AV_KILL_TOWER                3
-#define BG_AV_REP_TOWER                 12
-#define BG_AV_RES_TOWER                 75
+/**
+ * @name 摧毁塔楼奖励常量
+ * @{
+ */
+#define BG_AV_KILL_TOWER                3        ///< 摧毁敌方塔楼获得的荣誉点数
+#define BG_AV_REP_TOWER                 12       ///< 摧毁敌方塔楼获得的声望值
+#define BG_AV_RES_TOWER                 75       ///< 摧毁敌方塔楼获得的资源值
+/** @} */
 
-#define BG_AV_GET_COMMANDER            1 //for a safely returned wingcommander
-//bonushonor at the end
-#define BG_AV_KILL_SURVIVING_TOWER      2
-#define BG_AV_REP_SURVIVING_TOWER       12
+/**
+ * @name 其他奖励常量
+ * @{
+ */
+#define BG_AV_GET_COMMANDER            1         ///< 成功返回空军指挥官获得的奖励（用于安全的返回空军指挥官）
+/** @} */
 
-#define BG_AV_KILL_SURVIVING_CAPTAIN    2
-#define BG_AV_REP_SURVIVING_CAPTAIN     125
+/**
+ * @name 战斗结束时的奖励常量
+ * @{
+ */
+#define BG_AV_KILL_SURVIVING_TOWER      2        ///< 战斗结束时存活的塔楼奖励荣誉点数
+#define BG_AV_REP_SURVIVING_TOWER       12       ///< 战斗结束时存活的塔楼奖励声望值
 
-#define BG_AV_EVENT_START_BATTLE           9166 // Achievement: The Alterac Blitz
+#define BG_AV_KILL_SURVIVING_CAPTAIN    2        ///< 战斗结束时存活的队长奖励荣誉点数
+#define BG_AV_REP_SURVIVING_CAPTAIN     125      ///< 战斗结束时存活的队长奖励声望值
+/** @} */
 
+#define BG_AV_EVENT_START_BATTLE           9166 ///< 战斗开始事件ID（成就：奥特兰克闪电战）
+
+/**
+ * @enum SharedActions
+ * @brief 共享动作枚举
+ *
+ * 定义了在奥特兰克山谷中使用的共享动作ID
+ */
 enum SharedActions
 {
-    ACTION_BUFF_YELL    = -30001
+    ACTION_BUFF_YELL    = -30001  ///< 增益喊话动作
 };
 
+/**
+ * @enum BG_AV_BroadcastTexts
+ * @brief 广播文本ID枚举
+ *
+ * 定义了奥特兰克山谷战场中使用的各种广播文本ID
+ */
 enum BG_AV_BroadcastTexts
 {
-    BG_AV_TEXT_START_ONE_MINUTE     = 10638,
-    BG_AV_TEXT_START_HALF_MINUTE    = 10639,
-    BG_AV_TEXT_BATTLE_HAS_BEGUN     = 10640,
+    BG_AV_TEXT_START_ONE_MINUTE     = 10638,  ///< 战斗开始前1分钟提示
+    BG_AV_TEXT_START_HALF_MINUTE    = 10639,  ///< 战斗开始前30秒提示
+    BG_AV_TEXT_BATTLE_HAS_BEGUN     = 10640,  ///< 战斗已经开始提示
 
-    BG_AV_TEXT_ALLIANCE_NEAR_LOSE   = 23210,
-    BG_AV_TEXT_HORDE_NEAR_LOSE      = 23211
+    BG_AV_TEXT_ALLIANCE_NEAR_LOSE   = 23210,  ///< 联盟即将失败警告
+    BG_AV_TEXT_HORDE_NEAR_LOSE      = 23211   ///< 部落即将失败警告
 };
 
+/**
+ * @enum BG_AV_Sounds
+ * @brief 战场音效枚举
+ *
+ * 定义了奥特兰克山谷战场中使用的各种音效ID
+ *
+ * @todo 确认中立队伍占领矿井时是否有音效
+ */
 enum BG_AV_Sounds
-{ /// @todo: get out if there comes a sound when neutral team captures mine
+{
+    /*
+    8212:
+        alliance grave assault - 联盟墓地进攻
+        alliance tower assault - 联盟塔楼进攻
+        drek "mlanzenabschaum! In meiner Burg?! Toetet sie all" - nicht immer der sound
+    8333:
+        galv "sterbt fuer euch ist kein platz hier"
 
-/*
-8212:
-    alliance grave assault
-    alliance tower assault
-    drek "mlanzenabschaum! In meiner Burg?! Toetet sie all" - nicht immer der sound
-8333:
-    galv "sterbt fuer euch ist kein platz hier"
-
-8332:
-    bal "Verschwinde, dreckiger Abschaum! Die Allianz wird im Alteractal "
-8174:
-    horde tower assault
-    horde grave assault
-    van "es Sturmlanzenklans, euer General wird angegriffen! Ich fordere Unterst"
-8173:
-    ally grave capture/defend
-    tower destroy
-    mine capture
-    ally wins
-8192:
-    ally tower destroy(only iceblood - found a bug^^)
-    ally tower defend
-    horde tower defend
-8213
-horde:
-    grave defend/capture
-    tower destroy
-    mine capture
-    horde wins
+    8332:
+        bal "Verschwinde, dreckiger Abschaum! Die Allianz wird im Alteractal "
+    8174:
+        horde tower assault - 部落塔楼进攻
+        horde grave assault - 部落墓地进攻
+        van "es Sturmlanzenklans, euer General wird angegriffen! Ich fordere Unterst"
+    8173:
+        ally grave capture/defend - 联盟墓地占领/防守
+        tower destroy - 塔楼摧毁
+        mine capture - 矿井占领
+        ally wins - 联盟获胜
+    8192:
+        ally tower destroy(only iceblood - found a bug^^) - 联盟塔楼摧毁（仅冰血塔楼 - 发现了一个bug）
+        ally tower defend - 联盟塔楼防守
+        horde tower defend - 部落塔楼防守
+    8213
+    horde:
+        grave defend/capture - 墓地防守/占领
+        tower destroy - 塔楼摧毁
+        mine capture - 矿井占领
+        horde wins - 部落获胜
     */
 
-    AV_SOUND_NEAR_VICTORY                   = 8456, /// @todo: Not confirmed yet
+    AV_SOUND_NEAR_VICTORY                   = 8456,  ///< 接近胜利音效 @todo 尚未确认
 
-    AV_SOUND_ALLIANCE_ASSAULTS              = 8212, //tower, grave + enemy boss if someone tries to attack him
-    AV_SOUND_HORDE_ASSAULTS                 = 8174,
-    AV_SOUND_ALLIANCE_GOOD                  = 8173, //if something good happens for the team:  wins(maybe only through killing the boss), captures mine or grave, destroys tower and defends grave
-    AV_SOUND_HORDE_GOOD                     = 8213,
-    AV_SOUND_BOTH_TOWER_DEFEND              = 8192,
+    AV_SOUND_ALLIANCE_ASSAULTS              = 8212,  ///< 联盟进攻音效（塔楼、墓地 + 敌方首领如果有人试图攻击他）
+    AV_SOUND_HORDE_ASSAULTS                 = 8174,  ///< 部落进攻音效
+    AV_SOUND_ALLIANCE_GOOD                  = 8173,  ///< 联盟好事音效（队伍发生好事时：获胜、占领矿井或墓地、摧毁塔楼、防守墓地）
+    AV_SOUND_HORDE_GOOD                     = 8213,  ///< 部落好事音效
+    AV_SOUND_BOTH_TOWER_DEFEND              = 8192,  ///< 双方塔楼防守音效
 
-    AV_SOUND_ALLIANCE_CAPTAIN               = 8232, //gets called when someone attacks them and at the beginning after 5min+rand(x)*10sec (maybe buff)
-    AV_SOUND_HORDE_CAPTAIN                  = 8333
+    AV_SOUND_ALLIANCE_CAPTAIN               = 8232,  ///< 联盟队长音效（当有人攻击他们时，以及在开始后5分钟+随机(x)*10秒时调用，可能是增益）
+    AV_SOUND_HORDE_CAPTAIN                  = 8333   ///< 部落队长音效
 };
 
+/**
+ * @enum BG_AV_OTHER_VALUES
+ * @brief 其他常量值枚举
+ *
+ * 定义了奥特兰克山谷战场中使用的其他常量值
+ */
 enum BG_AV_OTHER_VALUES
 {
-    AV_STATICCPLACE_MAX        = 123,
-    AV_NORTH_MINE              = 0,
-    AV_SOUTH_MINE              = 1,
-    AV_MINE_TICK_TIMER         = 45000,
-    AV_MINE_RECLAIM_TIMER      = 1200000, /// @todo: get the right value.. this is currently 20 minutes
-    AV_NEUTRAL_TEAM            = 0 //this is the neutral owner of snowfall
+    AV_STATICCPLACE_MAX        = 123,      ///< 静态生物位置最大值
+    AV_NORTH_MINE              = 0,        ///< 北部矿井索引（铁深矿井）
+    AV_SOUTH_MINE              = 1,        ///< 南部矿井索引（冷齿矿井）
+    AV_MINE_TICK_TIMER         = 45000,    ///< 矿井产出计时器：45秒
+    AV_MINE_RECLAIM_TIMER      = 1200000,  ///< 矿井回收计时器：20分钟 @todo 需要获取正确的数值
+    AV_NEUTRAL_TEAM            = 0         ///< 中立队伍（雪落墓地的中立拥有者）
 };
+/**
+ * @enum BG_AV_ObjectIds
+ * @brief 游戏对象ID枚举
+ *
+ * 定义了奥特兰克山谷战场中使用的各种游戏对象ID
+ * 由于mangos系统略有不同，我们没有为每个节点使用正确的游戏对象ID。
+ * 如果想要100%像其他大型服务器，必须为每个节点使用一个对象。
+ */
 enum BG_AV_ObjectIds
 {
-    //cause the mangos-system is a bit different, we don't use the right go-ids for every node.. if we want to be 100% like another big server, we must take one object for every node
-    //snowfall 4flags as eyecandy 179424 (alliance neutral)
-    //Banners - stolen from battleground_AB.h ;-)
-    BG_AV_OBJECTID_BANNER_A             = 178925, // can only be used by horde
-    BG_AV_OBJECTID_BANNER_H             = 178943, // can only be used by alliance
-    BG_AV_OBJECTID_BANNER_CONT_A        = 178940, // can only be used by horde
-    BG_AV_OBJECTID_BANNER_CONT_H        = 179435, // can only be used by alliance
+    // 因为mangos系统略有不同，我们没有为每个节点使用正确的游戏对象ID
+    // 如果想要100%像其他大型服务器，必须为每个节点使用一个对象
+    // 雪落墓地：4面旗帜作为装饰 179424（联盟中立）
+    // 旗帜 - 从 battleground_AB.h 借用 ;-)
 
-    BG_AV_OBJECTID_BANNER_A_B           = 178365,
-    BG_AV_OBJECTID_BANNER_H_B           = 178364,
-    BG_AV_OBJECTID_BANNER_CONT_A_B      = 179286,
-    BG_AV_OBJECTID_BANNER_CONT_H_B      = 179287,
-    BG_AV_OBJECTID_BANNER_SNOWFALL_N    = 180418,
+    BG_AV_OBJECTID_BANNER_A             = 178925,  ///< 联盟旗帜（只能被部落使用）
+    BG_AV_OBJECTID_BANNER_H             = 178943,  ///< 部落旗帜（只能被联盟使用）
+    BG_AV_OBJECTID_BANNER_CONT_A        = 178940,  ///< 联盟争夺中旗帜（只能被部落使用）
+    BG_AV_OBJECTID_BANNER_CONT_H        = 179435,  ///< 部落争夺中旗帜（只能被联盟使用）
 
-    //snowfall eyecandy banner:
-    BG_AV_OBJECTID_SNOWFALL_CANDY_A     = 179044,
-    BG_AV_OBJECTID_SNOWFALL_CANDY_PA    = 179424,
-    BG_AV_OBJECTID_SNOWFALL_CANDY_H     = 179064,
-    BG_AV_OBJECTID_SNOWFALL_CANDY_PH    = 179425,
+    BG_AV_OBJECTID_BANNER_A_B           = 178365,  ///< 联盟旗帜B（用于塔楼）
+    BG_AV_OBJECTID_BANNER_H_B           = 178364,  ///< 部落旗帜B（用于塔楼）
+    BG_AV_OBJECTID_BANNER_CONT_A_B      = 179286,  ///< 联盟争夺中旗帜B（用于塔楼）
+    BG_AV_OBJECTID_BANNER_CONT_H_B      = 179287,  ///< 部落争夺中旗帜B（用于塔楼）
+    BG_AV_OBJECTID_BANNER_SNOWFALL_N    = 180418,  ///< 雪落墓地中立旗帜
 
-    //banners on top of towers:
-    BG_AV_OBJECTID_TOWER_BANNER_A       = 178927, //[PH] Alliance A1 Tower Banner BIG
-    BG_AV_OBJECTID_TOWER_BANNER_H       = 178955, //[PH] Horde H1 Tower Banner BIG
-    BG_AV_OBJECTID_TOWER_BANNER_PA      = 179446, //[PH] Alliance H1 Tower Pre-Banner BIG
-    BG_AV_OBJECTID_TOWER_BANNER_PH      = 179436, //[PH] Horde A1 Tower Pre-Banner BIG
+    // 雪落墓地装饰旗帜
+    BG_AV_OBJECTID_SNOWFALL_CANDY_A     = 179044,  ///< 雪落墓地联盟装饰旗帜
+    BG_AV_OBJECTID_SNOWFALL_CANDY_PA    = 179424,  ///< 雪落墓地联盟前装饰旗帜
+    BG_AV_OBJECTID_SNOWFALL_CANDY_H     = 179064,  ///< 雪落墓地部落装饰旗帜
+    BG_AV_OBJECTID_SNOWFALL_CANDY_PH    = 179425,  ///< 雪落墓地部落前装饰旗帜
 
-    //Auras
-    BG_AV_OBJECTID_AURA_A               = 180421,
-    BG_AV_OBJECTID_AURA_H               = 180422,
-    BG_AV_OBJECTID_AURA_N               = 180423,
-    BG_AV_OBJECTID_AURA_A_S             = 180100,
-    BG_AV_OBJECTID_AURA_H_S             = 180101,
-    BG_AV_OBJECTID_AURA_N_S             = 180102,
+    // 塔楼顶部的大旗帜
+    BG_AV_OBJECTID_TOWER_BANNER_A       = 178927,  ///< [PH] 联盟A1塔楼大旗帜
+    BG_AV_OBJECTID_TOWER_BANNER_H       = 178955,  ///< [PH] 部落H1塔楼大旗帜
+    BG_AV_OBJECTID_TOWER_BANNER_PA      = 179446,  ///< [PH] 联盟H1塔楼前大旗帜
+    BG_AV_OBJECTID_TOWER_BANNER_PH      = 179436,  ///< [PH] 部落A1塔楼前大旗帜
 
-    BG_AV_OBJECTID_GATE_A               = 180424,
-    BG_AV_OBJECTID_GATE_H               = 180424,
+    // 光环
+    BG_AV_OBJECTID_AURA_A               = 180421,  ///< 联盟光环
+    BG_AV_OBJECTID_AURA_H               = 180422,  ///< 部落光环
+    BG_AV_OBJECTID_AURA_N               = 180423,  ///< 中立光环
+    BG_AV_OBJECTID_AURA_A_S             = 180100,  ///< 联盟小光环
+    BG_AV_OBJECTID_AURA_H_S             = 180101,  ///< 部落小光环
+    BG_AV_OBJECTID_AURA_N_S             = 180102,  ///< 中立小光环
 
-    //mine supplies
-    BG_AV_OBJECTID_MINE_N               = 178785,
-    BG_AV_OBJECTID_MINE_S               = 178784,
+    BG_AV_OBJECTID_GATE_A               = 180424,  ///< 联盟大门
+    BG_AV_OBJECTID_GATE_H               = 180424,  ///< 部落大门
 
-    BG_AV_OBJECTID_FIRE                 = 179065,
-    BG_AV_OBJECTID_SMOKE                = 179066
+    // 矿井补给品
+    BG_AV_OBJECTID_MINE_N               = 178785,  ///< 北部矿井补给品
+    BG_AV_OBJECTID_MINE_S               = 178784,  ///< 南部矿井补给品
+
+    BG_AV_OBJECTID_FIRE                 = 179065,  ///< 火焰效果
+    BG_AV_OBJECTID_SMOKE                = 179066   ///< 烟雾效果
 };
 
+/**
+ * @enum BG_AV_Nodes
+ * @brief 战场节点枚举
+ *
+ * 定义了奥特兰克山谷战场中的所有可占领节点
+ * 包括墓地和塔楼/碉堡
+ */
 enum BG_AV_Nodes
 {
-    BG_AV_NODES_FIRSTAID_STATION        = 0,
-    BG_AV_NODES_STORMPIKE_GRAVE         = 1,
-    BG_AV_NODES_STONEHEART_GRAVE        = 2,
-    BG_AV_NODES_SNOWFALL_GRAVE          = 3,
-    BG_AV_NODES_ICEBLOOD_GRAVE          = 4,
-    BG_AV_NODES_FROSTWOLF_GRAVE         = 5,
-    BG_AV_NODES_FROSTWOLF_HUT           = 6,
-    BG_AV_NODES_DUNBALDAR_SOUTH         = 7,
-    BG_AV_NODES_DUNBALDAR_NORTH         = 8,
-    BG_AV_NODES_ICEWING_BUNKER          = 9,
-    BG_AV_NODES_STONEHEART_BUNKER       = 10,
-    BG_AV_NODES_ICEBLOOD_TOWER          = 11,
-    BG_AV_NODES_TOWER_POINT             = 12,
-    BG_AV_NODES_FROSTWOLF_ETOWER        = 13,
-    BG_AV_NODES_FROSTWOLF_WTOWER        = 14,
+    // 墓地节点（Graveyards）
+    BG_AV_NODES_FIRSTAID_STATION        = 0,   ///< 急救站墓地（联盟初始墓地）
+    BG_AV_NODES_STORMPIKE_GRAVE         = 1,   ///< 雷矛墓地
+    BG_AV_NODES_STONEHEART_GRAVE        = 2,   ///< 石炉墓地
+    BG_AV_NODES_SNOWFALL_GRAVE          = 3,   ///< 雪落墓地（中立墓地）
+    BG_AV_NODES_ICEBLOOD_GRAVE          = 4,   ///< 冰血墓地
+    BG_AV_NODES_FROSTWOLF_GRAVE         = 5,   ///< 霜狼墓地
+    BG_AV_NODES_FROSTWOLF_HUT           = 6,   ///< 霜狼小屋墓地（部落初始墓地）
 
-    BG_AV_NODES_MAX                     = 15
+    // 联盟塔楼/碉堡（Alliance Towers/Bunkers）
+    BG_AV_NODES_DUNBALDAR_SOUTH         = 7,   ///< 丹巴达尔南部碉堡
+    BG_AV_NODES_DUNBALDAR_NORTH         = 8,   ///< 丹巴达尔北部碉堡
+    BG_AV_NODES_ICEWING_BUNKER          = 9,   ///< 冰翼碉堡
+    BG_AV_NODES_STONEHEART_BUNKER       = 10,  ///< 石炉碉堡
+
+    // 部落塔楼（Horde Towers）
+    BG_AV_NODES_ICEBLOOD_TOWER          = 11,  ///< 冰血哨塔
+    BG_AV_NODES_TOWER_POINT             = 12,  ///< 哨塔点
+    BG_AV_NODES_FROSTWOLF_ETOWER        = 13,  ///< 霜狼东塔
+    BG_AV_NODES_FROSTWOLF_WTOWER        = 14,  ///< 霜狼西塔
+
+    BG_AV_NODES_MAX                     = 15   ///< 节点总数
 };
 
+/**
+ * @enum BG_AV_ObjectTypes
+ * @brief 游戏对象类型枚举
+ *
+ * 定义了奥特兰克山谷战场中使用的所有游戏对象类型的索引
+ * 这些索引用于在战场中管理和引用特定的游戏对象
+ */
 enum BG_AV_ObjectTypes
 {
-    BG_AV_OBJECT_FLAG_A_FIRSTAID_STATION    = 0,
-    BG_AV_OBJECT_FLAG_A_STORMPIKE_GRAVE     = 1,
-    BG_AV_OBJECT_FLAG_A_STONEHEART_GRAVE    = 2,
-    BG_AV_OBJECT_FLAG_A_SNOWFALL_GRAVE      = 3,
-    BG_AV_OBJECT_FLAG_A_ICEBLOOD_GRAVE      = 4,
-    BG_AV_OBJECT_FLAG_A_FROSTWOLF_GRAVE     = 5,
-    BG_AV_OBJECT_FLAG_A_FROSTWOLF_HUT       = 6,
-    BG_AV_OBJECT_FLAG_A_DUNBALDAR_SOUTH     = 7,
-    BG_AV_OBJECT_FLAG_A_DUNBALDAR_NORTH     = 8,
-    BG_AV_OBJECT_FLAG_A_ICEWING_BUNKER      = 9,
-    BG_AV_OBJECT_FLAG_A_STONEHEART_BUNKER   = 10,
+    // 联盟控制的墓地旗帜（Alliance Controlled Graveyard Flags）
+    BG_AV_OBJECT_FLAG_A_FIRSTAID_STATION    = 0,   ///< 急救站联盟旗帜
+    BG_AV_OBJECT_FLAG_A_STORMPIKE_GRAVE     = 1,   ///< 雷矛墓地联盟旗帜
+    BG_AV_OBJECT_FLAG_A_STONEHEART_GRAVE    = 2,   ///< 石炉墓地联盟旗帜
+    BG_AV_OBJECT_FLAG_A_SNOWFALL_GRAVE      = 3,   ///< 雪落墓地联盟旗帜
+    BG_AV_OBJECT_FLAG_A_ICEBLOOD_GRAVE      = 4,   ///< 冰血墓地联盟旗帜
+    BG_AV_OBJECT_FLAG_A_FROSTWOLF_GRAVE     = 5,   ///< 霜狼墓地联盟旗帜
+    BG_AV_OBJECT_FLAG_A_FROSTWOLF_HUT       = 6,   ///< 霜狼小屋联盟旗帜
+    // 联盟控制的塔楼旗帜（Alliance Controlled Tower Flags）
+    BG_AV_OBJECT_FLAG_A_DUNBALDAR_SOUTH     = 7,   ///< 丹巴达尔南部碉堡联盟旗帜
+    BG_AV_OBJECT_FLAG_A_DUNBALDAR_NORTH     = 8,   ///< 丹巴达尔北部碉堡联盟旗帜
+    BG_AV_OBJECT_FLAG_A_ICEWING_BUNKER      = 9,   ///< 冰翼碉堡联盟旗帜
+    BG_AV_OBJECT_FLAG_A_STONEHEART_BUNKER   = 10,  ///< 石炉碉堡联盟旗帜
 
-    BG_AV_OBJECT_FLAG_C_A_FIRSTAID_STATION    = 11,
-    BG_AV_OBJECT_FLAG_C_A_STORMPIKE_GRAVE     = 12,
-    BG_AV_OBJECT_FLAG_C_A_STONEHEART_GRAVE    = 13,
-    BG_AV_OBJECT_FLAG_C_A_SNOWFALL_GRAVE      = 14,
-    BG_AV_OBJECT_FLAG_C_A_ICEBLOOD_GRAVE      = 15,
-    BG_AV_OBJECT_FLAG_C_A_FROSTWOLF_GRAVE     = 16,
-    BG_AV_OBJECT_FLAG_C_A_FROSTWOLF_HUT       = 17,
-    BG_AV_OBJECT_FLAG_C_A_ICEBLOOD_TOWER      = 18,
-    BG_AV_OBJECT_FLAG_C_A_TOWER_POINT         = 19,
-    BG_AV_OBJECT_FLAG_C_A_FROSTWOLF_ETOWER    = 20,
-    BG_AV_OBJECT_FLAG_C_A_FROSTWOLF_WTOWER    = 21,
+    // 联盟争夺中的旗帜（Alliance Contested Flags）- 用于墓地和塔楼
+    BG_AV_OBJECT_FLAG_C_A_FIRSTAID_STATION    = 11,  ///< 急救站联盟争夺旗帜
+    BG_AV_OBJECT_FLAG_C_A_STORMPIKE_GRAVE     = 12,  ///< 雷矛墓地联盟争夺旗帜
+    BG_AV_OBJECT_FLAG_C_A_STONEHEART_GRAVE    = 13,  ///< 石炉墓地联盟争夺旗帜
+    BG_AV_OBJECT_FLAG_C_A_SNOWFALL_GRAVE      = 14,  ///< 雪落墓地联盟争夺旗帜
+    BG_AV_OBJECT_FLAG_C_A_ICEBLOOD_GRAVE      = 15,  ///< 冰血墓地联盟争夺旗帜
+    BG_AV_OBJECT_FLAG_C_A_FROSTWOLF_GRAVE     = 16,  ///< 霜狼墓地联盟争夺旗帜
+    BG_AV_OBJECT_FLAG_C_A_FROSTWOLF_HUT       = 17,  ///< 霜狼小屋联盟争夺旗帜
+    BG_AV_OBJECT_FLAG_C_A_ICEBLOOD_TOWER      = 18,  ///< 冰血哨塔联盟争夺旗帜
+    BG_AV_OBJECT_FLAG_C_A_TOWER_POINT         = 19,  ///< 哨塔点联盟争夺旗帜
+    BG_AV_OBJECT_FLAG_C_A_FROSTWOLF_ETOWER    = 20,  ///< 霜狼东塔联盟争夺旗帜
+    BG_AV_OBJECT_FLAG_C_A_FROSTWOLF_WTOWER    = 21,  ///< 霜狼西塔联盟争夺旗帜
 
-    BG_AV_OBJECT_FLAG_C_H_FIRSTAID_STATION    = 22,
-    BG_AV_OBJECT_FLAG_C_H_STORMPIKE_GRAVE     = 23,
-    BG_AV_OBJECT_FLAG_C_H_STONEHEART_GRAVE    = 24,
-    BG_AV_OBJECT_FLAG_C_H_SNOWFALL_GRAVE      = 25,
-    BG_AV_OBJECT_FLAG_C_H_ICEBLOOD_GRAVE      = 26,
-    BG_AV_OBJECT_FLAG_C_H_FROSTWOLF_GRAVE     = 27,
-    BG_AV_OBJECT_FLAG_C_H_FROSTWOLF_HUT       = 28,
-    BG_AV_OBJECT_FLAG_C_H_DUNBALDAR_SOUTH     = 29,
-    BG_AV_OBJECT_FLAG_C_H_DUNBALDAR_NORTH     = 30,
-    BG_AV_OBJECT_FLAG_C_H_ICEWING_BUNKER      = 31,
-    BG_AV_OBJECT_FLAG_C_H_STONEHEART_BUNKER   = 32,
+    // 部落争夺中的旗帜（Horde Contested Flags）- 用于墓地和塔楼
+    BG_AV_OBJECT_FLAG_C_H_FIRSTAID_STATION    = 22,  ///< 急救站部落争夺旗帜
+    BG_AV_OBJECT_FLAG_C_H_STORMPIKE_GRAVE     = 23,  ///< 雷矛墓地部落争夺旗帜
+    BG_AV_OBJECT_FLAG_C_H_STONEHEART_GRAVE    = 24,  ///< 石炉墓地部落争夺旗帜
+    BG_AV_OBJECT_FLAG_C_H_SNOWFALL_GRAVE      = 25,  ///< 雪落墓地部落争夺旗帜
+    BG_AV_OBJECT_FLAG_C_H_ICEBLOOD_GRAVE      = 26,  ///< 冰血墓地部落争夺旗帜
+    BG_AV_OBJECT_FLAG_C_H_FROSTWOLF_GRAVE     = 27,  ///< 霜狼墓地部落争夺旗帜
+    BG_AV_OBJECT_FLAG_C_H_FROSTWOLF_HUT       = 28,  ///< 霜狼小屋部落争夺旗帜
+    BG_AV_OBJECT_FLAG_C_H_DUNBALDAR_SOUTH     = 29,  ///< 丹巴达尔南部碉堡部落争夺旗帜
+    BG_AV_OBJECT_FLAG_C_H_DUNBALDAR_NORTH     = 30,  ///< 丹巴达尔北部碉堡部落争夺旗帜
+    BG_AV_OBJECT_FLAG_C_H_ICEWING_BUNKER      = 31,  ///< 冰翼碉堡部落争夺旗帜
+    BG_AV_OBJECT_FLAG_C_H_STONEHEART_BUNKER   = 32,  ///< 石炉碉堡部落争夺旗帜
 
-    BG_AV_OBJECT_FLAG_H_FIRSTAID_STATION    = 33,
-    BG_AV_OBJECT_FLAG_H_STORMPIKE_GRAVE     = 34,
-    BG_AV_OBJECT_FLAG_H_STONEHEART_GRAVE    = 35,
-    BG_AV_OBJECT_FLAG_H_SNOWFALL_GRAVE      = 36,
-    BG_AV_OBJECT_FLAG_H_ICEBLOOD_GRAVE      = 37,
-    BG_AV_OBJECT_FLAG_H_FROSTWOLF_GRAVE     = 38,
-    BG_AV_OBJECT_FLAG_H_FROSTWOLF_HUT       = 39,
-    BG_AV_OBJECT_FLAG_H_ICEBLOOD_TOWER      = 40,
-    BG_AV_OBJECT_FLAG_H_TOWER_POINT         = 41,
-    BG_AV_OBJECT_FLAG_H_FROSTWOLF_ETOWER    = 42,
-    BG_AV_OBJECT_FLAG_H_FROSTWOLF_WTOWER    = 43,
+    // 部落控制的旗帜（Horde Controlled Flags）- 用于墓地和塔楼
+    BG_AV_OBJECT_FLAG_H_FIRSTAID_STATION    = 33,  ///< 急救站部落旗帜
+    BG_AV_OBJECT_FLAG_H_STORMPIKE_GRAVE     = 34,  ///< 雷矛墓地部落旗帜
+    BG_AV_OBJECT_FLAG_H_STONEHEART_GRAVE    = 35,  ///< 石炉墓地部落旗帜
+    BG_AV_OBJECT_FLAG_H_SNOWFALL_GRAVE      = 36,  ///< 雪落墓地部落旗帜
+    BG_AV_OBJECT_FLAG_H_ICEBLOOD_GRAVE      = 37,  ///< 冰血墓地部落旗帜
+    BG_AV_OBJECT_FLAG_H_FROSTWOLF_GRAVE     = 38,  ///< 霜狼墓地部落旗帜
+    BG_AV_OBJECT_FLAG_H_FROSTWOLF_HUT       = 39,  ///< 霜狼小屋部落旗帜
+    BG_AV_OBJECT_FLAG_H_ICEBLOOD_TOWER      = 40,  ///< 冰血哨塔部落旗帜
+    BG_AV_OBJECT_FLAG_H_TOWER_POINT         = 41,  ///< 哨塔点部落旗帜
+    BG_AV_OBJECT_FLAG_H_FROSTWOLF_ETOWER    = 42,  ///< 霜狼东塔部落旗帜
+    BG_AV_OBJECT_FLAG_H_FROSTWOLF_WTOWER    = 43,  ///< 霜狼西塔部落旗帜
 
-    BG_AV_OBJECT_FLAG_N_SNOWFALL_GRAVE      = 44,
+    // 中立旗帜（Neutral Flags）
+    BG_AV_OBJECT_FLAG_N_SNOWFALL_GRAVE      = 44,  ///< 雪落墓地中立旗帜
 
-    BG_AV_OBJECT_DOOR_H                     = 45,
-    BG_AV_OBJECT_DOOR_A                     = 46,
-//auras for graveyards (3auras per graveyard neutral, alliance, horde)
-    BG_AV_OBJECT_AURA_N_FIRSTAID_STATION    = 47,
-    BG_AV_OBJECT_AURA_A_FIRSTAID_STATION    = 48,
-    BG_AV_OBJECT_AURA_H_FIRSTAID_STATION    = 49,
-    BG_AV_OBJECT_AURA_N_STORMPIKE_GRAVE     = 50,
-    BG_AV_OBJECT_AURA_A_STORMPIKE_GRAVE     = 51,
-    BG_AV_OBJECT_AURA_H_STORMPIKE_GRAVE     = 52,
-    BG_AV_OBJECT_AURA_N_STONEHEART_GRAVE    = 53,
-    BG_AV_OBJECT_AURA_A_STONEHEART_GRAVE    = 54,
-    BG_AV_OBJECT_AURA_H_STONEHEART_GRAVE    = 55,
-    BG_AV_OBJECT_AURA_N_SNOWFALL_GRAVE      = 56,
-    BG_AV_OBJECT_AURA_A_SNOWFALL_GRAVE      = 57,
-    BG_AV_OBJECT_AURA_H_SNOWFALL_GRAVE      = 58,
-    BG_AV_OBJECT_AURA_N_ICEBLOOD_GRAVE      = 59,
-    BG_AV_OBJECT_AURA_A_ICEBLOOD_GRAVE      = 60,
-    BG_AV_OBJECT_AURA_H_ICEBLOOD_GRAVE      = 61,
-    BG_AV_OBJECT_AURA_N_FROSTWOLF_GRAVE     = 62,
-    BG_AV_OBJECT_AURA_A_FROSTWOLF_GRAVE     = 63,
-    BG_AV_OBJECT_AURA_H_FROSTWOLF_GRAVE     = 64,
-    BG_AV_OBJECT_AURA_N_FROSTWOLF_HUT       = 65,
-    BG_AV_OBJECT_AURA_A_FROSTWOLF_HUT       = 66,
-    BG_AV_OBJECT_AURA_H_FROSTWOLF_HUT       = 67,
+    // 大门（Doors）
+    BG_AV_OBJECT_DOOR_H                     = 45,  ///< 部落大门
+    BG_AV_OBJECT_DOOR_A                     = 46,  ///< 联盟大门
 
-    //big flags on top of towers 2 flags on each (contested, (alliance | horde)) + 2 auras
-    BG_AV_OBJECT_TFLAG_A_DUNBALDAR_SOUTH     = 67,
-    BG_AV_OBJECT_TFLAG_H_DUNBALDAR_SOUTH     = 68,
-    BG_AV_OBJECT_TFLAG_A_DUNBALDAR_NORTH     = 69,
-    BG_AV_OBJECT_TFLAG_H_DUNBALDAR_NORTH     = 70,
-    BG_AV_OBJECT_TFLAG_A_ICEWING_BUNKER      = 71,
-    BG_AV_OBJECT_TFLAG_H_ICEWING_BUNKER      = 72,
-    BG_AV_OBJECT_TFLAG_A_STONEHEART_BUNKER   = 73,
-    BG_AV_OBJECT_TFLAG_H_STONEHEART_BUNKER   = 74,
-    BG_AV_OBJECT_TFLAG_A_ICEBLOOD_TOWER      = 75,
-    BG_AV_OBJECT_TFLAG_H_ICEBLOOD_TOWER      = 76,
-    BG_AV_OBJECT_TFLAG_A_TOWER_POINT         = 77,
-    BG_AV_OBJECT_TFLAG_H_TOWER_POINT         = 78,
-    BG_AV_OBJECT_TFLAG_A_FROSTWOLF_ETOWER    = 79,
-    BG_AV_OBJECT_TFLAG_H_FROSTWOLF_ETOWER    = 80,
-    BG_AV_OBJECT_TFLAG_A_FROSTWOLF_WTOWER    = 81,
-    BG_AV_OBJECT_TFLAG_H_FROSTWOLF_WTOWER    = 82,
-    BG_AV_OBJECT_TAURA_A_DUNBALDAR_SOUTH     = 83,
-    BG_AV_OBJECT_TAURA_H_DUNBALDAR_SOUTH     = 84,
-    BG_AV_OBJECT_TAURA_A_DUNBALDAR_NORTH     = 85,
-    BG_AV_OBJECT_TAURA_H_DUNBALDAR_NORTH     = 86,
-    BG_AV_OBJECT_TAURA_A_ICEWING_BUNKER      = 87,
-    BG_AV_OBJECT_TAURA_H_ICEWING_BUNKER      = 88,
-    BG_AV_OBJECT_TAURA_A_STONEHEART_BUNKER   = 89,
-    BG_AV_OBJECT_TAURA_H_STONEHEART_BUNKER   = 90,
-    BG_AV_OBJECT_TAURA_A_ICEBLOOD_TOWER      = 91,
-    BG_AV_OBJECT_TAURA_H_ICEBLOOD_TOWER      = 92,
-    BG_AV_OBJECT_TAURA_A_TOWER_POINT         = 93,
-    BG_AV_OBJECT_TAURA_H_TOWER_POINT         = 94,
-    BG_AV_OBJECT_TAURA_A_FROSTWOLF_ETOWER    = 95,
-    BG_AV_OBJECT_TAURA_H_FROSTWOLF_ETOWER    = 96,
-    BG_AV_OBJECT_TAURA_A_FROSTWOLF_WTOWER    = 97,
-    BG_AV_OBJECT_TAURA_H_FROSTWOLF_WTOWER    = 98,
+    // 墓地光环（Graveyard Auras）- 每个墓地3个光环（中立、联盟、部落）
+    BG_AV_OBJECT_AURA_N_FIRSTAID_STATION    = 47,  ///< 急救站中立光环
+    BG_AV_OBJECT_AURA_A_FIRSTAID_STATION    = 48,  ///< 急救站联盟光环
+    BG_AV_OBJECT_AURA_H_FIRSTAID_STATION    = 49,  ///< 急救站部落光环
+    BG_AV_OBJECT_AURA_N_STORMPIKE_GRAVE     = 50,  ///< 雷矛墓地中立光环
+    BG_AV_OBJECT_AURA_A_STORMPIKE_GRAVE     = 51,  ///< 雷矛墓地联盟光环
+    BG_AV_OBJECT_AURA_H_STORMPIKE_GRAVE     = 52,  ///< 雷矛墓地部落光环
+    BG_AV_OBJECT_AURA_N_STONEHEART_GRAVE    = 53,  ///< 石炉墓地中立光环
+    BG_AV_OBJECT_AURA_A_STONEHEART_GRAVE    = 54,  ///< 石炉墓地联盟光环
+    BG_AV_OBJECT_AURA_H_STONEHEART_GRAVE    = 55,  ///< 石炉墓地部落光环
+    BG_AV_OBJECT_AURA_N_SNOWFALL_GRAVE      = 56,  ///< 雪落墓地中立光环
+    BG_AV_OBJECT_AURA_A_SNOWFALL_GRAVE      = 57,  ///< 雪落墓地联盟光环
+    BG_AV_OBJECT_AURA_H_SNOWFALL_GRAVE      = 58,  ///< 雪落墓地部落光环
+    BG_AV_OBJECT_AURA_N_ICEBLOOD_GRAVE      = 59,  ///< 冰血墓地中立光环
+    BG_AV_OBJECT_AURA_A_ICEBLOOD_GRAVE      = 60,  ///< 冰血墓地联盟光环
+    BG_AV_OBJECT_AURA_H_ICEBLOOD_GRAVE      = 61,  ///< 冰血墓地部落光环
+    BG_AV_OBJECT_AURA_N_FROSTWOLF_GRAVE     = 62,  ///< 霜狼墓地中立光环
+    BG_AV_OBJECT_AURA_A_FROSTWOLF_GRAVE     = 63,  ///< 霜狼墓地联盟光环
+    BG_AV_OBJECT_AURA_H_FROSTWOLF_GRAVE     = 64,  ///< 霜狼墓地部落光环
+    BG_AV_OBJECT_AURA_N_FROSTWOLF_HUT       = 65,  ///< 霜狼小屋中立光环
+    BG_AV_OBJECT_AURA_A_FROSTWOLF_HUT       = 66,  ///< 霜狼小屋联盟光环
+    BG_AV_OBJECT_AURA_H_FROSTWOLF_HUT       = 67,  ///< 霜狼小屋部落光环
 
-    BG_AV_OBJECT_BURN_DUNBALDAR_SOUTH        = 99,
-    BG_AV_OBJECT_BURN_DUNBALDAR_NORTH        = 109,
-    BG_AV_OBJECT_BURN_ICEWING_BUNKER         = 119,
-    BG_AV_OBJECT_BURN_STONEHEART_BUNKER      = 129,
-    BG_AV_OBJECT_BURN_ICEBLOOD_TOWER         = 139,
-    BG_AV_OBJECT_BURN_TOWER_POINT            = 149,
-    BG_AV_OBJECT_BURN_FROSTWOLF_ETWOER       = 159,
-    BG_AV_OBJECT_BURN_FROSTWOLF_WTOWER       = 169,
-    BG_AV_OBJECT_BURN_BUILDING_ALLIANCE      = 179,
-    BG_AV_OBJECT_BURN_BUILDING_HORDE         = 189,
-    BG_AV_OBJECT_SNOW_EYECANDY_A             = 199,
-    BG_AV_OBJECT_SNOW_EYECANDY_PA            = 203,
-    BG_AV_OBJECT_SNOW_EYECANDY_H             = 207,
-    BG_AV_OBJECT_SNOW_EYECANDY_PH            = 211,
-    BG_AV_OBJECT_MINE_SUPPLY_N_MIN           = 215,
-    BG_AV_OBJECT_MINE_SUPPLY_N_MAX           = 224,
-    BG_AV_OBJECT_MINE_SUPPLY_S_MIN           = 225,
-    BG_AV_OBJECT_MINE_SUPPLY_S_MAX           = 236,
+    // 塔楼顶部的大旗帜（Tower Big Flags）- 每个塔楼2面旗帜（争夺、联盟/部落）+ 2个光环
+    BG_AV_OBJECT_TFLAG_A_DUNBALDAR_SOUTH     = 67,  ///< 丹巴达尔南部碉堡联盟大旗帜
+    BG_AV_OBJECT_TFLAG_H_DUNBALDAR_SOUTH     = 68,  ///< 丹巴达尔南部碉堡部落大旗帜
+    BG_AV_OBJECT_TFLAG_A_DUNBALDAR_NORTH     = 69,  ///< 丹巴达尔北部碉堡联盟大旗帜
+    BG_AV_OBJECT_TFLAG_H_DUNBALDAR_NORTH     = 70,  ///< 丹巴达尔北部碉堡部落大旗帜
+    BG_AV_OBJECT_TFLAG_A_ICEWING_BUNKER      = 71,  ///< 冰翼碉堡联盟大旗帜
+    BG_AV_OBJECT_TFLAG_H_ICEWING_BUNKER      = 72,  ///< 冰翼碉堡部落大旗帜
+    BG_AV_OBJECT_TFLAG_A_STONEHEART_BUNKER   = 73,  ///< 石炉碉堡联盟大旗帜
+    BG_AV_OBJECT_TFLAG_H_STONEHEART_BUNKER   = 74,  ///< 石炉碉堡部落大旗帜
+    BG_AV_OBJECT_TFLAG_A_ICEBLOOD_TOWER      = 75,  ///< 冰血哨塔联盟大旗帜
+    BG_AV_OBJECT_TFLAG_H_ICEBLOOD_TOWER      = 76,  ///< 冰血哨塔部落大旗帜
+    BG_AV_OBJECT_TFLAG_A_TOWER_POINT         = 77,  ///< 哨塔点联盟大旗帜
+    BG_AV_OBJECT_TFLAG_H_TOWER_POINT         = 78,  ///< 哨塔点部落大旗帜
+    BG_AV_OBJECT_TFLAG_A_FROSTWOLF_ETOWER    = 79,  ///< 霜狼东塔联盟大旗帜
+    BG_AV_OBJECT_TFLAG_H_FROSTWOLF_ETOWER    = 80,  ///< 霜狼东塔部落大旗帜
+    BG_AV_OBJECT_TFLAG_A_FROSTWOLF_WTOWER    = 81,  ///< 霜狼西塔联盟大旗帜
+    BG_AV_OBJECT_TFLAG_H_FROSTWOLF_WTOWER    = 82,  ///< 霜狼西塔部落大旗帜
 
-    BG_AV_OBJECT_MAX                         = 237
+    // 塔楼光环（Tower Auras）
+    BG_AV_OBJECT_TAURA_A_DUNBALDAR_SOUTH     = 83,  ///< 丹巴达尔南部碉堡联盟光环
+    BG_AV_OBJECT_TAURA_H_DUNBALDAR_SOUTH     = 84,  ///< 丹巴达尔南部碉堡部落光环
+    BG_AV_OBJECT_TAURA_A_DUNBALDAR_NORTH     = 85,  ///< 丹巴达尔北部碉堡联盟光环
+    BG_AV_OBJECT_TAURA_H_DUNBALDAR_NORTH     = 86,  ///< 丹巴达尔北部碉堡部落光环
+    BG_AV_OBJECT_TAURA_A_ICEWING_BUNKER      = 87,  ///< 冰翼碉堡联盟光环
+    BG_AV_OBJECT_TAURA_H_ICEWING_BUNKER      = 88,  ///< 冰翼碉堡部落光环
+    BG_AV_OBJECT_TAURA_A_STONEHEART_BUNKER   = 89,  ///< 石炉碉堡联盟光环
+    BG_AV_OBJECT_TAURA_H_STONEHEART_BUNKER   = 90,  ///< 石炉碉堡部落光环
+    BG_AV_OBJECT_TAURA_A_ICEBLOOD_TOWER      = 91,  ///< 冰血哨塔联盟光环
+    BG_AV_OBJECT_TAURA_H_ICEBLOOD_TOWER      = 92,  ///< 冰血哨塔部落光环
+    BG_AV_OBJECT_TAURA_A_TOWER_POINT         = 93,  ///< 哨塔点联盟光环
+    BG_AV_OBJECT_TAURA_H_TOWER_POINT         = 94,  ///< 哨塔点部落光环
+    BG_AV_OBJECT_TAURA_A_FROSTWOLF_ETOWER    = 95,  ///< 霜狼东塔联盟光环
+    BG_AV_OBJECT_TAURA_H_FROSTWOLF_ETOWER    = 96,  ///< 霜狼东塔部落光环
+    BG_AV_OBJECT_TAURA_A_FROSTWOLF_WTOWER    = 97,  ///< 霜狼西塔联盟光环
+    BG_AV_OBJECT_TAURA_H_FROSTWOLF_WTOWER    = 98,  ///< 霜狼西塔部落光环
+
+    // 燃烧效果（Burning Effects）- 用于塔楼被摧毁时的视觉效果
+    BG_AV_OBJECT_BURN_DUNBALDAR_SOUTH        = 99,   ///< 丹巴达尔南部碉堡燃烧效果
+    BG_AV_OBJECT_BURN_DUNBALDAR_NORTH        = 109,  ///< 丹巴达尔北部碉堡燃烧效果
+    BG_AV_OBJECT_BURN_ICEWING_BUNKER         = 119,  ///< 冰翼碉堡燃烧效果
+    BG_AV_OBJECT_BURN_STONEHEART_BUNKER      = 129,  ///< 石炉碉堡燃烧效果
+    BG_AV_OBJECT_BURN_ICEBLOOD_TOWER         = 139,  ///< 冰血哨塔燃烧效果
+    BG_AV_OBJECT_BURN_TOWER_POINT            = 149,  ///< 哨塔点燃烧效果
+    BG_AV_OBJECT_BURN_FROSTWOLF_ETWOER       = 159,  ///< 霜狼东塔燃烧效果
+    BG_AV_OBJECT_BURN_FROSTWOLF_WTOWER       = 169,  ///< 霜狼西塔燃烧效果
+    BG_AV_OBJECT_BURN_BUILDING_ALLIANCE      = 179,  ///< 联盟建筑燃烧效果
+    BG_AV_OBJECT_BURN_BUILDING_HORDE         = 189,  ///< 部落建筑燃烧效果
+
+    // 雪落墓地装饰旗帜（Snowfall Eyecandy Banners）
+    BG_AV_OBJECT_SNOW_EYECANDY_A             = 199,  ///< 雪落墓地联盟装饰
+    BG_AV_OBJECT_SNOW_EYECANDY_PA            = 203,  ///< 雪落墓地联盟前装饰
+    BG_AV_OBJECT_SNOW_EYECANDY_H             = 207,  ///< 雪落墓地部落装饰
+    BG_AV_OBJECT_SNOW_EYECANDY_PH            = 211,  ///< 雪落墓地部落前装饰
+
+    // 矿井补给品（Mine Supplies）
+    BG_AV_OBJECT_MINE_SUPPLY_N_MIN           = 215,  ///< 北部矿井补给品最小索引
+    BG_AV_OBJECT_MINE_SUPPLY_N_MAX           = 224,  ///< 北部矿井补给品最大索引
+    BG_AV_OBJECT_MINE_SUPPLY_S_MIN           = 225,  ///< 南部矿井补给品最小索引
+    BG_AV_OBJECT_MINE_SUPPLY_S_MAX           = 236,  ///< 南部矿井补给品最大索引
+
+    BG_AV_OBJECT_MAX                         = 237   ///< 对象类型总数
 };
 
+/**
+ * @enum BG_AV_OBJECTS
+ * @brief 游戏对象位置枚举
+ *
+ * 定义了奥特兰克山谷战场中游戏对象的放置位置索引
+ * 用于定位旗帜、光环、燃烧效果和矿井补给品等对象
+ */
 enum BG_AV_OBJECTS
 {
-    AV_OPLACE_FIRSTAID_STATION              = 0,
-    AV_OPLACE_STORMPIKE_GRAVE               = 1,
-    AV_OPLACE_STONEHEART_GRAVE              = 2,
-    AV_OPLACE_SNOWFALL_GRAVE                = 3,
-    AV_OPLACE_ICEBLOOD_GRAVE                = 4,
-    AV_OPLACE_FROSTWOLF_GRAVE               = 5,
-    AV_OPLACE_FROSTWOLF_HUT                 = 6,
-    AV_OPLACE_DUNBALDAR_SOUTH               = 7,
-    AV_OPLACE_DUNBALDAR_NORTH               = 8,
-    AV_OPLACE_ICEWING_BUNKER                = 9,
-    AV_OPLACE_STONEHEART_BUNKER             = 10,
-    AV_OPLACE_ICEBLOOD_TOWER                = 11,
-    AV_OPLACE_TOWER_POINT                   = 12,
-    AV_OPLACE_FROSTWOLF_ETOWER              = 13,
-    AV_OPLACE_FROSTWOLF_WTOWER              = 14,
-    AV_OPLACE_BIGBANNER_DUNBALDAR_SOUTH     = 15,
-    AV_OPLACE_BIGBANNER_DUNBALDAR_NORTH     = 16,
-    AV_OPLACE_BIGBANNER_ICEWING_BUNKER      = 17,
-    AV_OPLACE_BIGBANNER_STONEHEART_BUNKER   = 18,
-    AV_OPLACE_BIGBANNER_ICEBLOOD_TOWER      = 19,
-    AV_OPLACE_BIGBANNER_TOWER_POINT         = 20,
-    AV_OPLACE_BIGBANNER_FROSTWOLF_ETOWER    = 21,
-    AV_OPLACE_BIGBANNER_FROSTWOLF_WTOWER    = 22,
+    // 墓地旗帜位置（Graveyard Flag Positions）
+    AV_OPLACE_FIRSTAID_STATION              = 0,   ///< 急救站墓地旗帜位置
+    AV_OPLACE_STORMPIKE_GRAVE               = 1,   ///< 雷矛墓地旗帜位置
+    AV_OPLACE_STONEHEART_GRAVE              = 2,   ///< 石炉墓地旗帜位置
+    AV_OPLACE_SNOWFALL_GRAVE                = 3,   ///< 雪落墓地旗帜位置
+    AV_OPLACE_ICEBLOOD_GRAVE                = 4,   ///< 冰血墓地旗帜位置
+    AV_OPLACE_FROSTWOLF_GRAVE               = 5,   ///< 霜狼墓地旗帜位置
+    AV_OPLACE_FROSTWOLF_HUT                 = 6,   ///< 霜狼小屋墓地旗帜位置
 
-    AV_OPLACE_BURN_DUNBALDAR_SOUTH          = 23,
-    AV_OPLACE_BURN_DUNBALDAR_NORTH          = 33,
-    AV_OPLACE_BURN_ICEWING_BUNKER           = 43,
-    AV_OPLACE_BURN_STONEHEART_BUNKER        = 53,
-    AV_OPLACE_BURN_ICEBLOOD_TOWER           = 63,
-    AV_OPLACE_BURN_TOWER_POINT              = 73,
-    AV_OPLACE_BURN_FROSTWOLF_ETOWER         = 83,
-    AV_OPLACE_BURN_FROSTWOLF_WTOWER         = 93,
-    AV_OPLACE_BURN_BUILDING_A               = 103,
-    AV_OPLACE_BURN_BUILDING_H               = 113,
-    AV_OPLACE_SNOW_1                        = 123,
-    AV_OPLACE_SNOW_2                        = 124,
-    AV_OPLACE_SNOW_3                        = 125,
-    AV_OPLACE_SNOW_4                        = 126,
-    AV_OPLACE_MINE_SUPPLY_N_MIN             = 127,
-    AV_OPLACE_MINE_SUPPLY_N_MAX             = 136,
-    AV_OPLACE_MINE_SUPPLY_S_MIN             = 137,
-    AV_OPLACE_MINE_SUPPLY_S_MAX             = 148,
+    // 塔楼旗帜位置（Tower Flag Positions）
+    AV_OPLACE_DUNBALDAR_SOUTH               = 7,   ///< 丹巴达尔南部碉堡旗帜位置
+    AV_OPLACE_DUNBALDAR_NORTH               = 8,   ///< 丹巴达尔北部碉堡旗帜位置
+    AV_OPLACE_ICEWING_BUNKER                = 9,   ///< 冰翼碉堡旗帜位置
+    AV_OPLACE_STONEHEART_BUNKER             = 10,  ///< 石炉碉堡旗帜位置
+    AV_OPLACE_ICEBLOOD_TOWER                = 11,  ///< 冰血哨塔旗帜位置
+    AV_OPLACE_TOWER_POINT                   = 12,  ///< 哨塔点旗帜位置
+    AV_OPLACE_FROSTWOLF_ETOWER              = 13,  ///< 霜狼东塔旗帜位置
+    AV_OPLACE_FROSTWOLF_WTOWER              = 14,  ///< 霜狼西塔旗帜位置
 
-    AV_OPLACE_MAX                           = 149
+    // 塔楼大旗帜位置（Tower Big Banner Positions）
+    AV_OPLACE_BIGBANNER_DUNBALDAR_SOUTH     = 15,  ///< 丹巴达尔南部碉堡大旗帜位置
+    AV_OPLACE_BIGBANNER_DUNBALDAR_NORTH     = 16,  ///< 丹巴达尔北部碉堡大旗帜位置
+    AV_OPLACE_BIGBANNER_ICEWING_BUNKER      = 17,  ///< 冰翼碉堡大旗帜位置
+    AV_OPLACE_BIGBANNER_STONEHEART_BUNKER   = 18,  ///< 石炉碉堡大旗帜位置
+    AV_OPLACE_BIGBANNER_ICEBLOOD_TOWER      = 19,  ///< 冰血哨塔大旗帜位置
+    AV_OPLACE_BIGBANNER_TOWER_POINT         = 20,  ///< 哨塔点大旗帜位置
+    AV_OPLACE_BIGBANNER_FROSTWOLF_ETOWER    = 21,  ///< 霜狼东塔大旗帜位置
+    AV_OPLACE_BIGBANNER_FROSTWOLF_WTOWER    = 22,  ///< 霜狼西塔大旗帜位置
+
+    // 燃烧效果位置（Burning Effect Positions）
+    AV_OPLACE_BURN_DUNBALDAR_SOUTH          = 23,  ///< 丹巴达尔南部碉堡燃烧效果起始位置
+    AV_OPLACE_BURN_DUNBALDAR_NORTH          = 33,  ///< 丹巴达尔北部碉堡燃烧效果起始位置
+    AV_OPLACE_BURN_ICEWING_BUNKER           = 43,  ///< 冰翼碉堡燃烧效果起始位置
+    AV_OPLACE_BURN_STONEHEART_BUNKER        = 53,  ///< 石炉碉堡燃烧效果起始位置
+    AV_OPLACE_BURN_ICEBLOOD_TOWER           = 63,  ///< 冰血哨塔燃烧效果起始位置
+    AV_OPLACE_BURN_TOWER_POINT              = 73,  ///< 哨塔点燃烧效果起始位置
+    AV_OPLACE_BURN_FROSTWOLF_ETOWER         = 83,  ///< 霜狼东塔燃烧效果起始位置
+    AV_OPLACE_BURN_FROSTWOLF_WTOWER         = 93,  ///< 霜狼西塔燃烧效果起始位置
+    AV_OPLACE_BURN_BUILDING_A               = 103, ///< 联盟建筑燃烧效果起始位置
+    AV_OPLACE_BURN_BUILDING_H               = 113, ///< 部落建筑燃烧效果起始位置
+
+    // 雪落墓地装饰位置（Snowfall Eyecandy Positions）
+    AV_OPLACE_SNOW_1                        = 123, ///< 雪落墓地装饰位置1
+    AV_OPLACE_SNOW_2                        = 124, ///< 雪落墓地装饰位置2
+    AV_OPLACE_SNOW_3                        = 125, ///< 雪落墓地装饰位置3
+    AV_OPLACE_SNOW_4                        = 126, ///< 雪落墓地装饰位置4
+
+    // 矿井补给品位置（Mine Supply Positions）
+    AV_OPLACE_MINE_SUPPLY_N_MIN             = 127, ///< 北部矿井补给品最小位置
+    AV_OPLACE_MINE_SUPPLY_N_MAX             = 136, ///< 北部矿井补给品最大位置
+    AV_OPLACE_MINE_SUPPLY_S_MIN             = 137, ///< 南部矿井补给品最小位置
+    AV_OPLACE_MINE_SUPPLY_S_MAX             = 148, ///< 南部矿井补给品最大位置
+
+    AV_OPLACE_MAX                           = 149  ///< 对象位置总数
 };
 
+/**
+ * @brief 游戏对象位置数组
+ *
+ * 定义了奥特兰克山谷战场中所有游戏对象的世界坐标位置
+ * 包括墓地旗帜、塔楼旗帜、大旗帜、燃烧效果、雪落装饰和矿井补给品等
+ */
 Position const BG_AV_ObjectPos[AV_OPLACE_MAX] =
 {
     {638.592f, -32.422f, 46.0608f, -1.62316f }, //firstaid station
@@ -514,8 +658,8 @@ Position const BG_AV_ObjectPos[AV_OPLACE_MAX] =
     {-201.282f, -134.319f, 78.6753f, -0.942478f },
     {-215.981f, -91.4101f, 80.8702f, -1.74533f },
     {-200.465f, -96.418f, 79.7587f, 1.36136f },
-    //mine supplies
-    //irondeep
+    // 矿井补给品位置（Mine Supplies Positions）
+    // 铁深矿井（Irondeep Mine）
     {870.899f, -388.434f, 61.6406f, -1.22173f},
     {825.214f, -320.174f, 63.712f, -2.82743f},
     {837.117f, -452.556f, 47.2331f, -3.12414f},
@@ -526,7 +670,7 @@ Position const BG_AV_ObjectPos[AV_OPLACE_MAX] =
     {886.685f, -442.358f, 54.6962f, -1.22173f},
     {817.509f, -457.331f, 48.4666f, 2.07694f},
     {793.411f, -326.281f, 63.1117f, -2.79253f},
-    //coldtooth
+    // 冷齿矿井（Coldtooth Mine）
     {-934.212f, -57.3517f, 80.277f, -0.0174535f},
     {-916.281f, -36.8579f, 77.0227f, 0.122173f},
     {-902.73f, -103.868f, 75.4378f, -1.58825f},
@@ -541,108 +685,138 @@ Position const BG_AV_ObjectPos[AV_OPLACE_MAX] =
     {-951.394f, -193.695f, 67.634f, 0.802851f}
 };
 
+/**
+ * @brief 大门位置数组
+ *
+ * 定义了联盟和部落大门的世界坐标位置
+ */
 Position const BG_AV_DoorPositons[2] =
 {
-    {794.64310f, -493.4745f, 99.77789f, -0.122173f}, //alliance
-    {-1382.057f, -545.9169f, 54.90467f, 0.7679439f}  //horde
+    {794.64310f, -493.4745f, 99.77789f, -0.122173f}, ///< 联盟大门位置
+    {-1382.057f, -545.9169f, 54.90467f, 0.7679439f}  ///< 部落大门位置
 };
 
+/**
+ * @brief 大门旋转四元数数组
+ *
+ * 定义了联盟和部落大门的旋转数据
+ */
 QuaternionData const BG_AV_DoorRotation[2] =
 {
-    {0.0f, 0.0f, -0.06104851f, 0.9981348f}, //alliance
-    {0.0f, 0.0f, 0.374606100f, 0.9271840f}  //horde
+    {0.0f, 0.0f, -0.06104851f, 0.9981348f}, ///< 联盟大门旋转
+    {0.0f, 0.0f, 0.374606100f, 0.9271840f}  ///< 部落大门旋转
 };
 
-//creaturestuff starts here
-//is related to BG_AV_CreaturePos
+/**
+ * @enum BG_AV_CreaturePlace
+ * @brief 生物位置枚举
+ *
+ * 定义了奥特兰克山谷战场中所有生物的位置索引
+ * 包括灵魂医者、防御者、元帅、矿井生物等
+ * 与 BG_AV_CreaturePos 数组相关联
+ */
 enum BG_AV_CreaturePlace
 {
-    AV_CPLACE_SPIRIT_STORM_AID      = 0,
-    AV_CPLACE_SPIRIT_STORM_GRAVE    = 1,
-    AV_CPLACE_SPIRIT_STONE_GRAVE    = 2,
-    AV_CPLACE_SPIRIT_SNOWFALL       = 3,
-    AV_CPLACE_SPIRIT_ICE_GRAVE      = 4,
-    AV_CPLACE_SPIRIT_FROSTWOLF      = 5,
-    AV_CPLACE_SPIRIT_FROST_HUT      = 6,
-    AV_CPLACE_SPIRIT_MAIN_ALLIANCE  = 7,
-    AV_CPLACE_SPIRIT_MAIN_HORDE     = 8,
-//I don't add a variable for all 4 positions... I think one is enough to compute the rest
-    AV_CPLACE_DEFENSE_STORM_AID      = 9,
-    AV_CPLACE_DEFEMSE_STORM_GRAVE    = 13,
-    AV_CPLACE_DEFENSE_STONE_GRAVE    = 17,
-    AV_CPLACE_DEFENSE_SNOWFALL       = 21,
-    AV_CPLACE_DEFENSE_FROSTWOLF      = 25,
-    AV_CPLACE_DEFENSE_ICE_GRAVE      = 29,
-    AV_CPLACE_DEFENSE_FROST_HUT      = 33,
+    // 灵魂医者（Spirit Guides）- 每个墓地一个
+    AV_CPLACE_SPIRIT_STORM_AID      = 0,   ///< 急救站墓地灵魂医者
+    AV_CPLACE_SPIRIT_STORM_GRAVE    = 1,   ///< 雷矛墓地灵魂医者
+    AV_CPLACE_SPIRIT_STONE_GRAVE    = 2,   ///< 石炉墓地灵魂医者
+    AV_CPLACE_SPIRIT_SNOWFALL       = 3,   ///< 雪落墓地灵魂医者
+    AV_CPLACE_SPIRIT_ICE_GRAVE      = 4,   ///< 冰血墓地灵魂医者
+    AV_CPLACE_SPIRIT_FROSTWOLF      = 5,   ///< 霜狼墓地灵魂医者
+    AV_CPLACE_SPIRIT_FROST_HUT      = 6,   ///< 霜狼小屋墓地灵魂医者
+    AV_CPLACE_SPIRIT_MAIN_ALLIANCE  = 7,   ///< 联盟主基地灵魂医者
+    AV_CPLACE_SPIRIT_MAIN_HORDE     = 8,   ///< 部落主基地灵魂医者
 
-    AV_CPLACE_DEFENSE_DUN_S          = 37,
-    AV_CPLACE_DEFENSE_DUN_N          = 41,
-    AV_CPLACE_DEFENSE_ICEWING        = 45,
-    AV_CPLACE_DEFENSE_STONE_TOWER    = 49,
-    AV_CPLACE_DEFENSE_ICE_TOWER      = 53,
-    AV_CPLACE_DEFENSE_TOWERPOINT     = 57,
-    AV_CPLACE_DEFENSE_FROST_E        = 61,
-    AV_CPLACE_DEFENSE_FROST_t        = 65,
+    // 墓地防御者（Graveyard Defenders）- 我没有为所有4个位置添加变量，我认为一个足够计算其余的
+    AV_CPLACE_DEFENSE_STORM_AID      = 9,   ///< 急救站墓地防御者起始位置
+    AV_CPLACE_DEFEMSE_STORM_GRAVE    = 13,  ///< 雷矛墓地防御者起始位置
+    AV_CPLACE_DEFENSE_STONE_GRAVE    = 17,  ///< 石炉墓地防御者起始位置
+    AV_CPLACE_DEFENSE_SNOWFALL       = 21,  ///< 雪落墓地防御者起始位置
+    AV_CPLACE_DEFENSE_FROSTWOLF      = 25,  ///< 霜狼墓地防御者起始位置
+    AV_CPLACE_DEFENSE_ICE_GRAVE      = 29,  ///< 冰血墓地防御者起始位置
+    AV_CPLACE_DEFENSE_FROST_HUT      = 33,  ///< 霜狼小屋墓地防御者起始位置
 
-    AV_CPLACE_A_MARSHAL_SOUTH       = 69,
-    AV_CPLACE_A_MARSHAL_NORTH       = 70,
-    AV_CPLACE_A_MARSHAL_ICE         = 71,
-    AV_CPLACE_A_MARSHAL_STONE       = 72,
-    AV_CPLACE_H_MARSHAL_ICE         = 73,
-    AV_CPLACE_H_MARSHAL_TOWER       = 74,
-    AV_CPLACE_H_MARSHAL_ETOWER      = 75,
-    AV_CPLACE_H_MARSHAL_WTOWER      = 76,
-    //irondeep
-    //miner:
-    AV_CPLACE_MINE_N_1_MIN      = 77,
-    AV_CPLACE_MINE_N_1_MAX      = 136,
-    //special types
-    AV_CPLACE_MINE_N_2_MIN      = 137,
-    AV_CPLACE_MINE_N_2_MAX      = 192,
-    //boss
-    AV_CPLACE_MINE_N_3          = 193,
-    //coldtooth
-    //miner:
-    AV_CPLACE_MINE_S_1_MIN      = 194,
-    AV_CPLACE_MINE_S_1_MAX      = 250,
-    //special types
-    AV_CPLACE_MINE_S_2_MIN      = 251,
-    AV_CPLACE_MINE_S_2_MAX      = 289,
-    //vermin
-    AV_CPLACE_MINE_S_S_MIN      = 290,
-    AV_CPLACE_MINE_S_S_MAX      = 299,
-    //boss
-    AV_CPLACE_MINE_S_3          = 300,
+    // 塔楼防御者（Tower Defenders）- 弓箭手
+    AV_CPLACE_DEFENSE_DUN_S          = 37,  ///< 丹巴达尔南部碉堡防御者
+    AV_CPLACE_DEFENSE_DUN_N          = 41,  ///< 丹巴达尔北部碉堡防御者
+    AV_CPLACE_DEFENSE_ICEWING        = 45,  ///< 冰翼碉堡防御者
+    AV_CPLACE_DEFENSE_STONE_TOWER    = 49,  ///< 石炉碉堡防御者
+    AV_CPLACE_DEFENSE_ICE_TOWER      = 53,  ///< 冰血哨塔防御者
+    AV_CPLACE_DEFENSE_TOWERPOINT     = 57,  ///< 哨塔点防御者
+    AV_CPLACE_DEFENSE_FROST_E        = 61,  ///< 霜狼东塔防御者
+    AV_CPLACE_DEFENSE_FROST_t        = 65,  ///< 霜狼西塔防御者
 
-    //herald
-    AV_CPLACE_HERALD          = 301,
+    // 联盟元帅（Alliance Marshals）- 每个碉堡一个，保护将军
+    AV_CPLACE_A_MARSHAL_SOUTH       = 69,  ///< 丹巴达尔南部碉堡元帅
+    AV_CPLACE_A_MARSHAL_NORTH       = 70,  ///< 丹巴达尔北部碉堡元帅
+    AV_CPLACE_A_MARSHAL_ICE         = 71,  ///< 冰翼碉堡元帅
+    AV_CPLACE_A_MARSHAL_STONE       = 72,  ///< 石炉碉堡元帅
 
-    //node aura triggers
-    AV_CPLACE_TRIGGER01       = 302,
-    AV_CPLACE_TRIGGER02       = 303,
-    AV_CPLACE_TRIGGER03       = 304,
-    AV_CPLACE_TRIGGER04       = 305,
-    AV_CPLACE_TRIGGER05       = 306,
-    AV_CPLACE_TRIGGER06       = 307,
-    AV_CPLACE_TRIGGER07       = 308,
-    AV_CPLACE_TRIGGER08       = 309,
-    AV_CPLACE_TRIGGER09       = 310,
-    AV_CPLACE_TRIGGER10       = 311,
-    AV_CPLACE_TRIGGER11       = 312,
-    AV_CPLACE_TRIGGER12       = 313,
-    AV_CPLACE_TRIGGER13       = 314,
-    AV_CPLACE_TRIGGER14       = 315,
-    AV_CPLACE_TRIGGER15       = 316,
+    // 部落督军（Horde Warmasters）- 每个塔楼一个，保护将军
+    AV_CPLACE_H_MARSHAL_ICE         = 73,  ///< 冰血哨塔督军
+    AV_CPLACE_H_MARSHAL_TOWER       = 74,  ///< 哨塔点督军
+    AV_CPLACE_H_MARSHAL_ETOWER      = 75,  ///< 霜狼东塔督军
+    AV_CPLACE_H_MARSHAL_WTOWER      = 76,  ///< 霜狼西塔督军
 
-    //boss, captain triggers
-    AV_CPLACE_TRIGGER16       = 317,
-    AV_CPLACE_TRIGGER17       = 318,
-    AV_CPLACE_TRIGGER18       = 319,
-    AV_CPLACE_TRIGGER19       = 320,
+    // 铁深矿井（Irondeep Mine）
+    // 矿工（Miners）
+    AV_CPLACE_MINE_N_1_MIN      = 77,   ///< 铁深矿井矿工最小索引
+    AV_CPLACE_MINE_N_1_MAX      = 136,  ///< 铁深矿井矿工最大索引
+    // 特殊类型（Special Types）
+    AV_CPLACE_MINE_N_2_MIN      = 137,  ///< 铁深矿井特殊类型最小索引
+    AV_CPLACE_MINE_N_2_MAX      = 192,  ///< 铁深矿井特殊类型最大索引
+    // 首领（Boss）
+    AV_CPLACE_MINE_N_3          = 193,  ///< 铁深矿井首领位置
 
-    AV_CPLACE_MAX = 321
+    // 冷齿矿井（Coldtooth Mine）
+    // 矿工（Miners）
+    AV_CPLACE_MINE_S_1_MIN      = 194,  ///< 冷齿矿井矿工最小索引
+    AV_CPLACE_MINE_S_1_MAX      = 250,  ///< 冷齿矿井矿工最大索引
+    // 特殊类型（Special Types）
+    AV_CPLACE_MINE_S_2_MIN      = 251,  ///< 冷齿矿井特殊类型最小索引
+    AV_CPLACE_MINE_S_2_MAX      = 289,  ///< 冷齿矿井特殊类型最大索引
+    // 害虫（Vermin）
+    AV_CPLACE_MINE_S_S_MIN      = 290,  ///< 冷齿矿井害虫最小索引
+    AV_CPLACE_MINE_S_S_MAX      = 299,  ///< 冷齿矿井害虫最大索引
+    // 首领（Boss）
+    AV_CPLACE_MINE_S_3          = 300,  ///< 冷齿矿井首领位置
+
+    // 传令官（Herald）
+    AV_CPLACE_HERALD          = 301,  ///< 战场传令官位置
+
+    // 节点光环触发器（Node Aura Triggers）
+    AV_CPLACE_TRIGGER01       = 302,  ///< 节点触发器1
+    AV_CPLACE_TRIGGER02       = 303,  ///< 节点触发器2
+    AV_CPLACE_TRIGGER03       = 304,  ///< 节点触发器3
+    AV_CPLACE_TRIGGER04       = 305,  ///< 节点触发器4
+    AV_CPLACE_TRIGGER05       = 306,  ///< 节点触发器5
+    AV_CPLACE_TRIGGER06       = 307,  ///< 节点触发器6
+    AV_CPLACE_TRIGGER07       = 308,  ///< 节点触发器7
+    AV_CPLACE_TRIGGER08       = 309,  ///< 节点触发器8
+    AV_CPLACE_TRIGGER09       = 310,  ///< 节点触发器9
+    AV_CPLACE_TRIGGER10       = 311,  ///< 节点触发器10
+    AV_CPLACE_TRIGGER11       = 312,  ///< 节点触发器11
+    AV_CPLACE_TRIGGER12       = 313,  ///< 节点触发器12
+    AV_CPLACE_TRIGGER13       = 314,  ///< 节点触发器13
+    AV_CPLACE_TRIGGER14       = 315,  ///< 节点触发器14
+    AV_CPLACE_TRIGGER15       = 316,  ///< 节点触发器15
+
+    // 首领和队长触发器（Boss and Captain Triggers）
+    AV_CPLACE_TRIGGER16       = 317,  ///< 首领/队长触发器16
+    AV_CPLACE_TRIGGER17       = 318,  ///< 首领/队长触发器17
+    AV_CPLACE_TRIGGER18       = 319,  ///< 首领/队长触发器18
+    AV_CPLACE_TRIGGER19       = 320,  ///< 首领/队长触发器19
+
+    AV_CPLACE_MAX = 321  ///< 生物位置总数
 };
 
+/**
+ * @brief 生物位置数组
+ *
+ * 定义了奥特兰克山谷战场中所有生物的世界坐标位置
+ * 包括灵魂医者、防御者、元帅、矿井生物、传令官和触发器等
+ */
 Position const BG_AV_CreaturePos[AV_CPLACE_MAX] =
 {
     //spiritguides
@@ -1001,63 +1175,86 @@ Position const BG_AV_CreaturePos[AV_CPLACE_MAX] =
     {-1370.9f, -219.793f, 98.4258f, 5.04381f}      //AV_NPC_H_BOSS drek thar
 };
 
+/**
+ * @enum BG_AV_CreatureIds
+ * @brief 生物ID枚举
+ *
+ * 定义了奥特兰克山谷战场中使用的生物类型索引
+ * 用于生成和管理战场中的各种NPC
+ */
 enum BG_AV_CreatureIds
 {
-    AV_NPC_A_GRAVEDEFENSE0 = 0,     // stormpike Defender
-    AV_NPC_A_GRAVEDEFENSE1 = 1,     // seasoned defender
-    AV_NPC_A_GRAVEDEFENSE2 = 2,     // veteran defender
-    AV_NPC_A_GRAVEDEFENSE3 = 3,     // champion defender
-    AV_NPC_A_TOWERDEFENSE  = 4,     // stormpike bowman
-    AV_NPC_A_CAPTAIN       = 5,     // balinda
-    AV_NPC_A_BOSS          = 6,     // vanndar
+    // 联盟墓地防御者（Alliance Graveyard Defenders）
+    AV_NPC_A_GRAVEDEFENSE0 = 0,     ///< 雷矛防御者（Stormpike Defender）
+    AV_NPC_A_GRAVEDEFENSE1 = 1,     ///< 老练的防御者（Seasoned Defender）
+    AV_NPC_A_GRAVEDEFENSE2 = 2,     ///< 资深防御者（Veteran Defender）
+    AV_NPC_A_GRAVEDEFENSE3 = 3,     ///< 勇士防御者（Champion Defender）
+    AV_NPC_A_TOWERDEFENSE  = 4,     ///< 雷矛弓箭手（Stormpike Bowman）
+    AV_NPC_A_CAPTAIN       = 5,     ///< 巴琳达（Balinda）- 联盟队长
+    AV_NPC_A_BOSS          = 6,     ///< 范达尔（Vanndar）- 联盟将军
 
-    AV_NPC_H_GRAVEDEFENSE0 = 7,     // frostwolf guardian
-    AV_NPC_H_GRAVEDEFENSE1 = 8,     // seasoned guardian
-    AV_NPC_H_GRAVEDEFENSE2 = 9,     // veteran guardian
-    AV_NPC_H_GRAVEDEFENSE3 = 10,    // champion guardian
-    AV_NPC_H_TOWERDEFENSE  = 11,    // frostwolf bowman
-    AV_NPC_H_CAPTAIN       = 12,    // galvangar
-    AV_NPC_H_BOSS          = 13,    // drek thar
+    // 部落墓地防御者（Horde Graveyard Defenders）
+    AV_NPC_H_GRAVEDEFENSE0 = 7,     ///< 霜狼守卫者（Frostwolf Guardian）
+    AV_NPC_H_GRAVEDEFENSE1 = 8,     ///< 老练的守卫者（Seasoned Guardian）
+    AV_NPC_H_GRAVEDEFENSE2 = 9,     ///< 资深守卫者（Veteran Guardian）
+    AV_NPC_H_GRAVEDEFENSE3 = 10,    ///< 勇士守卫者（Champion Guardian）
+    AV_NPC_H_TOWERDEFENSE  = 11,    ///< 霜狼弓箭手（Frostwolf Bowman）
+    AV_NPC_H_CAPTAIN       = 12,    ///< 加尔范（Galvangar）- 部落队长
+    AV_NPC_H_BOSS          = 13,    ///< 德雷克塔尔（Drek'Thar）- 部落将军
 
-    AV_NPC_A_MARSHAL_SOUTH = 14,
-    AV_NPC_MARSHAL_NORTH   = 15,
-    AV_NPC_A_MARSHAL_ICE   = 16,
-    AV_NPC_A_MARSHAL_STONE = 17,
-    AV_NPC_H_MARSHAL_ICE   = 18,
-    AV_NPC_H_MARSHAL_TOWER = 19,
-    AV_NPC_MARSHAL_ETOWER  = 20,
-    AV_NPC_H_MARSHAL_WTOWER= 21,
-    AV_NPC_N_MINE_N_1      = 22,
-    AV_NPC_N_MINE_N_2      = 23,
-    AV_NPC_N_MINE_N_3      = 24,
-    AV_NPC_N_MINE_N_4      = 25,
-    AV_NPC_N_MINE_A_1      = 26,
-    AV_NPC_N_MINE_A_2      = 27,
-    AV_NPC_N_MINE_A_3      = 28,
-    AV_NPC_N_MINE_A_4      = 29,
-    AV_NPC_N_MINE_H_1      = 30,
-    AV_NPC_N_MINE_H_2      = 31,
-    AV_NPC_N_MINE_H_3      = 32,
-    AV_NPC_N_MINE_H_4      = 33,
-    AV_NPC_S_MINE_N_1      = 34,
-    AV_NPC_S_MINE_N_2      = 35,
-    AV_NPC_S_MINE_N_3      = 36,
-    AV_NPC_S_MINE_N_4      = 37,
-    AV_NPC_S_MINE_N_S      = 38,
-    AV_NPC_S_MINE_A_1      = 39,
-    AV_NPC_S_MINE_A_2      = 40,
-    AV_NPC_S_MINE_A_3      = 41,
-    AV_NPC_S_MINE_A_4      = 42,
-    AV_NPC_S_MINE_H_1      = 43,
-    AV_NPC_S_MINE_H_2      = 44,
-    AV_NPC_S_MINE_H_3      = 45,
-    AV_NPC_S_MINE_H_4      = 46,
-    AV_NPC_HERALD          = 47,
-    AV_NPC_INFO_MAX        = 48
+    // 联盟元帅（Alliance Marshals）
+    AV_NPC_A_MARSHAL_SOUTH = 14,    ///< 丹巴达尔南部碉堡元帅
+    AV_NPC_MARSHAL_NORTH   = 15,    ///< 丹巴达尔北部碉堡元帅
+    AV_NPC_A_MARSHAL_ICE   = 16,    ///< 冰翼碉堡元帅
+    AV_NPC_A_MARSHAL_STONE = 17,    ///< 石炉碉堡元帅
+
+    // 部落督军（Horde Warmasters）
+    AV_NPC_H_MARSHAL_ICE   = 18,    ///< 冰血哨塔督军
+    AV_NPC_H_MARSHAL_TOWER = 19,    ///< 哨塔点督军
+    AV_NPC_MARSHAL_ETOWER  = 20,    ///< 霜狼东塔督军
+    AV_NPC_H_MARSHAL_WTOWER= 21,    ///< 霜狼西塔督军
+
+    // 北部矿井 - 铁深矿井（North Mine - Irondeep）
+    AV_NPC_N_MINE_N_1      = 22,    ///< 铁深矿井中立生物类型1
+    AV_NPC_N_MINE_N_2      = 23,    ///< 铁深矿井中立生物类型2
+    AV_NPC_N_MINE_N_3      = 24,    ///< 铁深矿井中立生物类型3
+    AV_NPC_N_MINE_N_4      = 25,    ///< 铁深矿井中立生物类型4
+    AV_NPC_N_MINE_A_1      = 26,    ///< 铁深矿井联盟生物类型1
+    AV_NPC_N_MINE_A_2      = 27,    ///< 铁深矿井联盟生物类型2
+    AV_NPC_N_MINE_A_3      = 28,    ///< 铁深矿井联盟生物类型3
+    AV_NPC_N_MINE_A_4      = 29,    ///< 铁深矿井联盟生物类型4
+    AV_NPC_N_MINE_H_1      = 30,    ///< 铁深矿井部落生物类型1
+    AV_NPC_N_MINE_H_2      = 31,    ///< 铁深矿井部落生物类型2
+    AV_NPC_N_MINE_H_3      = 32,    ///< 铁深矿井部落生物类型3
+    AV_NPC_N_MINE_H_4      = 33,    ///< 铁深矿井部落生物类型4
+
+    // 南部矿井 - 冷齿矿井（South Mine - Coldtooth）
+    AV_NPC_S_MINE_N_1      = 34,    ///< 冷齿矿井中立生物类型1
+    AV_NPC_S_MINE_N_2      = 35,    ///< 冷齿矿井中立生物类型2
+    AV_NPC_S_MINE_N_3      = 36,    ///< 冷齿矿井中立生物类型3
+    AV_NPC_S_MINE_N_4      = 37,    ///< 冷齿矿井中立生物类型4
+    AV_NPC_S_MINE_N_S      = 38,    ///< 冷齿矿井中立特殊生物
+    AV_NPC_S_MINE_A_1      = 39,    ///< 冷齿矿井联盟生物类型1
+    AV_NPC_S_MINE_A_2      = 40,    ///< 冷齿矿井联盟生物类型2
+    AV_NPC_S_MINE_A_3      = 41,    ///< 冷齿矿井联盟生物类型3
+    AV_NPC_S_MINE_A_4      = 42,    ///< 冷齿矿井联盟生物类型4
+    AV_NPC_S_MINE_H_1      = 43,    ///< 冷齿矿井部落生物类型1
+    AV_NPC_S_MINE_H_2      = 44,    ///< 冷齿矿井部落生物类型2
+    AV_NPC_S_MINE_H_3      = 45,    ///< 冷齿矿井部落生物类型3
+    AV_NPC_S_MINE_H_4      = 46,    ///< 冷齿矿井部落生物类型4
+
+    AV_NPC_HERALD          = 47,    ///< 传令官
+    AV_NPC_INFO_MAX        = 48     ///< 生物信息总数
 };
 
-//entry, team, minlevel, maxlevel
-/// @todo: this array should be removed, the only needed things are the entrys (for spawning(?) and handlekillunit)
+/**
+ * @brief 生物信息数组
+ *
+ * 定义了奥特兰克山谷战场中各种生物的entry ID
+ * 用于生成生物和处理击杀单位事件
+ *
+ * @todo 这个数组应该被移除，唯一需要的是entry（用于生成和处理击杀单位）
+ */
 const uint32 BG_AV_CreatureInfo[AV_NPC_INFO_MAX] =
 {
     12050, // Stormpike Defender
@@ -1301,19 +1498,31 @@ const uint32 BG_AV_StaticCreatureInfo[51] =
     11949, // Captain Balinda Stonehearth
 };
 
+/**
+ * @enum BG_AV_Graveyards
+ * @brief 墓地ID枚举
+ *
+ * 定义了奥特兰克山谷战场中所有墓地的世界状态ID
+ * 这些ID用于管理墓地的归属和控制状态
+ */
 enum BG_AV_Graveyards
 {
-    AV_GRAVE_STORM_AID         = 751,
-    AV_GRAVE_STORM_GRAVE       = 689,
-    AV_GRAVE_STONE_GRAVE       = 729,
-    AV_GRAVE_SNOWFALL          = 169,
-    AV_GRAVE_ICE_GRAVE         = 749,
-    AV_GRAVE_FROSTWOLF         = 690,
-    AV_GRAVE_FROST_HUT         = 750,
-    AV_GRAVE_MAIN_ALLIANCE     = 611,
-    AV_GRAVE_MAIN_HORDE        = 610
+    AV_GRAVE_STORM_AID         = 751,  ///< 急救站墓地
+    AV_GRAVE_STORM_GRAVE       = 689,  ///< 雷矛墓地
+    AV_GRAVE_STONE_GRAVE       = 729,  ///< 石炉墓地
+    AV_GRAVE_SNOWFALL          = 169,  ///< 雪落墓地
+    AV_GRAVE_ICE_GRAVE         = 749,  ///< 冰血墓地
+    AV_GRAVE_FROSTWOLF         = 690,  ///< 霜狼墓地
+    AV_GRAVE_FROST_HUT         = 750,  ///< 霜狼小屋墓地
+    AV_GRAVE_MAIN_ALLIANCE     = 611,  ///< 联盟主基地墓地
+    AV_GRAVE_MAIN_HORDE        = 610   ///< 部落主基地墓地
 };
 
+/**
+ * @brief 墓地ID数组
+ *
+ * 包含所有墓地的ID，用于快速访问和遍历
+ */
 const uint32 BG_AV_GraveyardIds[9]=
 {
     AV_GRAVE_STORM_AID,
@@ -1327,269 +1536,382 @@ const uint32 BG_AV_GraveyardIds[9]=
     AV_GRAVE_MAIN_HORDE
 };
 
+/**
+ * @enum BG_AV_BUFF
+ * @brief 增益效果枚举
+ *
+ * 定义了奥特兰克山谷战场中使用的各种增益效果
+ *
+ * @todo 添加其他所有增益效果
+ */
 enum BG_AV_BUFF
-{ /// @todo: Add all other buffs here
-    AV_BUFF_ARMOR = 21163,
-    AV_BUFF_A_CAPTAIN = 23693, //the buff which the alliance captain does
-    AV_BUFF_H_CAPTAIN = 22751 //the buff which the horde captain does
+{
+    AV_BUFF_ARMOR = 21163,      ///< 护甲增益
+    AV_BUFF_A_CAPTAIN = 23693,  ///< 联盟队长增益
+    AV_BUFF_H_CAPTAIN = 22751   ///< 部落队长增益
 };
+
+/**
+ * @enum BG_AV_States
+ * @brief 节点状态枚举
+ *
+ * 定义了奥特兰克山谷战场中节点（墓地、塔楼）的可能状态
+ */
 enum BG_AV_States
 {
-    POINT_NEUTRAL              =  0,
-    POINT_ASSAULTED            =  1,
-    POINT_DESTROYED            =  2,
-    POINT_CONTROLED            =  3
+    POINT_NEUTRAL              =  0,  ///< 中立状态
+    POINT_ASSAULTED            =  1,  ///< 被进攻状态
+    POINT_DESTROYED            =  2,  ///< 被摧毁状态（仅适用于塔楼）
+    POINT_CONTROLED            =  3   ///< 被控制状态
 };
 
+/**
+ * @enum BG_AV_WorldStates
+ * @brief 世界状态枚举
+ *
+ * 定义了奥特兰克山谷战场中使用的各种世界状态ID
+ * 用于向客户端同步战场状态信息（分数、节点控制等）
+ */
 enum BG_AV_WorldStates
 {
-    AV_Alliance_Score               = 3127,
-    AV_Horde_Score                  = 3128,
-    AV_SHOW_H_SCORE                 = 3133,
-    AV_SHOW_A_SCORE                 = 3134,
+    AV_Alliance_Score               = 3127,  ///< 联盟分数
+    AV_Horde_Score                  = 3128,  ///< 部落分数
+    AV_SHOW_H_SCORE                 = 3133,  ///< 显示部落分数
+    AV_SHOW_A_SCORE                 = 3134,  ///< 显示联盟分数
 
-/*
-    //the comments behind the state shows which icon overlaps the other.. but is, until now, unused and maybe not a good solution (but give few performance (:)
+    /*
+    // 状态后面的注释显示哪个图标覆盖另一个，但到目前为止未使用，可能不是一个好的解决方案（但能提供一些性能）
 
-// Graves
+    // 墓地（Graves）
 
-    // Alliance
-    //Stormpike first aid station
-    AV_AID_A_C                      = 1325,
-    AV_AID_A_A                      = 1326,
-    AV_AID_H_C                      = 1327,
-    AV_AID_H_A                      = 1328,
-    //Stormpike Graveyard
-    AV_PIKEGRAVE_A_C                = 1333,
-    AV_PIKEGRAVE_A_A                = 1335,
-    AV_PIKEGRAVE_H_C                = 1334,
-    AV_PIKEGRAVE_H_A                = 1336,
-    //Stoneheart Grave
-    AV_STONEHEART_A_C               = 1302,
-    AV_STONEHEART_A_A               = 1304, //over hc
-    AV_STONEHEART_H_C               = 1301, //over ac
-    AV_STONEHEART_H_A               = 1303, //over aa
-    //Neutral
-    //Snowfall Grave
-*/
-    AV_SNOWFALL_N                   = 1966 //over aa
-/*
-    AV_SNOWFALL_A_C                 = 1341, //over hc
-    AV_SNOWFALL_A_A                 = 1343, //over ha
-    AV_SNOWFALL_H_C                 = 1342,
-    AV_SNOWFALL_H_A                 = 1344, //over ac
-    //Horde
-    //Iceblood grave
-    AV_ICEBLOOD_A_C                 = 1346, //over hc
-    AV_ICEBLOOD_A_A                 = 1348, //over ac
-    AV_ICEBLOOD_H_C                 = 1347,
-    AV_ICEBLOOD_H_A                 = 1349, //over aa
-    //Frostwolf Grave
-    AV_FROSTWOLF_A_C                = 1337, //over hc
-    AV_FROSTWOLF_A_A                = 1339, //over ac
-    AV_FROSTWOLF_H_C                = 1338,
-    AV_FROSTWOLF_H_A                = 1340, //over aa
-    //Frostwolf Hut
-    AV_FROSTWOLFHUT_A_C             = 1329, //over hc
-    AV_FROSTWOLFHUT_A_A             = 1331, //over ha
-    AV_FROSTWOLFHUT_H_C             = 1330,
-    AV_FROSTWOLFHUT_H_A             = 1332, //over ac
+    // 联盟（Alliance）
+    // 急救站（Stormpike first aid station）
+    AV_AID_A_C                      = 1325,  ///< 急救站联盟控制
+    AV_AID_A_A                      = 1326,  ///< 急救站联盟进攻
+    AV_AID_H_C                      = 1327,  ///< 急救站部落控制
+    AV_AID_H_A                      = 1328,  ///< 急救站部落进攻
+    // 雷矛墓地（Stormpike Graveyard）
+    AV_PIKEGRAVE_A_C                = 1333,  ///< 雷矛墓地联盟控制
+    AV_PIKEGRAVE_A_A                = 1335,  ///< 雷矛墓地联盟进攻
+    AV_PIKEGRAVE_H_C                = 1334,  ///< 雷矛墓地部落控制
+    AV_PIKEGRAVE_H_A                = 1336,  ///< 雷矛墓地部落进攻
+    // 石炉墓地（Stoneheart Grave）
+    AV_STONEHEART_A_C               = 1302,  ///< 石炉墓地联盟控制
+    AV_STONEHEART_A_A               = 1304,  ///< 石炉墓地联盟进攻（覆盖部落控制）
+    AV_STONEHEART_H_C               = 1301,  ///< 石炉墓地部落控制（覆盖联盟控制）
+    AV_STONEHEART_H_A               = 1303,  ///< 石炉墓地部落进攻（覆盖联盟进攻）
+    // 中立（Neutral）
+    // 雪落墓地（Snowfall Grave）
+    */
+    AV_SNOWFALL_N                   = 1966   ///< 雪落墓地中立状态（覆盖联盟进攻）
+    /*
+    AV_SNOWFALL_A_C                 = 1341,  ///< 雪落墓地联盟控制（覆盖部落控制）
+    AV_SNOWFALL_A_A                 = 1343,  ///< 雪落墓地联盟进攻（覆盖部落进攻）
+    AV_SNOWFALL_H_C                 = 1342,  ///< 雪落墓地部落控制
+    AV_SNOWFALL_H_A                 = 1344,  ///< 雪落墓地部落进攻（覆盖联盟控制）
+    // 部落（Horde）
+    // 冰血墓地（Iceblood grave）
+    AV_ICEBLOOD_A_C                 = 1346,  ///< 冰血墓地联盟控制（覆盖部落控制）
+    AV_ICEBLOOD_A_A                 = 1348,  ///< 冰血墓地联盟进攻（覆盖联盟控制）
+    AV_ICEBLOOD_H_C                 = 1347,  ///< 冰血墓地部落控制
+    AV_ICEBLOOD_H_A                 = 1349,  ///< 冰血墓地部落进攻（覆盖联盟进攻）
+    // 霜狼墓地（Frostwolf Grave）
+    AV_FROSTWOLF_A_C                = 1337,  ///< 霜狼墓地联盟控制（覆盖部落控制）
+    AV_FROSTWOLF_A_A                = 1339,  ///< 霜狼墓地联盟进攻（覆盖联盟控制）
+    AV_FROSTWOLF_H_C                = 1338,  ///< 霜狼墓地部落控制
+    AV_FROSTWOLF_H_A                = 1340,  ///< 霜狼墓地部落进攻（覆盖联盟进攻）
+    // 霜狼小屋（Frostwolf Hut）
+    AV_FROSTWOLFHUT_A_C             = 1329,  ///< 霜狼小屋联盟控制（覆盖部落控制）
+    AV_FROSTWOLFHUT_A_A             = 1331,  ///< 霜狼小屋联盟进攻（覆盖部落进攻）
+    AV_FROSTWOLFHUT_H_C             = 1330,  ///< 霜狼小屋部落控制
+    AV_FROSTWOLFHUT_H_A             = 1332,  ///< 霜狼小屋部落进攻（覆盖联盟控制）
 
-//Towers
-    //Alliance
-    //Dunbaldar South Bunker
-    AV_DUNS_CONTROLLED              = 1361,
-    AV_DUNS_DESTROYED               = 1370,
-    AV_DUNS_ASSAULTED               = 1378,
-    //Dunbaldar North Bunker
-    AV_DUNN_CONTROLLED              = 1362,
-    AV_DUNN_DESTROYED               = 1371,
-    AV_DUNN_ASSAULTED               = 1379,
-    //Icewing Bunker
-    AV_ICEWING_CONTROLLED           = 1363,
-    AV_ICEWING_DESTROYED            = 1372,
-    AV_ICEWING_ASSAULTED            = 1380,
-    //Stoneheart Bunker
-    AV_STONEH_CONTROLLED            = 1364,
-    AV_STONEH_DESTROYED             = 1373,
-    AV_STONEH_ASSAULTED             = 1381,
-    //Horde
-    //Iceblood Tower
-    AV_ICEBLOOD_CONTROLLED          = 1385,
-    AV_ICEBLOOD_DESTROYED           = 1368,
-    AV_ICEBLOOD_ASSAULTED           = 1390,
-    //Tower Point
-    AV_TOWERPOINT_CONTROLLED        = 1384,
-    AV_TOWERPOINT_DESTROYED         = 1367, //goes over controlled
-    AV_TOWERPOINT_ASSAULTED         = 1389, //goes over destroyed
-    //Frostwolf West
-    AV_FROSTWOLFW_CONTROLLED        = 1382,
-    AV_FROSTWOLFW_DESTROYED         = 1365, //over controlled
-    AV_FROSTWOLFW_ASSAULTED         = 1387, //over destroyed
-    //Frostwolf East
-    AV_FROSTWOLFE_CONTROLLED        = 1383,
-    AV_FROSTWOLFE_DESTROYED         = 1366,
-    AV_FROSTWOLFE_ASSAULTED         = 1388,
+    // 塔楼（Towers）
+    // 联盟（Alliance）
+    // 丹巴达尔南部碉堡（Dunbaldar South Bunker）
+    AV_DUNS_CONTROLLED              = 1361,  ///< 丹巴达尔南部碉堡控制
+    AV_DUNS_DESTROYED               = 1370,  ///< 丹巴达尔南部碉堡摧毁
+    AV_DUNS_ASSAULTED               = 1378,  ///< 丹巴达尔南部碉堡进攻
+    // 丹巴达尔北部碉堡（Dunbaldar North Bunker）
+    AV_DUNN_CONTROLLED              = 1362,  ///< 丹巴达尔北部碉堡控制
+    AV_DUNN_DESTROYED               = 1371,  ///< 丹巴达尔北部碉堡摧毁
+    AV_DUNN_ASSAULTED               = 1379,  ///< 丹巴达尔北部碉堡进攻
+    // 冰翼碉堡（Icewing Bunker）
+    AV_ICEWING_CONTROLLED           = 1363,  ///< 冰翼碉堡控制
+    AV_ICEWING_DESTROYED            = 1372,  ///< 冰翼碉堡摧毁
+    AV_ICEWING_ASSAULTED            = 1380,  ///< 冰翼碉堡进攻
+    // 石炉碉堡（Stoneheart Bunker）
+    AV_STONEH_CONTROLLED            = 1364,  ///< 石炉碉堡控制
+    AV_STONEH_DESTROYED             = 1373,  ///< 石炉碉堡摧毁
+    AV_STONEH_ASSAULTED             = 1381,  ///< 石炉碉堡进攻
+    // 部落（Horde）
+    // 冰血哨塔（Iceblood Tower）
+    AV_ICEBLOOD_CONTROLLED          = 1385,  ///< 冰血哨塔控制
+    AV_ICEBLOOD_DESTROYED           = 1368,  ///< 冰血哨塔摧毁
+    AV_ICEBLOOD_ASSAULTED           = 1390,  ///< 冰血哨塔进攻
+    // 哨塔点（Tower Point）
+    AV_TOWERPOINT_CONTROLLED        = 1384,  ///< 哨塔点控制
+    AV_TOWERPOINT_DESTROYED         = 1367,  ///< 哨塔点摧毁（覆盖控制）
+    AV_TOWERPOINT_ASSAULTED         = 1389,  ///< 哨塔点进攻（覆盖摧毁）
+    // 霜狼西塔（Frostwolf West）
+    AV_FROSTWOLFW_CONTROLLED        = 1382,  ///< 霜狼西塔控制
+    AV_FROSTWOLFW_DESTROYED         = 1365,  ///< 霜狼西塔摧毁（覆盖控制）
+    AV_FROSTWOLFW_ASSAULTED         = 1387,  ///< 霜狼西塔进攻（覆盖摧毁）
+    // 霜狼东塔（Frostwolf East）
+    AV_FROSTWOLFE_CONTROLLED        = 1383,  ///< 霜狼东塔控制
+    AV_FROSTWOLFE_DESTROYED         = 1366,  ///< 霜狼东塔摧毁
+    AV_FROSTWOLFE_ASSAULTED         = 1388,  ///< 霜狼东塔进攻
 
-//mines
+    // 矿井（mines）
+    AV_N_MINE_N              = 1360,  ///< 北部矿井中立
+    AV_N_MINE_A              = 1358,  ///< 北部矿井联盟
+    AV_N_MINE_H              = 1359,  ///< 北部矿井部落
 
-    AV_N_MINE_N              = 1360,
-    AV_N_MINE_A              = 1358,
-    AV_N_MINE_H              = 1359,
+    AV_S_MINE_N                     = 1357,  ///< 南部矿井中立
+    AV_S_MINE_A                     = 1355,  ///< 南部矿井联盟
+    AV_S_MINE_H                     = 1356,  ///< 南部矿井部落
 
-    AV_S_MINE_N                     = 1357,
-    AV_S_MINE_A                     = 1355,
-    AV_S_MINE_H                     = 1356,
+    // 被己方队伍进攻的塔楼（未使用）（towers assaulted by own team - unused）
+    AV_STONEH_UNUSED                = 1377,  ///< 石炉碉堡未使用
+    AV_ICEWING_UNUSED               = 1376,  ///< 冰翼碉堡未使用
+    AV_DUNS_UNUSED                  = 1375,  ///< 丹巴达尔南部碉堡未使用
+    AV_DUNN_UNUSED                  = 1374,  ///< 丹巴达尔北部碉堡未使用
 
-//towers assaulted by own team (unused)
-    AV_STONEH_UNUSED                = 1377,
-    AV_ICEWING_UNUSED               = 1376,
-    AV_DUNS_UNUSED                  = 1375,
-    AV_DUNN_UNUSED                  = 1374,
-
-    AV_ICEBLOOD_UNUSED              = 1395,
-    AV_TOWERPOINT_UNUSED            = 1394,
-    AV_FROSTWOLFE_UNUSED            = 1393,
-    AV_FROSTWOLFW_UNUSED            = 1392
-*/
+    AV_ICEBLOOD_UNUSED              = 1395,  ///< 冰血哨塔未使用
+    AV_TOWERPOINT_UNUSED            = 1394,  ///< 哨塔点未使用
+    AV_FROSTWOLFE_UNUSED            = 1393,  ///< 霜狼东塔未使用
+    AV_FROSTWOLFW_UNUSED            = 1392   ///< 霜狼西塔未使用
+    */
 };
 
-//alliance_control neutral_control horde_control
+/**
+ * @brief 矿井世界状态数组
+ *
+ * 定义了矿井的世界状态ID
+ * 格式：[联盟控制, 中立控制, 部落控制]
+ */
 const uint32 BG_AV_MineWorldStates[2][3] =
 {
-    {1358, 1360, 1359},
-    {1355, 1357, 1356}
+    {1358, 1360, 1359},  ///< 北部矿井（铁深矿井）
+    {1355, 1357, 1356}   ///< 南部矿井（冷齿矿井）
 };
 
+/**
+ * @enum BG_AV_QuestIds
+ * @brief 任务ID枚举
+ *
+ * 定义了奥特兰克山谷战场中的所有任务ID
+ * 这些任务可以提供战场增益和资源
+ */
 enum BG_AV_QuestIds
 {
-    AV_QUEST_A_SCRAPS1      = 7223,
-    AV_QUEST_A_SCRAPS2      = 6781,
-    AV_QUEST_H_SCRAPS1      = 7224,
-    AV_QUEST_H_SCRAPS2      = 6741,
-    AV_QUEST_A_COMMANDER1   = 6942, //soldier
-    AV_QUEST_H_COMMANDER1   = 6825,
-    AV_QUEST_A_COMMANDER2   = 6941, //leutnant
-    AV_QUEST_H_COMMANDER2   = 6826,
-    AV_QUEST_A_COMMANDER3   = 6943, //commander
-    AV_QUEST_H_COMMANDER3   = 6827,
-    AV_QUEST_A_BOSS1        = 7386, // 5 cristal/blood
-    AV_QUEST_H_BOSS1        = 7385,
-    AV_QUEST_A_BOSS2        = 6881, // 1
-    AV_QUEST_H_BOSS2        = 6801,
-    AV_QUEST_A_NEAR_MINE    = 5892, //the mine near start location of team
-    AV_QUEST_H_NEAR_MINE    = 5893,
-    AV_QUEST_A_OTHER_MINE   = 6982, //the other mine ;)
-    AV_QUEST_H_OTHER_MINE   = 6985,
-    AV_QUEST_A_RIDER_HIDE   = 7026,
-    AV_QUEST_H_RIDER_HIDE   = 7002,
-    AV_QUEST_A_RIDER_TAME   = 7027,
-    AV_QUEST_H_RIDER_TAME   = 7001
+    // 护甲碎片任务（Armor Scraps Quests）
+    AV_QUEST_A_SCRAPS1      = 7223,  ///< 联盟护甲碎片任务1
+    AV_QUEST_A_SCRAPS2      = 6781,  ///< 联盟护甲碎片任务2
+    AV_QUEST_H_SCRAPS1      = 7224,  ///< 部落护甲碎片任务1
+    AV_QUEST_H_SCRAPS2      = 6741,  ///< 部落护甲碎片任务2
+
+    // 空军指挥官任务（Wing Commander Quests）
+    AV_QUEST_A_COMMANDER1   = 6942,  ///< 联盟空军指挥官任务1（士兵）
+    AV_QUEST_H_COMMANDER1   = 6825,  ///< 部落空军指挥官任务1
+    AV_QUEST_A_COMMANDER2   = 6941,  ///< 联盟空军指挥官任务2（中尉）
+    AV_QUEST_H_COMMANDER2   = 6826,  ///< 部落空军指挥官任务2
+    AV_QUEST_A_COMMANDER3   = 6943,  ///< 联盟空军指挥官任务3（指挥官）
+    AV_QUEST_H_COMMANDER3   = 6827,  ///< 部落空军指挥官任务3
+
+    // 首领召唤任务（Boss Summon Quests）
+    AV_QUEST_A_BOSS1        = 7386,  ///< 联盟首领任务1（5个水晶/血）
+    AV_QUEST_H_BOSS1        = 7385,  ///< 部落首领任务1
+    AV_QUEST_A_BOSS2        = 6881,  ///< 联盟首领任务2（1个）
+    AV_QUEST_H_BOSS2        = 6801,  ///< 部落首领任务2
+
+    // 矿井任务（Mine Quests）
+    AV_QUEST_A_NEAR_MINE    = 5892,  ///< 联盟附近矿井任务（队伍起始位置附近的矿井）
+    AV_QUEST_H_NEAR_MINE    = 5893,  ///< 部落附近矿井任务
+    AV_QUEST_A_OTHER_MINE   = 6982,  ///< 联盟另一个矿井任务
+    AV_QUEST_H_OTHER_MINE   = 6985,  ///< 部落另一个矿井任务
+
+    // 骑兵任务（Rider Quests）
+    AV_QUEST_A_RIDER_HIDE   = 7026,  ///< 联盟骑兵任务（羊皮）
+    AV_QUEST_H_RIDER_HIDE   = 7002,  ///< 部落骑兵任务
+    AV_QUEST_A_RIDER_TAME   = 7027,  ///< 联盟骑兵任务（驯服）
+    AV_QUEST_H_RIDER_TAME   = 7001   ///< 部落骑兵任务
 };
 
+/**
+ * @enum BG_AV_Objectives
+ * @brief 目标类型枚举
+ *
+ * 定义了奥特兰克山谷战场中的目标类型
+ * 用于成就和计分系统
+ */
 enum BG_AV_Objectives
 {
-    AV_OBJECTIVE_ASSAULT_TOWER      = 61,
-    AV_OBJECTIVE_ASSAULT_GRAVEYARD  = 63,
-    AV_OBJECTIVE_DEFEND_TOWER       = 64,
-    AV_OBJECTIVE_DEFEND_GRAVEYARD   = 65
+    AV_OBJECTIVE_ASSAULT_TOWER      = 61,  ///< 进攻塔楼
+    AV_OBJECTIVE_ASSAULT_GRAVEYARD  = 63,  ///< 进攻墓地
+    AV_OBJECTIVE_DEFEND_TOWER       = 64,  ///< 防守塔楼
+    AV_OBJECTIVE_DEFEND_GRAVEYARD   = 65   ///< 防守墓地
 };
 
+/**
+ * @struct StaticNodeInfo
+ * @brief 静态节点信息结构
+ *
+ * 存储每个节点的静态信息，包括文本ID和世界状态ID
+ */
 struct StaticNodeInfo
 {
-    BG_AV_Nodes NodeId;
+    BG_AV_Nodes NodeId;  ///< 节点ID
 
+    /**
+     * @brief 文本ID结构
+     *
+     * 包含节点状态变化时的广播文本ID
+     */
     struct
     {
-        uint8 AllianceCapture;
-        uint8 AllianceAttack;
-        uint8 HordeCapture;
-        uint8 HordeAttack;
+        uint8 AllianceCapture;  ///< 联盟占领文本ID
+        uint8 AllianceAttack;   ///< 联盟进攻文本ID
+        uint8 HordeCapture;     ///< 部落占领文本ID
+        uint8 HordeAttack;      ///< 部落进攻文本ID
     } TextIds;
 
+    /**
+     * @brief 世界状态ID结构
+     *
+     * 包含节点不同状态的世界状态ID
+     */
     struct
     {
-        uint32 AllianceControl;
-        uint32 AllianceAssault;
-        uint32 HordeControl;
-        uint32 HordeAssault;
+        uint32 AllianceControl;   ///< 联盟控制状态ID
+        uint32 AllianceAssault;   ///< 联盟进攻状态ID
+        uint32 HordeControl;      ///< 部落控制状态ID
+        uint32 HordeAssault;      ///< 部落进攻状态ID
     } WorldStateIds;
 };
 
+/**
+ * @brief 静态节点信息数组
+ *
+ * 包含所有节点的静态配置信息
+ * 每个条目定义了节点的ID、文本ID和世界状态ID
+ */
 static StaticNodeInfo const BGAVNodeInfo[] =
 {
-    { BG_AV_NODES_FIRSTAID_STATION,  { 47, 48, 45, 46 }, { 1325, 1326, 1327, 1328 } }, // Stormpike First Aid Station
-    { BG_AV_NODES_STORMPIKE_GRAVE,   {  1,  2,  3,  4 }, { 1333, 1335, 1334, 1336 } }, // Stormpike Graveyard
-    { BG_AV_NODES_STONEHEART_GRAVE,  { 55, 56, 53, 54 }, { 1302, 1304, 1301, 1303 } }, // Stoneheart Graveyard
-    { BG_AV_NODES_SNOWFALL_GRAVE,    {  5,  6,  7,  8 }, { 1341, 1343, 1342, 1344 } }, // Snowfall Graveyard
-    { BG_AV_NODES_ICEBLOOD_GRAVE,    { 59, 60, 57, 58 }, { 1346, 1348, 1347, 1349 } }, // Iceblood Graveyard
-    { BG_AV_NODES_FROSTWOLF_GRAVE,   {  9, 10, 11, 12 }, { 1337, 1339, 1338, 1340 } }, // Frostwolf Graveyard
-    { BG_AV_NODES_FROSTWOLF_HUT,     { 51, 52, 49, 50 }, { 1329, 1331, 1330, 1332 } }, // Frostwolf Hut
-    { BG_AV_NODES_DUNBALDAR_SOUTH,   { 16, 15, 14, 13 }, { 1361, 1375, 1370, 1378 } }, // Dunbaldar South Bunker
-    { BG_AV_NODES_DUNBALDAR_NORTH,   { 20, 19, 18, 17 }, { 1362, 1374, 1371, 1379 } }, // Dunbaldar North Bunker
-    { BG_AV_NODES_ICEWING_BUNKER,    { 24, 23, 22, 21 }, { 1363, 1376, 1372, 1380 } }, // Icewing Bunker
-    { BG_AV_NODES_STONEHEART_BUNKER, { 28, 27, 26, 25 }, { 1364, 1377, 1373, 1381 } }, // Stoneheart Bunker
-    { BG_AV_NODES_ICEBLOOD_TOWER,    { 44, 43, 42, 41 }, { 1368, 1390, 1385, 1395 } }, // Iceblood Tower
-    { BG_AV_NODES_TOWER_POINT,       { 40, 39, 38, 37 }, { 1367, 1389, 1384, 1394 } }, // Tower Point
-    { BG_AV_NODES_FROSTWOLF_ETOWER,  { 36, 35, 34, 33 }, { 1366, 1388, 1383, 1393 } }, // Frostwolf East Tower
-    { BG_AV_NODES_FROSTWOLF_WTOWER,  { 32, 31, 30, 29 }, { 1365, 1387, 1382, 1392 } }, // Frostwolf West Tower
+    { BG_AV_NODES_FIRSTAID_STATION,  { 47, 48, 45, 46 }, { 1325, 1326, 1327, 1328 } }, ///< 雷矛急救站
+    { BG_AV_NODES_STORMPIKE_GRAVE,   {  1,  2,  3,  4 }, { 1333, 1335, 1334, 1336 } }, ///< 雷矛墓地
+    { BG_AV_NODES_STONEHEART_GRAVE,  { 55, 56, 53, 54 }, { 1302, 1304, 1301, 1303 } }, ///< 石炉墓地
+    { BG_AV_NODES_SNOWFALL_GRAVE,    {  5,  6,  7,  8 }, { 1341, 1343, 1342, 1344 } }, ///< 雪落墓地
+    { BG_AV_NODES_ICEBLOOD_GRAVE,    { 59, 60, 57, 58 }, { 1346, 1348, 1347, 1349 } }, ///< 冰血墓地
+    { BG_AV_NODES_FROSTWOLF_GRAVE,   {  9, 10, 11, 12 }, { 1337, 1339, 1338, 1340 } }, ///< 霜狼墓地
+    { BG_AV_NODES_FROSTWOLF_HUT,     { 51, 52, 49, 50 }, { 1329, 1331, 1330, 1332 } }, ///< 霜狼小屋
+    { BG_AV_NODES_DUNBALDAR_SOUTH,   { 16, 15, 14, 13 }, { 1361, 1375, 1370, 1378 } }, ///< 丹巴达尔南部碉堡
+    { BG_AV_NODES_DUNBALDAR_NORTH,   { 20, 19, 18, 17 }, { 1362, 1374, 1371, 1379 } }, ///< 丹巴达尔北部碉堡
+    { BG_AV_NODES_ICEWING_BUNKER,    { 24, 23, 22, 21 }, { 1363, 1376, 1372, 1380 } }, ///< 冰翼碉堡
+    { BG_AV_NODES_STONEHEART_BUNKER, { 28, 27, 26, 25 }, { 1364, 1377, 1373, 1381 } }, ///< 石炉碉堡
+    { BG_AV_NODES_ICEBLOOD_TOWER,    { 44, 43, 42, 41 }, { 1368, 1390, 1385, 1395 } }, ///< 冰血哨塔
+    { BG_AV_NODES_TOWER_POINT,       { 40, 39, 38, 37 }, { 1367, 1389, 1384, 1394 } }, ///< 哨塔点
+    { BG_AV_NODES_FROSTWOLF_ETOWER,  { 36, 35, 34, 33 }, { 1366, 1388, 1383, 1393 } }, ///< 霜狼东塔
+    { BG_AV_NODES_FROSTWOLF_WTOWER,  { 32, 31, 30, 29 }, { 1365, 1387, 1382, 1392 } }, ///< 霜狼西塔
 };
 
+/**
+ * @enum Texts
+ * @brief 文本ID枚举
+ *
+ * 定义了奥特兰克山谷战场中使用的各种文本ID
+ */
 enum Texts
 {
-    // Herold
-    // Towers/Graveyards = 1 - 60
-    TEXT_COLDTOOTH_MINE_ALLIANCE_TAKEN  = 61,
-    TEXT_IRONDEEP_MINE_ALLIANCE_TAKEN   = 62,
-    TEXT_COLDTOOTH_MINE_HORDE_TAKEN     = 63,
-    TEXT_IRONDEEP_MINE_HORDE_TAKEN      = 64,
-    TEXT_FROSTWOLF_GENERAL_DEAD         = 65, /// @todo: sound is missing
-    TEXT_STORMPIKE_GENERAL_DEAD         = 66, /// @todo: sound is missing
-    TEXT_ALLIANCE_WINS                  = 67, // NYI /// @todo: sound is missing
-    TEXT_HORDE_WINS                     = 68, // NYI /// @todo: sound is missing
+    // 传令官（Herald）
+    // 塔楼/墓地 = 1 - 60
+    TEXT_COLDTOOTH_MINE_ALLIANCE_TAKEN  = 61,  ///< 冷齿矿井被联盟占领
+    TEXT_IRONDEEP_MINE_ALLIANCE_TAKEN   = 62,  ///< 铁深矿井被联盟占领
+    TEXT_COLDTOOTH_MINE_HORDE_TAKEN     = 63,  ///< 冷齿矿井被部落占领
+    TEXT_IRONDEEP_MINE_HORDE_TAKEN      = 64,  ///< 铁深矿井被部落占领
+    TEXT_FROSTWOLF_GENERAL_DEAD         = 65,  ///< 霜狼将军死亡 @todo 缺少音效
+    TEXT_STORMPIKE_GENERAL_DEAD         = 66,  ///< 雷矛将军死亡 @todo 缺少音效
+    TEXT_ALLIANCE_WINS                  = 67,  ///< 联盟获胜（未实现） @todo 缺少音效
+    TEXT_HORDE_WINS                     = 68,  ///< 部落获胜（未实现） @todo 缺少音效
 
-    // Taskmaster Snivvle
-    TEXT_SNIVVLE_RANDOM                 = 0
+    // 监工斯尼维尔（Taskmaster Snivvle）
+    TEXT_SNIVVLE_RANDOM                 = 0    ///< 斯尼维尔随机文本
 };
 
+/**
+ * @struct BG_AV_NodeInfo
+ * @brief 节点运行时信息结构
+ *
+ * 存储每个节点的运行时状态信息，包括当前状态、所有者和计时器
+ */
 struct BG_AV_NodeInfo
 {
-    BG_AV_States State;
-    BG_AV_States PrevState;
-    uint32       Timer;
-    uint16       TotalOwner;
-    uint16       Owner;
-    uint16       PrevOwner;
-    bool         Tower;
+    BG_AV_States State;      ///< 当前状态
+    BG_AV_States PrevState;  ///< 前一状态
+    uint32       Timer;      ///< 状态计时器（用于占领倒计时）
+    uint16       TotalOwner; ///< 总拥有者（最终控制者）
+    uint16       Owner;      ///< 当前拥有者
+    uint16       PrevOwner;  ///< 前一拥有者
+    bool         Tower;      ///< 是否为塔楼（true为塔楼，false为墓地）
 };
 
+/**
+ * @brief 节点枚举递增运算符
+ *
+ * 允许对 BG_AV_Nodes 枚举进行递增操作
+ *
+ * @param i 节点枚举引用
+ * @return 递增后的节点枚举引用
+ */
 inline BG_AV_Nodes &operator++(BG_AV_Nodes& i) { return i = BG_AV_Nodes(i + 1); }
 
+/**
+ * @struct BattlegroundAVScore
+ * @brief 奥特兰克山谷战场分数结构
+ *
+ * 继承自 BattlegroundScore，存储奥特兰克山谷特有的计分数据
+ * 包括墓地进攻、防守、塔楼进攻、防守和矿井占领数量
+ */
 struct BattlegroundAVScore final : public BattlegroundScore
 {
-    friend class BattlegroundAV;
+    friend class BattlegroundAV;  ///< 允许 BattlegroundAV 类访问私有成员
 
     protected:
+        /**
+         * @brief 构造函数
+         *
+         * 初始化所有奥特兰克山谷特有的计分项为0
+         *
+         * @param playerGuid 玩家GUID
+         */
         BattlegroundAVScore(ObjectGuid playerGuid) : BattlegroundScore(playerGuid), GraveyardsAssaulted(0), GraveyardsDefended(0), TowersAssaulted(0), TowersDefended(0), MinesCaptured(0) { }
 
+        /**
+         * @brief 更新分数
+         *
+         * 根据分数类型更新玩家的计分数据
+         *
+         * @param type 分数类型
+         * @param value 分数值
+         */
         void UpdateScore(uint32 type, uint32 value) override
         {
             switch (type)
             {
                 case SCORE_GRAVEYARDS_ASSAULTED:
-                    GraveyardsAssaulted += value;
+                    GraveyardsAssaulted += value;  ///< 墓地进攻数
                     break;
                 case SCORE_GRAVEYARDS_DEFENDED:
-                    GraveyardsDefended += value;
+                    GraveyardsDefended += value;   ///< 墓地防守数
                     break;
                 case SCORE_TOWERS_ASSAULTED:
-                    TowersAssaulted += value;
+                    TowersAssaulted += value;      ///< 塔楼进攻数
                     break;
                 case SCORE_TOWERS_DEFENDED:
-                    TowersDefended += value;
+                    TowersDefended += value;       ///< 塔楼防守数
                     break;
                 case SCORE_MINES_CAPTURED:
-                    MinesCaptured += value;
+                    MinesCaptured += value;        ///< 矿井占领数
                     break;
                 default:
                     BattlegroundScore::UpdateScore(type, value);
@@ -1597,73 +1919,352 @@ struct BattlegroundAVScore final : public BattlegroundScore
             }
         }
 
+        /**
+         * @brief 构建目标数据块
+         *
+         * 将玩家的目标数据序列化到数据包中
+         *
+         * @param data 世界数据包
+         */
         void BuildObjectivesBlock(WorldPacket& data) final override;
 
+        /**
+         * @brief 获取属性1
+         * @return 墓地进攻数量
+         */
         uint32 GetAttr1() const final override { return GraveyardsAssaulted; }
+
+        /**
+         * @brief 获取属性2
+         * @return 墓地防守数量
+         */
         uint32 GetAttr2() const final override { return GraveyardsDefended; }
+
+        /**
+         * @brief 获取属性3
+         * @return 塔楼进攻数量
+         */
         uint32 GetAttr3() const final override { return TowersAssaulted; }
+
+        /**
+         * @brief 获取属性4
+         * @return 塔楼防守数量
+         */
         uint32 GetAttr4() const final override { return TowersDefended; }
+
+        /**
+         * @brief 获取属性5
+         * @return 矿井占领数量
+         */
         uint32 GetAttr5() const final override { return MinesCaptured; }
 
-        uint32 GraveyardsAssaulted;
-        uint32 GraveyardsDefended;
-        uint32 TowersAssaulted;
-        uint32 TowersDefended;
-        uint32 MinesCaptured;
+        uint32 GraveyardsAssaulted;   ///< 进攻墓地次数
+        uint32 GraveyardsDefended;    ///< 防守墓地次数
+        uint32 TowersAssaulted;       ///< 进攻塔楼次数
+        uint32 TowersDefended;        ///< 防守塔楼次数
+        uint32 MinesCaptured;         ///< 占领矿井次数
 };
 
+/**
+ * @class BattlegroundAV
+ * @brief 奥特兰克山谷战场类
+ *
+ * 继承自 Battleground 基类，实现了奥特兰克山谷战场的核心逻辑
+ * 奥特兰克山谷是一个大型40v40战场，玩家需要占领墓地和摧毁塔楼，
+ * 最终击杀敌方将军以获得胜利。
+ */
 class BattlegroundAV : public Battleground
 {
     public:
-        BattlegroundAV();
-        ~BattlegroundAV();
+        BattlegroundAV();   ///< 构造函数
+        ~BattlegroundAV();  ///< 析构函数
 
-        /* inherited from BattlegroundClass */
+        /* 继承自 Battleground 类的方法 */
+
+        /**
+         * @brief 添加玩家到战场
+         * @param player 玩家指针
+         */
         void AddPlayer(Player* player) override;
+
+        /**
+         * @brief 开始事件关闭大门
+         *
+         * 在战斗开始前关闭起始区域的大门
+         */
         void StartingEventCloseDoors() override;
+
+        /**
+         * @brief 开始事件打开大门
+         *
+         * 战斗开始时打开大门，允许玩家离开起始区域
+         */
         void StartingEventOpenDoors() override;
 
+        /**
+         * @brief 移除玩家
+         *
+         * 当玩家离开战场时调用
+         *
+         * @param player 玩家指针
+         * @param guid 玩家GUID
+         * @param team 玩家队伍
+         */
         void RemovePlayer(Player* player, ObjectGuid guid, uint32 team) override;
+
+        /**
+         * @brief 处理区域触发
+         *
+         * 当玩家进入特定区域触发器时调用
+         *
+         * @param player 玩家指针
+         * @param trigger 触发器ID
+         */
         void HandleAreaTrigger(Player* player, uint32 trigger) override;
+
+        /**
+         * @brief 设置战场
+         *
+         * 初始化战场，生成所有必需的游戏对象和生物
+         *
+         * @return 设置成功返回true，否则返回false
+         */
         bool SetupBattleground() override;
+
+        /**
+         * @brief 重置战场子类数据
+         *
+         * 重置奥特兰克山谷特有的数据
+         */
         void ResetBGSubclass() override;
 
-        /*general stuff*/
+        /* 通用功能 */
+
+        /**
+         * @brief 更新分数
+         *
+         * 更新指定队伍的分数
+         *
+         * @param team 队伍ID
+         * @param points 分数变化量（可以为负数）
+         */
         void UpdateScore(uint16 team, int16 points);
+
+        /**
+         * @brief 更新玩家分数
+         *
+         * 更新玩家的计分数据
+         *
+         * @param player 玩家指针
+         * @param type 分数类型
+         * @param value 分数值
+         * @param doAddHonor 是否添加荣誉，默认为true
+         * @return 更新成功返回true
+         */
         bool UpdatePlayerScore(Player* player, uint32 type, uint32 value, bool doAddHonor = true) override;
 
-        /*handlestuff*/ //these are functions which get called from extern
+        /* 事件处理函数 - 这些函数从外部调用 */
+
+        /**
+         * @brief 玩家点击旗帜事件
+         *
+         * 当玩家点击旗帜时触发
+         *
+         * @param source 玩家指针
+         * @param target_obj 目标游戏对象
+         */
         void EventPlayerClickedOnFlag(Player* source, GameObject* target_obj) override;
+
+        /**
+         * @brief 处理玩家击杀
+         *
+         * 当玩家击杀其他玩家时调用
+         *
+         * @param player 被击杀的玩家
+         * @param killer 击杀者
+         */
         void HandleKillPlayer(Player* player, Player* killer) override;
+
+        /**
+         * @brief 处理单位击杀
+         *
+         * 当玩家击杀NPC单位时调用（如队长、将军等）
+         *
+         * @param unit 被击杀的单位
+         * @param killer 击杀者
+         */
         void HandleKillUnit(Creature* unit, Player* killer) override;
+
+        /**
+         * @brief 处理任务完成
+         *
+         * 当玩家完成战场任务时调用
+         *
+         * @param questid 任务ID
+         * @param player 玩家指针
+         */
         void HandleQuestComplete(uint32 questid, Player* player) override;
+
+        /**
+         * @brief 判断是否可以激活游戏对象
+         *
+         * 检查指定队伍是否可以激活特定游戏对象
+         *
+         * @param GOId 游戏对象ID
+         * @param team 队伍ID
+         * @return 可以激活返回true，否则返回false
+         */
         bool CanActivateGO(int32 GOId, uint32 team) const override;
 
+        /**
+         * @brief 结束战场
+         *
+         * 奥特兰克山谷特有的结束逻辑
+         *
+         * @param winner 获胜队伍ID
+         */
         void EndBattleground(uint32 winner) override;
 
+        /**
+         * @brief 获取最近的墓地
+         *
+         * 为玩家找到最近的可用墓地
+         *
+         * @param player 玩家指针
+         * @return 墓地位置信息
+         */
         WorldSafeLocsEntry const* GetClosestGraveyard(Player* player) override;
 
-        // Achievement: Av perfection and Everything counts
+        /**
+         * @brief 检查成就条件
+         *
+         * 检查是否满足成就条件
+         * 成就：奥特兰克完美胜利和一切都很重要
+         *
+         * @param criteriaId 成就条件ID
+         * @param source 源玩家
+         * @param target 目标单位
+         * @param miscvalue1 额外值1
+         * @return 满足条件返回true
+         */
         bool CheckAchievementCriteriaMeet(uint32 criteriaId, Player const* source, Unit const* target = nullptr, uint32 miscvalue1 = 0) override;
 
+        /**
+         * @brief 获取提前结束获胜者
+         *
+         * 当战场提前结束时确定获胜者
+         *
+         * @return 获胜队伍ID
+         */
         uint32 GetPrematureWinner() override;
 
     private:
+        /**
+         * @brief 战场更新实现
+         *
+         * 每帧调用的更新函数，处理所有计时器和状态更新
+         *
+         * @param diff 距离上次更新的时间差（毫秒）
+         */
         void PostUpdateImpl(uint32 diff) override;
 
-        /* Nodes occupying */
+        /* 节点占领相关 */
+
+        /**
+         * @brief 玩家进攻节点事件
+         *
+         * 当玩家开始进攻某个节点时调用
+         *
+         * @param player 玩家指针
+         * @param object 游戏对象ID
+         */
         void EventPlayerAssaultsPoint(Player* player, uint32 object);
+
+        /**
+         * @brief 玩家防守节点事件
+         *
+         * 当玩家防守某个节点时调用
+         *
+         * @param player 玩家指针
+         * @param object 游戏对象ID
+         */
         void EventPlayerDefendsPoint(Player* player, uint32 object);
+
+        /**
+         * @brief 节点被摧毁事件
+         *
+         * 当节点（塔楼）被摧毁时调用
+         *
+         * @param node 节点ID
+         */
         void EventPlayerDestroyedPoint(BG_AV_Nodes node);
 
+        /**
+         * @brief 进攻节点
+         *
+         * 设置节点为被进攻状态
+         *
+         * @param node 节点ID
+         * @param team 进攻队伍ID
+         */
         void AssaultNode(BG_AV_Nodes node, uint16 team);
+
+        /**
+         * @brief 摧毁节点
+         *
+         * 将节点设置为摧毁状态（仅用于塔楼）
+         *
+         * @param node 节点ID
+         */
         void DestroyNode(BG_AV_Nodes node);
+
+        /**
+         * @brief 初始化节点
+         *
+         * 设置节点的初始状态
+         *
+         * @param node 节点ID
+         * @param team 所有者队伍ID
+         * @param tower 是否为塔楼
+         */
         void InitNode(BG_AV_Nodes node, uint16 team, bool tower);
+
+        /**
+         * @brief 防守节点
+         *
+         * 成功防守节点，恢复到控制状态
+         *
+         * @param node 节点ID
+         * @param team 防守队伍ID
+         */
         void DefendNode(BG_AV_Nodes node, uint16 team);
 
+        /**
+         * @brief 填充节点
+         *
+         * 在节点上生成防御NPC
+         *
+         * @param node 节点ID
+         */
         void PopulateNode(BG_AV_Nodes node);
+
+        /**
+         * @brief 清空节点
+         *
+         * 移除节点上的防御NPC
+         *
+         * @param node 节点ID
+         */
         void DePopulateNode(BG_AV_Nodes node);
 
+        /**
+         * @brief 获取静态节点信息
+         *
+         * 查找并返回指定节点的静态配置信息
+         *
+         * @param node 节点ID
+         * @return 静态节点信息指针，未找到返回nullptr
+         */
         StaticNodeInfo const* GetStaticNodeInfo(BG_AV_Nodes node) const
         {
             for (uint8 i = 0; i < BG_AV_NODES_MAX; ++i)
@@ -1672,35 +2273,106 @@ class BattlegroundAV : public Battleground
             return nullptr;
         }
 
+        /**
+         * @brief 通过游戏对象获取节点ID
+         *
+         * 根据游戏对象ID查找对应的节点
+         *
+         * @param object 游戏对象ID
+         * @return 节点ID
+         */
         BG_AV_Nodes GetNodeThroughObject(uint32 object);
+
+        /**
+         * @brief 通过节点获取游戏对象ID
+         *
+         * 根据节点ID查找对应的游戏对象
+         *
+         * @param node 节点ID
+         * @return 游戏对象ID
+         */
         uint32 GetObjectThroughNode(BG_AV_Nodes node);
+
+        /**
+         * @brief 判断是否为塔楼
+         *
+         * 检查指定节点是否为塔楼
+         *
+         * @param node 节点ID
+         * @return 是塔楼返回true，否则返回false
+         */
         bool IsTower(BG_AV_Nodes node) { return m_Nodes[node].Tower; }
 
-        /*mine*/
+        /* 矿井相关 */
+
+        /**
+         * @brief 更改矿井所有者
+         *
+         * 更改矿井的控制权
+         *
+         * @param mine 矿井索引（0=北部，1=南部）
+         * @param team 新所有者队伍ID
+         * @param initial 是否为初始设置，默认为false
+         */
         void ChangeMineOwner(uint8 mine, uint32 team, bool initial = false);
 
-        /*worldstates*/
+        /* 世界状态相关 */
+
+        /**
+         * @brief 填充初始世界状态
+         *
+         * 向客户端发送战场初始世界状态
+         *
+         * @param packet 世界状态数据包
+         */
         void FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& packet) override;
+
+        /**
+         * @brief 发送矿井世界状态
+         *
+         * 更新并发送指定矿井的世界状态
+         *
+         * @param mine 矿井索引
+         */
         void SendMineWorldStates(uint32 mine);
+
+        /**
+         * @brief 更新节点世界状态
+         *
+         * 更新指定节点的世界状态
+         *
+         * @param node 节点ID
+         */
         void UpdateNodeWorldState(BG_AV_Nodes node);
 
-        /*general */
+        /* 通用功能 */
+
+        /**
+         * @brief 添加奥特兰克山谷生物
+         *
+         * 生成并添加生物到战场
+         *
+         * @param cinfoid 生物信息ID
+         * @param type 生物类型
+         * @return 生成的生物指针
+         */
         Creature* AddAVCreature(uint16 cinfoid, uint16 type);
 
-        /*variables */
-        int32 m_Team_Scores[2];
-        uint32 m_Team_QuestStatus[2][9]; //[x][y] x=team y=questcounter
+        /* 成员变量 */
 
-        BG_AV_NodeInfo m_Nodes[BG_AV_NODES_MAX];
+        int32 m_Team_Scores[2];                    ///< 队伍分数 [联盟, 部落]
+        uint32 m_Team_QuestStatus[2][9];           ///< 队伍任务进度 [队伍][任务计数器]
 
-        uint32 m_Mine_Owner[2];
-        uint32 m_Mine_PrevOwner[2]; //only for worldstates needed
-        int32 m_Mine_Timer; //ticks for both teams
-        uint32 m_Mine_Reclaim_Timer[2];
-        uint32 m_CaptainBuffTimer[2];
-        bool m_CaptainAlive[2];
+        BG_AV_NodeInfo m_Nodes[BG_AV_NODES_MAX];   ///< 所有节点的运行时信息
 
-        bool m_IsInformedNearVictory[2];
+        uint32 m_Mine_Owner[2];                    ///< 矿井所有者 [北部, 南部]
+        uint32 m_Mine_PrevOwner[2];                ///< 矿井前一所有者（仅用于世界状态）
+        int32 m_Mine_Timer;                        ///< 矿井计时器（两个队伍共用）
+        uint32 m_Mine_Reclaim_Timer[2];            ///< 矿井回收计时器 [北部, 南部]
+        uint32 m_CaptainBuffTimer[2];               ///< 队长增益计时器 [联盟, 部落]
+        bool m_CaptainAlive[2];                     ///< 队长是否存活 [联盟, 部落]
+
+        bool m_IsInformedNearVictory[2];            ///< 是否已通知即将获胜 [联盟, 部落]
 };
 
 #endif

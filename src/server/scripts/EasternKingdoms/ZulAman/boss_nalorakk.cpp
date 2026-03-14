@@ -15,6 +15,26 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file boss_nalorakk.cpp
+ * @brief 祖阿曼副本 - 纳洛拉克Boss脚本模块
+ *
+ * 本模块实现了纳洛拉克Boss的战斗逻辑，包括：
+ * - 巨魔形态和熊形态之间的形态转换
+ * - 巨魔形态技能：野蛮挥击、撕裂、冲锋
+ * - 熊形态技能：撕裂横扫、撕碎、震耳咆哮
+ * - 事件触发：在战斗开始前会触发一系列怪物波次事件
+ * - 狂暴机制
+ *
+ * 纳洛拉克是祖阿曼的第一个Boss（可选Boss），是一只熊神化身。
+ * 战斗分为巨魔形态和熊形态两个阶段，Boss会定时在两种形态间切换。
+ *
+ * 特殊机制：
+ * - 战斗开始前，Boss会在地图上巡逻，触发4波怪物事件
+ * - 玩家击败每波怪物后，Boss会移动到下一个位置
+ * - 最终Boss在指定位置进入战斗状态
+ */
+
 /* ScriptData
 SDName: Boss_Nalorakk
 SD%Complete: 100
@@ -29,63 +49,96 @@ EndScriptData */
 #include "ScriptedCreature.h"
 #include "zulaman.h"
 
+/**
+ * @brief 对话和喊话枚举
+ *
+ * 定义纳洛拉克的各种对话ID
+ */
 enum Yells
 {
-    YELL_NALORAKK_WAVE1   =  0,
-    YELL_NALORAKK_WAVE2   =  1,
-    YELL_NALORAKK_WAVE3   =  2,
-    YELL_NALORAKK_WAVE4   =  3,
-    YELL_AGGRO            =  4,
-    YELL_SURGE            =  5,
-    YELL_SHIFTEDTOBEAR    =  6,
-    YELL_SHIFTEDTOTROLL   =  7,
-    YELL_BERSERK          =  8,
-    YELL_KILL_ONE         =  9,
-    YELL_KILL_TWO         = 10,
-    YELL_DEATH            = 11
+    YELL_NALORAKK_WAVE1   =  0,  ///< 第一波怪物喊话
+    YELL_NALORAKK_WAVE2   =  1,  ///< 第二波怪物喊话
+    YELL_NALORAKK_WAVE3   =  2,  ///< 第三波怪物喊话
+    YELL_NALORAKK_WAVE4   =  3,  ///< 第四波怪物喊话
+    YELL_AGGRO            =  4,  ///< 开战喊话
+    YELL_SURGE            =  5,  ///< 冲锋喊话
+    YELL_SHIFTEDTOBEAR    =  6,  ///< 变身为熊形态喊话
+    YELL_SHIFTEDTOTROLL   =  7,  ///< 变身为巨魔形态喊话
+    YELL_BERSERK          =  8,  ///< 狂暴喊话
+    YELL_KILL_ONE         =  9,  ///< 击杀玩家喊话1
+    YELL_KILL_TWO         = 10,  ///< 击杀玩家喊话2
+    YELL_DEATH            = 11   ///< 死亡喊话
 
 //  Not yet implemented
 //  YELL_NALORAKK_EVENT1  = 12,
 //  YELL_NALORAKK_EVENT2  = 13
 };
 
+/**
+ * @brief 技能枚举
+ *
+ * 定义纳洛拉克使用的所有技能ID
+ */
 enum Spells
 {
-    // Troll form
-    SPELL_BRUTALSWIPE     = 42384,
-    SPELL_MANGLE          = 42389,
-    SPELL_MANGLEEFFECT    = 44955,
-    SPELL_SURGE           = 42402,
-    SPELL_BEARFORM        = 42377,
+    // Troll form - 巨魔形态技能
+    SPELL_BRUTALSWIPE     = 42384,  ///< 野蛮挥击 - 对目标及其周围敌人造成物理伤害
+    SPELL_MANGLE          = 42389,  ///< 撕裂 - 使目标受到的流血伤害提高
+    SPELL_MANGLEEFFECT    = 44955,  ///< 撕裂效果 - 撕裂的持续伤害效果
+    SPELL_SURGE           = 42402,  ///< 冲锋 - 冲向目标，造成伤害并击退
+    SPELL_BEARFORM        = 42377,  ///< 熊形态 - 变身为熊形态
 
-    // Bear form
-    SPELL_LACERATINGSLASH = 42395,
-    SPELL_RENDFLESH       = 42397,
-    SPELL_DEAFENINGROAR   = 42398,
+    // Bear form - 熊形态技能
+    SPELL_LACERATINGSLASH = 42395,  ///< 撕裂横扫 - 造成流血效果，持续18秒
+    SPELL_RENDFLESH       = 42397,  ///< 撕碎 - 造成物理伤害，持续5秒
+    SPELL_DEAFENINGROAR   = 42398,  ///< 震耳咆哮 - 沉默周围敌人，持续2秒
 
-    SPELL_BERSERK         = 45078
+    SPELL_BERSERK         = 45078   ///< 狂暴 - 10分钟后进入狂暴状态
 };
 
-// Trash Waves
+/**
+ * @brief 巡逻路径坐标
+ *
+ * 定义纳洛拉克在战斗前巡逻的路径点坐标
+ * Boss会在这些位置之间移动，触发怪物波次事件
+ */
 float NalorakkWay[8][3] =
 {
-    { 18.569f, 1414.512f, 11.42f}, // waypoint 1
+    { 18.569f, 1414.512f, 11.42f}, // waypoint 1 - 第一个路径点
     {-17.264f, 1419.551f, 12.62f},
-    {-52.642f, 1419.357f, 27.31f}, // waypoint 2
+    {-52.642f, 1419.357f, 27.31f}, // waypoint 2 - 第二个路径点
     {-69.908f, 1419.721f, 27.31f},
     {-79.929f, 1395.958f, 27.31f},
-    {-80.072f, 1374.555f, 40.87f}, // waypoint 3
+    {-80.072f, 1374.555f, 40.87f}, // waypoint 3 - 第三个路径点
     {-80.072f, 1314.398f, 40.87f},
-    {-80.072f, 1295.775f, 48.60f}  // waypoint 4
+    {-80.072f, 1295.775f, 48.60f}  // waypoint 4 - 第四个路径点（战斗位置）
 };
 
+
+/**
+ * @brief 纳洛拉克Boss脚本类
+ *
+ * 实现纳洛拉克的完整战斗逻辑，包括形态转换和事件触发
+ */
 class boss_nalorakk : public CreatureScript
 {
     public:
+        /**
+         * @brief 构造函数
+         */
         boss_nalorakk() : CreatureScript("boss_nalorakk") { }
 
+        /**
+         * @brief 纳洛拉克AI类
+         *
+         * 继承自BossAI，实现纳洛拉克的形态转换和事件触发行为
+         */
         struct boss_nalorakkAI : public BossAI
         {
+            /**
+             * @brief 构造函数
+             * @param creature 生物对象指针
+             */
             boss_nalorakkAI(Creature* creature) : BossAI(creature, BOSS_NALORAKK)
             {
                 Initialize();
@@ -98,33 +151,36 @@ class boss_nalorakk : public CreatureScript
                 DeafeningRoar_Timer = 0;
             }
 
+            /**
+             * @brief 初始化所有计时器和状态变量
+             */
             void Initialize()
             {
-                Surge_Timer = urand(15000, 20000);
-                BrutalSwipe_Timer = urand(7000, 12000);
-                Mangle_Timer = urand(10000, 15000);
-                ShapeShift_Timer = urand(45000, 50000);
-                Berserk_Timer = 600000;
+                Surge_Timer = urand(15000, 20000);         // 冲锋冷却：15-20秒
+                BrutalSwipe_Timer = urand(7000, 12000);    // 野蛮挥击冷却：7-12秒
+                Mangle_Timer = urand(10000, 15000);        // 撕裂冷却：10-15秒
+                ShapeShift_Timer = urand(45000, 50000);    // 形态转换冷却：45-50秒
+                Berserk_Timer = 600000;                     // 狂暴计时器：10分钟
 
-                inBearForm = false;
+                inBearForm = false;  // 当前是否为熊形态
             }
 
-            uint32 BrutalSwipe_Timer;
-            uint32 Mangle_Timer;
-            uint32 Surge_Timer;
+            uint32 BrutalSwipe_Timer;      ///< 野蛮挥击冷却计时器
+            uint32 Mangle_Timer;           ///< 撕裂冷却计时器
+            uint32 Surge_Timer;            ///< 冲锋冷却计时器
 
-            uint32 LaceratingSlash_Timer;
-            uint32 RendFlesh_Timer;
-            uint32 DeafeningRoar_Timer;
+            uint32 LaceratingSlash_Timer;  ///< 撕裂横扫冷却计时器
+            uint32 RendFlesh_Timer;        ///< 撕碎冷却计时器
+            uint32 DeafeningRoar_Timer;    ///< 震耳咆哮冷却计时器
 
-            uint32 ShapeShift_Timer;
-            uint32 Berserk_Timer;
+            uint32 ShapeShift_Timer;       ///< 形态转换冷却计时器
+            uint32 Berserk_Timer;          ///< 狂暴计时器
 
-            bool inBearForm;
-            bool MoveEvent;
-            bool inMove;
-            uint32 MovePhase;
-            uint32 waitTimer;
+            bool inBearForm;               ///< 是否处于熊形态
+            bool MoveEvent;                ///< 是否处于移动事件阶段
+            bool inMove;                   ///< 是否正在移动
+            uint32 MovePhase;              ///< 当前移动阶段
+            uint32 waitTimer;              ///< 等待计时器
 
             void Reset() override
             {

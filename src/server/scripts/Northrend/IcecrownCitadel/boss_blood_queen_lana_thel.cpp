@@ -15,6 +15,27 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file boss_blood_queen_lana_thel.cpp
+ * @brief 血女王拉娜萨尔BOSS战AI实现
+ *
+ * 本模块实现了冰冠城塞副本中"鲜血区"最终BOSS血女王拉娜萨尔的完整战斗逻辑。
+ * 这是一场独特的吸血鬼主题战斗，玩家会变成吸血鬼并需要相互咬噬。
+ *
+ * 主要功能：
+ * - 吸血鬼咬噬机制：玩家变成吸血鬼后必须咬其他玩家
+ * - 血镜机制：链接两个玩家共享伤害
+ * - 堕落者契约：链接多个玩家，必须站在一起
+ * - 蜂拥之影：对玩家脚下召唤暗影
+ * - 空中阶段：BOSS飞到空中施放血腥旋风
+ *
+ * 成就：
+ * - 一朝被咬，十年怕井绳：在不变成吸血鬼的情况下击败BOSS
+ * - 血之灌注：暗影之锋任务线
+ *
+ * @see icecrown_citadel.h 副本实例脚本定义
+ */
+
 #include "icecrown_citadel.h"
 #include "Containers.h"
 #include "GridNotifiers.h"
@@ -29,73 +50,97 @@
 #include "SpellMgr.h"
 #include "SpellScript.h"
 
+/**
+ * @enum Texts
+ * @brief BOSS台词和表情枚举
+ *
+ * 定义了血女王拉娜萨尔在战斗中的所有台词和表情ID
+ */
 enum Texts
 {
-    SAY_AGGRO                   = 0,
-    SAY_VAMPIRIC_BITE           = 1,
-    SAY_MIND_CONTROL            = 2,
-    EMOTE_BLOODTHIRST           = 3,
-    SAY_SWARMING_SHADOWS        = 4,
-    EMOTE_SWARMING_SHADOWS      = 5,
-    SAY_PACT_OF_THE_DARKFALLEN  = 6,
-    SAY_AIR_PHASE               = 7,
-    SAY_KILL                    = 8,
-    SAY_WIPE                    = 9,
-    SAY_BERSERK                 = 10,
-    SAY_DEATH                   = 11,
-    EMOTE_BERSERK_RAID          = 12
+    SAY_AGGRO                   = 0,    ///< 开怪台词
+    SAY_VAMPIRIC_BITE           = 1,    ///< 吸血鬼咬噬台词
+    SAY_MIND_CONTROL            = 2,    ///< 精神控制台词（玩家未及时咬人）
+    EMOTE_BLOODTHIRST           = 3,    ///< 嗜血表情（提醒玩家咬人）
+    SAY_SWARMING_SHADOWS        = 4,    ///< 蜂拥之影台词
+    EMOTE_SWARMING_SHADOWS      = 5,    ///< 蜂拥之影表情
+    SAY_PACT_OF_THE_DARKFALLEN  = 6,    ///< 堕落者契约台词
+    SAY_AIR_PHASE               = 7,    ///< 空中阶段台词
+    SAY_KILL                    = 8,    ///< 击杀玩家台词
+    SAY_WIPE                    = 9,    ///< 团灭台词
+    SAY_BERSERK                 = 10,   ///< 狂暴台词
+    SAY_DEATH                   = 11,   ///< 死亡台词
+    EMOTE_BERSERK_RAID          = 12    ///< 狂暴表情
 };
 
+/**
+ * @enum Spells
+ * @brief 法术ID枚举
+ *
+ * 定义了血女王拉娜萨尔战斗相关的所有法术ID
+ */
 enum Spells
 {
-    SPELL_SHROUD_OF_SORROW                  = 70986,
-    SPELL_FRENZIED_BLOODTHIRST_VISUAL       = 71949,
-    SPELL_VAMPIRIC_BITE                     = 71726,
-    SPELL_VAMPIRIC_BITE_DUMMY               = 71837,
-    SPELL_ESSENCE_OF_THE_BLOOD_QUEEN_PLR    = 70879,
-    SPELL_ESSENCE_OF_THE_BLOOD_QUEEN_HEAL   = 70872,
-    SPELL_FRENZIED_BLOODTHIRST              = 70877,
-    SPELL_UNCONTROLLABLE_FRENZY             = 70923,
-    SPELL_PRESENCE_OF_THE_DARKFALLEN        = 70994,
-    SPELL_PRESENCE_OF_THE_DARKFALLEN_2      = 71952,
-    SPELL_BLOOD_MIRROR_DAMAGE               = 70821,
-    SPELL_BLOOD_MIRROR_VISUAL               = 71510,
-    SPELL_BLOOD_MIRROR_DUMMY                = 70838,
-    SPELL_DELIRIOUS_SLASH                   = 71623,
-    SPELL_PACT_OF_THE_DARKFALLEN_TARGET     = 71336,
-    SPELL_PACT_OF_THE_DARKFALLEN            = 71340,
-    SPELL_PACT_OF_THE_DARKFALLEN_DAMAGE     = 71341,
-    SPELL_SWARMING_SHADOWS                  = 71264,
-    SPELL_TWILIGHT_BLOODBOLT_TARGET         = 71445,
-    SPELL_TWILIGHT_BLOODBOLT                = 71446,
-    SPELL_INCITE_TERROR                     = 73070,
-    SPELL_BLOODBOLT_WHIRL                   = 71772,
-    SPELL_ANNIHILATE                        = 71322,
-    SPELL_CLEAR_ALL_STATUS_AILMENTS         = 70939,
+    SPELL_SHROUD_OF_SORROW                  = 70986,    ///< 悲伤之幕（被动光环）
+    SPELL_FRENZIED_BLOODTHIRST_VISUAL       = 71949,    ///< 狂乱嗜血视觉效果
+    SPELL_VAMPIRIC_BITE                     = 71726,    ///< 吸血鬼咬噬
+    SPELL_VAMPIRIC_BITE_DUMMY               = 71837,    ///< 吸血鬼咬噬虚拟法术
+    SPELL_ESSENCE_OF_THE_BLOOD_QUEEN_PLR    = 70879,    ///< 血女王精华（玩家版本）
+    SPELL_ESSENCE_OF_THE_BLOOD_QUEEN_HEAL   = 70872,    ///< 血女王精华治疗
+    SPELL_FRENZIED_BLOODTHIRST              = 70877,    ///< 狂乱嗜血（需要咬人）
+    SPELL_UNCONTROLLABLE_FRENZY             = 70923,    ///< 无法控制的狂乱（未咬人的惩罚）
+    SPELL_PRESENCE_OF_THE_DARKFALLEN        = 70994,    ///< 堕落者存在
+    SPELL_PRESENCE_OF_THE_DARKFALLEN_2      = 71952,    ///< 堕落者存在2
+    SPELL_BLOOD_MIRROR_DAMAGE               = 70821,    ///< 血镜伤害
+    SPELL_BLOOD_MIRROR_VISUAL               = 71510,    ///< 血镜视觉效果
+    SPELL_BLOOD_MIRROR_DUMMY                = 70838,    ///< 血镜虚拟法术
+    SPELL_DELIRIOUS_SLASH                   = 71623,    ///< 神志不清的斩击
+    SPELL_PACT_OF_THE_DARKFALLEN_TARGET     = 71336,    ///< 堕落者契约目标选择
+    SPELL_PACT_OF_THE_DARKFALLEN            = 71340,    ///< 堕落者契约
+    SPELL_PACT_OF_THE_DARKFALLEN_DAMAGE     = 71341,    ///< 堕落者契约伤害
+    SPELL_SWARMING_SHADOWS                  = 71264,    ///< 蜂拥之影
+    SPELL_TWILIGHT_BLOODBOLT_TARGET         = 71445,    ///< 暮光血箭目标选择
+    SPELL_TWILIGHT_BLOODBOLT                = 71446,    ///< 暮光血箭
+    SPELL_INCITE_TERROR                     = 73070,    ///< 煽动恐惧（空中阶段开始）
+    SPELL_BLOODBOLT_WHIRL                   = 71772,    ///< 血腥旋风
+    SPELL_ANNIHILATE                        = 71322,    ///< 湮灭（击杀Minchar）
+    SPELL_CLEAR_ALL_STATUS_AILMENTS         = 70939,    ///< 清除所有状态异常
 
-    // Blood Infusion
-    SPELL_BLOOD_INFUSION_CREDIT             = 72934
+    // Blood Infusion - 血之灌注成就
+    SPELL_BLOOD_INFUSION_CREDIT             = 72934     ///< 血之灌注成就积分
 };
 
+/**
+ * @enum Shadowmourne
+ * @brief 暗影之锋任务线相关法术
+ *
+ * 用于暗影之锋传奇武器的血之灌注任务
+ */
 enum Shadowmourne
 {
-    QUEST_BLOOD_INFUSION                    = 24756,
+    QUEST_BLOOD_INFUSION                    = 24756,    ///< 血之灌注任务ID
 
-    SPELL_GUSHING_WOUND                     = 72132,
-    SPELL_THIRST_QUENCHED                   = 72154,
+    SPELL_GUSHING_WOUND                     = 72132,    ///< 涌流伤口（咬人时堆叠）
+    SPELL_THIRST_QUENCHED                   = 72154,    ///< 止渴（3层后完成）
 };
 
+/// 吸血鬼光环法术ID数组，按难度区分
 uint32 const vampireAuras[3][MAX_DIFFICULTY] =
 {
-    {70867, 71473, 71532, 71533},
-    {70879, 71525, 71530, 71531},
-    {70877, 71474, 70877, 71474},
+    {70867, 71473, 71532, 71533},  ///< 血女王精华
+    {70879, 71525, 71530, 71531},  ///< 血女王精华（玩家版本）
+    {70877, 71474, 70877, 71474},  ///< 狂乱嗜血
 };
 
+/// 血女王精华法术ID（根据团队规模）
 #define ESSENCE_OF_BLOOD_QUEEN     RAID_MODE<uint32>(70867, 71473, 71532, 71533)
+/// 血女王精华玩家版本法术ID
 #define ESSENCE_OF_BLOOD_QUEEN_PLR RAID_MODE<uint32>(70879, 71525, 71530, 71531)
+/// 狂乱嗜血法术ID
 #define FRENZIED_BLOODTHIRST       RAID_MODE<uint32>(70877, 71474, 70877, 71474)
+/// 神志不清的斩击法术ID
 #define DELIRIOUS_SLASH            RAID_MODE<uint32>(71623, 71624, 71625, 71626)
+/// 堕落者存在法术ID
 #define PRESENCE_OF_THE_DARKFALLEN RAID_MODE<uint32>(70994, 71962, 71963, 71964)
 
 enum Events

@@ -15,6 +15,62 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file Map.cpp
+ * @brief 地图系统核心实现文件
+ *
+ * 本文件实现了 TrinityCore 地图系统的核心功能，是游戏世界空间管理的基础。
+ *
+ * 主要功能模块：
+ *
+ * 1. 地图生命周期管理
+ *    - 构造函数和析构函数
+ *    - 地图加载和卸载
+ *    - 网格创建和销毁
+ *
+ * 2. 地形数据管理
+ *    - 加载地图文件（.map）
+ *    - 加载虚拟地图文件（.vmap）
+ *    - 加载移动地图文件（.mmap）
+ *    - 高度、水面、区域信息查询
+ *
+ * 3. 对象管理
+ *    - 添加/移除玩家、生物、游戏对象
+ *    - 对象位置更新和重定位
+ *    - 对象可见性管理
+ *
+ * 4. 网格系统
+ *    - 网格状态机（Invalid -> Active -> Idle -> Removal）
+ *    - 网格加载和卸载
+ *    - 网格引用计数
+ *
+ * 5. 重生系统
+ *    - 重生时间管理
+ *    - 重生队列处理
+ *    - 数据库持久化
+ *
+ * 6. 更新机制
+ *    - 地图主更新循环
+ *    - 对象更新
+ *    - 网格更新
+ *    - 延迟更新
+ *
+ * 7. 实例系统
+ *    - 实例地图创建
+ *    - 实例脚本管理
+ *    - 实例重置
+ *
+ * 性能关键路径：
+ * - Map::Update() - 每帧调用，影响服务器性能
+ * - 对象重定位和可见性更新
+ * - 网格加载和卸载
+ *
+ * 线程安全考虑：
+ * - 使用互斥锁保护共享数据
+ * - 使用原子操作处理计数器
+ * - 避免死锁的锁获取顺序
+ */
+
 #include "Map.h"
 #include "Battleground.h"
 #include "CellImpl.h"
@@ -53,26 +109,56 @@
 #include <unordered_set>
 #include <vector>
 
-u_map_magic MapMagic        = { {'M','A','P','S'} };
-uint32 MapVersionMagic      = 10;
-u_map_magic MapAreaMagic    = { {'A','R','E','A'} };
-u_map_magic MapHeightMagic  = { {'M','H','G','T'} };
-u_map_magic MapLiquidMagic  = { {'M','L','I','Q'} };
+// ============================================================================
+// 全局变量和常量定义
+// ============================================================================
 
+u_map_magic MapMagic        = { {'M','A','P','S'} };      ///< 地图文件魔法值标识
+uint32 MapVersionMagic      = 10;                         ///< 地图文件版本号
+u_map_magic MapAreaMagic    = { {'A','R','E','A'} };      ///< 区域数据魔法值标识
+u_map_magic MapHeightMagic  = { {'M','H','G','T'} };      ///< 高度数据魔法值标识
+u_map_magic MapLiquidMagic  = { {'M','L','I','Q'} };      ///< 液体数据魔法值标识
+
+/// 洞穴检测的水平位掩码表
 static uint16 const holetab_h[4] = { 0x1111, 0x2222, 0x4444, 0x8888 };
+/// 洞穴检测的垂直位掩码表
 static uint16 const holetab_v[4] = { 0x000F, 0x00F0, 0x0F00, 0xF000 };
 
-#define DEFAULT_GRID_EXPIRY     300
-#define MAX_GRID_LOAD_TIME      50
-#define MAX_CREATURE_ATTACK_RADIUS  (45.0f * sWorld->getRate(RATE_CREATURE_AGGRO))
+#define DEFAULT_GRID_EXPIRY     300                       ///< 默认网格过期时间（秒）
+#define MAX_GRID_LOAD_TIME      50                        ///< 最大网格加载时间（毫秒）
+#define MAX_CREATURE_ATTACK_RADIUS  (45.0f * sWorld->getRate(RATE_CREATURE_AGGRO))  ///< 最大生物攻击半径
 
-GridState* si_GridStates[MAX_GRID_STATE];
+GridState* si_GridStates[MAX_GRID_STATE];                 ///< 网格状态数组（状态机状态实例）
 
+// ============================================================================
+// ZoneDynamicInfo 结构体实现
+// ============================================================================
+
+/**
+ * @brief 区域动态信息默认构造函数
+ *
+ * 初始化区域动态效果为默认值：
+ * - 音乐ID为0（无音乐）
+ * - 天气为默认天气对象
+ * - 天气状态为晴天
+ * - 天气强度为0
+ */
 ZoneDynamicInfo::ZoneDynamicInfo() : MusicId(0), DefaultWeather(nullptr), WeatherId(WEATHER_STATE_FINE),
     Intensity(0.0f) { }
 
+// ============================================================================
+// RespawnInfo 结构体实现
+// ============================================================================
+
 RespawnInfo::~RespawnInfo() = default;
 
+/**
+ * @struct RespawnInfoWithHandle
+ * @brief 带句柄的重生信息结构体
+ *
+ * 继承自 RespawnInfo，额外包含一个堆句柄。
+ * 用于在斐波那契堆中高效管理重生队列。
+ */
 struct RespawnInfoWithHandle;
 struct RespawnListContainer : boost::heap::fibonacci_heap<RespawnInfoWithHandle*, boost::heap::compare<CompareRespawnInfo>>
 {
@@ -82,30 +168,80 @@ struct RespawnInfoWithHandle : RespawnInfo
 {
     explicit RespawnInfoWithHandle(RespawnInfo const& other) : RespawnInfo(other) { }
 
-    RespawnListContainer::handle_type handle;
+    RespawnListContainer::handle_type handle;              ///< 堆句柄，用于快速删除和更新
 };
 
+// ============================================================================
+// Map 类构造函数和析构函数
+// ============================================================================
+
+/**
+ * @brief Map 析构函数
+ *
+ * 清理地图资源，释放所有对象和数据。
+ *
+ * 处理流程：
+ * 1. 卸载所有重生信息（避免内存泄漏）
+ * 2. 清理所有世界对象（尸体等）
+ * 3. 更新脚本调度计数
+ * 4. 卸载移动地图实例
+ *
+ * 注意事项：
+ * - 必须确保所有对象已正确从世界移除
+ * - 不删除数据库中的数据，仅清理内存
+ */
 Map::~Map()
 {
-    // Delete all waiting spawns, else there will be a memory leak
-    // This doesn't delete from database.
+    // 删除所有等待的重生信息，否则会有内存泄漏
+    // 这不会从数据库删除数据
     UnloadAllRespawnInfos();
 
+    // 清理所有世界对象（通常是尸体）
     while (!i_worldObjects.empty())
     {
         WorldObject* obj = *i_worldObjects.begin();
         ASSERT(obj->IsStoredInWorldObjectGridContainer());
         //ASSERT(obj->GetTypeId() == TYPEID_CORPSE);
-        obj->RemoveFromWorld();
-        obj->ResetMap();
+        obj->RemoveFromWorld();    // 从世界中移除对象
+        obj->ResetMap();            // 重置对象的地图引用
     }
 
+    // 更新全局脚本调度计数
     if (!m_scriptSchedule.empty())
         sMapMgr->DecreaseScheduledScriptCount(m_scriptSchedule.size());
 
+    // 卸载移动地图实例数据
     MMAP::MMapFactory::createOrGetMMapManager()->unloadMapInstance(GetId(), i_InstanceId);
 }
 
+// ============================================================================
+// 地图文件检查和加载函数
+// ============================================================================
+
+/**
+ * @brief 检查地图文件是否存在
+ * @param mapid 地图ID
+ * @param gx 网格X坐标
+ * @param gy 网格Y坐标
+ * @return 存在且版本匹配返回 true，否则返回 false
+ *
+ * 检查指定位置的地图文件是否存在并验证版本。
+ *
+ * 文件路径格式：{DataPath}/maps/{mapid}{gx}{gy}.map
+ *
+ * 检查内容：
+ * 1. 文件是否存在
+ * 2. 文件魔法值是否匹配
+ * 3. 文件版本是否匹配
+ *
+ * 错误处理：
+ * - 文件不存在：记录错误并提示放置地图文件
+ * - 版本不匹配：记录错误并提示重新提取地图
+ *
+ * 调用时机：
+ * - 服务器启动时验证地图文件
+ * - 加载网格前检查文件可用性
+ */
 bool Map::ExistMap(uint32 mapid, int gx, int gy)
 {
     std::string fileName = Trinity::StringFormat("{}maps/{:03}{:02}{:02}.map", sWorld->GetDataPath(), mapid, gx, gy);
@@ -123,6 +259,7 @@ bool Map::ExistMap(uint32 mapid, int gx, int gy)
         map_fileheader header;
         if (fread(&header, sizeof(header), 1, pf) == 1)
         {
+            // 验证地图文件的魔法值和版本号
             if (header.mapMagic.asUInt != MapMagic.asUInt || header.versionMagic != MapVersionMagic)
                 TC_LOG_ERROR("maps", "Map file '{}' is from an incompatible map version (%.*s v{}), %.*s v{} is expected. Please pull your source, recompile tools and recreate maps using the updated mapextractor, then replace your old map files with new files. If you still have problems search on forum for error TCE00018.",
                     fileName, 4, header.mapMagic.asChar, header.versionMagic, 4, MapMagic.asChar, MapVersionMagic);
@@ -135,6 +272,27 @@ bool Map::ExistMap(uint32 mapid, int gx, int gy)
     return ret;
 }
 
+/**
+ * @brief 检查虚拟地图文件是否存在
+ * @param mapid 地图ID
+ * @param gx 网格X坐标
+ * @param gy 网格Y坐标
+ * @return 存在且可加载返回 true，否则返回 false
+ *
+ * 检查指定位置的虚拟地图文件（VMap）是否存在。
+ * VMap 用于碰撞检测和视线检测。
+ *
+ * 文件路径格式：{DataPath}/vmaps/{filename}.vmtile
+ *
+ * 检查结果：
+ * - Success：文件存在且可用
+ * - FileNotFound：文件不存在，记录错误
+ * - VersionMismatch：版本不匹配，记录错误
+ *
+ * 调用时机：
+ * - 服务器启动时验证VMap文件
+ * - 加载网格前检查文件可用性
+ */
 bool Map::ExistVMap(uint32 mapid, int gx, int gy)
 {
     if (VMAP::IVMapManager* vmgr = VMAP::VMapFactory::createOrGetVMapManager())
@@ -162,8 +320,25 @@ bool Map::ExistVMap(uint32 mapid, int gx, int gy)
     return true;
 }
 
+/**
+ * @brief 加载移动地图文件
+ * @param gx 网格X坐标
+ * @param gy 网格Y坐标
+ *
+ * 加载指定网格的移动地图（MMap）数据。
+ * MMap 用于寻路系统（Navigation Mesh）。
+ *
+ * 注意事项：
+ * - 如果地图禁用了寻路，则不加载
+ * - 加载失败会记录警告日志，但不影响地图功能
+ *
+ * 调用时机：
+ * - 加载基础地图网格时
+ * - 仅基础地图加载MMap（实例地图共享）
+ */
 void Map::LoadMMap(int gx, int gy)
 {
+    // 检查是否启用寻路
     if (!DisableMgr::IsPathfindingEnabled(GetId()))
         return;
 
@@ -175,11 +350,32 @@ void Map::LoadMMap(int gx, int gy)
         TC_LOG_WARN("mmaps.tiles", "Could not load MMAP name:{}, id:{}, x:{}, y:{} (mmap rep.: x:{}, y:{})", GetMapName(), GetId(), gx, gy, gx, gy);
 }
 
+/**
+ * @brief 加载虚拟地图文件
+ * @param gx 网格X坐标
+ * @param gy 网格Y坐标
+ *
+ * 加载指定网格的虚拟地图（VMap）数据。
+ * VMap 用于精确的碰撞检测和视线检测。
+ *
+ * 加载结果：
+ * - VMAP_LOAD_RESULT_OK：成功加载
+ * - VMAP_LOAD_RESULT_ERROR：加载失败
+ * - VMAP_LOAD_RESULT_IGNORED：被忽略（如未启用）
+ *
+ * 注意事项：
+ * - 坐标在内部被交换（x和y）
+ * - 仅在启用VMap时加载
+ *
+ * 调用时机：
+ * - 加载基础地图网格时
+ * - 仅基础地图加载VMap（实例地图共享）
+ */
 void Map::LoadVMap(int gx, int gy)
 {
     if (!VMAP::VMapFactory::createOrGetVMapManager()->isMapLoadingEnabled())
         return;
-                                                            // x and y are swapped !!
+                                                            // x 和 y 被交换了！！
     int vmapLoadResult = VMAP::VMapFactory::createOrGetVMapManager()->loadMap((sWorld->GetDataPath()+ "vmaps").c_str(),  GetId(), gx, gy);
     switch (vmapLoadResult)
     {
@@ -195,26 +391,63 @@ void Map::LoadVMap(int gx, int gy)
     }
 }
 
+/**
+ * @brief 加载地图网格文件
+ * @param gx 网格X坐标
+ * @param gy 网格Y坐标
+ * @param reload 是否重新加载（可选，默认false）
+ *
+ * 加载指定网格的地图数据文件（.map格式）。
+ * 包含高度、区域、液体等地形信息。
+ *
+ * 处理流程：
+ *
+ * 对于实例地图（i_InstanceId != 0）：
+ * 1. 检查网格是否已加载
+ * 2. 确保父地图已创建网格数据
+ * 3. 增加网格引用计数
+ * 4. 共享父地图的网格数据
+ *
+ * 对于基础地图（i_InstanceId == 0）：
+ * 1. 检查网格是否已加载（除非reload=true）
+ * 2. 如果重新加载，先卸载旧数据
+ * 3. 加载新的地图文件
+ * 4. 触发脚本回调
+ *
+ * 文件路径格式：{DataPath}/maps/{mapid}{gx}{gy}.map
+ *
+ * 调用时机：
+ * - 玩家进入新区域时
+ * - 加载所有单元格时
+ * - 重新加载地图时
+ *
+ * 性能注意事项：
+ * - 首次加载可能需要文件IO
+ * - 实例地图共享数据，避免重复加载
+ */
 void Map::LoadMap(int gx, int gy, bool reload)
 {
+    // 处理实例地图
     if (i_InstanceId != 0)
     {
         if (GridMaps[gx][gy])
             return;
 
-        // load grid map for base map
+        // 为基础地图加载网格地图
         if (!m_parentMap->GridMaps[gx][gy])
             m_parentMap->EnsureGridCreated(GridCoord((MAX_NUMBER_OF_GRIDS - 1) - gx, (MAX_NUMBER_OF_GRIDS - 1) - gy));
 
+        // 增加网格引用计数并共享数据
         ((MapInstanced*)(m_parentMap))->AddGridMapReference(GridCoord(gx, gy));
         GridMaps[gx][gy] = m_parentMap->GridMaps[gx][gy];
         return;
     }
 
+    // 处理基础地图
     if (GridMaps[gx][gy] && !reload)
         return;
 
-    //map already load, delete it before reloading (Is it necessary? Do we really need the ability the reload maps during runtime?)
+    // 地图已加载，删除后重新加载（是否必要？我们真的需要在运行时重新加载地图的能力吗？）
     if (GridMaps[gx][gy])
     {
         TC_LOG_DEBUG("maps", "Unloading previously loaded map {} before reloading.", GetId());
@@ -224,21 +457,40 @@ void Map::LoadMap(int gx, int gy, bool reload)
         GridMaps[gx][gy]=nullptr;
     }
 
-    // map file name
+    // 地图文件名
     std::string fileName = Trinity::StringFormat("{}maps/{:03}{:02}{:02}.map", sWorld->GetDataPath(), GetId(), gx, gy);
     TC_LOG_DEBUG("maps", "Loading map {}", fileName);
-    // loading data
+    // 加载数据
     GridMaps[gx][gy] = new GridMap();
     if (!GridMaps[gx][gy]->loadData(fileName.c_str()))
         TC_LOG_ERROR("maps", "Error loading map file: \n {}\n", fileName);
 
+    // 触发脚本回调
     sScriptMgr->OnLoadGridMap(this, GridMaps[gx][gy], gx, gy);
 }
 
+/**
+ * @brief 加载地图、虚拟地图和移动地图
+ * @param gx 网格X坐标
+ * @param gy 网格Y坐标
+ *
+ * 一次性加载所有三种地图数据（Map、VMap、MMap）。
+ *
+ * 处理流程：
+ * 1. 加载基础地图文件
+ * 2. 仅对基础地图加载VMap和MMap
+ *
+ * 注意事项：
+ * - 实例地图共享父地图的VMap和MMap数据
+ * - VMap和MMap仅加载一次，节省内存
+ *
+ * 调用时机：
+ * - 加载网格时
+ */
 void Map::LoadMapAndVMap(int gx, int gy)
 {
     LoadMap(gx, gy);
-   // Only load the data for the base map
+   // 仅为基础地图加载数据
     if (i_InstanceId == 0)
     {
         LoadVMap(gx, gy);
@@ -246,6 +498,19 @@ void Map::LoadMapAndVMap(int gx, int gy)
     }
 }
 
+/**
+ * @brief 加载所有单元格
+ *
+ * 遍历地图上的所有单元格并加载对应的网格。
+ * 用于某些特殊地图（如GM岛）或测试目的。
+ *
+ * 注意事项：
+ * - 会加载所有网格，内存占用可能很大
+ * - 正常情况下不使用，网格按需加载
+ *
+ * 调用时机：
+ * - 特殊需求时手动调用
+ */
 void Map::LoadAllCells()
 {
     for (uint32 cellX = 0; cellX < TOTAL_NUMBER_OF_CELLS_PER_MAP; cellX++)
@@ -253,6 +518,21 @@ void Map::LoadAllCells()
             LoadGrid((cellX + 0.5f - CENTER_GRID_CELL_ID) * SIZE_OF_GRID_CELL, (cellY + 0.5f - CENTER_GRID_CELL_ID) * SIZE_OF_GRID_CELL);
 }
 
+/**
+ * @brief 初始化网格状态机
+ *
+ * 创建所有网格状态的单例实例。
+ * 状态机用于管理网格的生命周期。
+ *
+ * 网格状态：
+ * - INVALID：无效状态，网格未创建
+ * - ACTIVE：活跃状态，有玩家或活跃对象
+ * - IDLE：空闲状态，无活跃对象但保留在内存
+ * - REMOVAL：移除状态，准备卸载
+ *
+ * 调用时机：
+ * - 服务器启动时调用一次
+ */
 void Map::InitStateMachine()
 {
     si_GridStates[GRID_STATE_INVALID] = new InvalidState;
@@ -261,6 +541,14 @@ void Map::InitStateMachine()
     si_GridStates[GRID_STATE_REMOVAL] = new RemovalState;
 }
 
+/**
+ * @brief 删除网格状态机
+ *
+ * 清理所有网格状态的单例实例。
+ *
+ * 调用时机：
+ * - 服务器关闭时调用一次
+ */
 void Map::DeleteStateMachine()
 {
     delete si_GridStates[GRID_STATE_INVALID];
@@ -269,6 +557,31 @@ void Map::DeleteStateMachine()
     delete si_GridStates[GRID_STATE_REMOVAL];
 }
 
+/**
+ * @brief Map 构造函数
+ * @param id 地图ID
+ * @param expiry 网格过期时间（秒）
+ * @param InstanceId 实例ID（0表示非实例地图）
+ * @param SpawnMode 生成模式（难度）
+ * @param _parent 父地图指针（实例地图使用）
+ *
+ * 初始化地图对象的所有成员变量和系统。
+ *
+ * 初始化内容：
+ * 1. 基础属性：地图条目、实例ID、难度模式
+ * 2. 可见性：可见距离和通知周期
+ * 3. 网格系统：初始化网格数组为nullptr
+ * 4. 计时器：卸载计时器、天气更新计时器
+ * 5. 重生系统：创建重生队列容器
+ * 6. 移动地图：加载MMap实例
+ *
+ * 注意事项：
+ * - 父地图参数用于实例地图共享数据
+ * - 网格过期时间控制网格卸载策略
+ *
+ * 调用时机：
+ * - MapManager 创建新地图时
+ */
 Map::Map(uint32 id, time_t expiry, uint32 InstanceId, uint8 SpawnMode, Map* _parent):
 _creatureToMoveLock(false), _gameObjectsToMoveLock(false), _dynamicObjectsToMoveLock(false),
 i_mapEntry(sMapStore.LookupEntry(id)), i_spawnMode(SpawnMode), i_InstanceId(InstanceId),
@@ -278,7 +591,10 @@ m_activeNonPlayersIter(m_activeNonPlayers.end()), _transportsUpdateIter(_transpo
 i_gridExpiry(expiry),
 i_scriptLock(false), _respawnTimes(std::make_unique<RespawnListContainer>()), _respawnCheckTimer(0)
 {
+    // 设置父地图（如果是实例地图，指向基础地图；如果是基础地图，指向自己）
     m_parentMap = (_parent ? _parent : this);
+
+    // 初始化网格数组为nullptr
     for (unsigned int idx=0; idx < MAX_NUMBER_OF_GRIDS; ++idx)
     {
         for (unsigned int j=0; j < MAX_NUMBER_OF_GRIDS; ++j)
@@ -289,13 +605,16 @@ i_scriptLock(false), _respawnTimes(std::make_unique<RespawnListContainer>()), _r
         }
     }
 
+    // 清空区域玩家计数映射
     _zonePlayerCountMap.clear();
 
-    //lets initialize visibility distance for map
+    // 初始化地图的可见距离
     Map::InitVisibilityDistance();
 
+    // 设置天气更新计时器（1秒间隔）
     _weatherUpdateTimer.SetInterval(time_t(1 * IN_MILLISECONDS));
 
+    // 加载移动地图实例
     MMAP::MMapFactory::createOrGetMMapManager()->loadMapInstance(sWorld->GetDataPath(), GetId(), GetInstanceId());
 }
 
@@ -626,6 +945,14 @@ void Map::InitializeObject(GameObject* obj)
     obj->_moveState = MAP_OBJECT_CELL_MOVE_NONE;
 }
 
+// ============================================================================
+// 添加对象到地图（模板函数）
+// 职责：将游戏对象（生物、游戏对象、尸体、动态对象）添加到地图的网格系统中
+// 参数：obj - 要添加的对象指针（模板类型T）
+// 返回值：true 表示添加成功，false 表示添加失败（坐标无效等）
+// 调用时机：对象创建后、传送后、重生时
+// 注意事项：对象在调用此函数前必须已通过 obj->SetMap() 设置所属地图
+// ============================================================================
 template<class T>
 bool Map::AddToMap(T* obj)
 {
@@ -759,6 +1086,15 @@ void Map::UpdatePlayerZoneStats(uint32 oldZone, uint32 newZone)
     ++_zonePlayerCountMap[newZone];
 }
 
+// ============================================================================
+// 地图更新主循环
+// 职责：驱动地图的每帧更新，处理对象更新、重生检测、网格加载、脚本执行等核心逻辑
+// 参数：t_diff - 距离上一帧的时间差（毫秒）
+// 调用时机：由 MapUpdater 线程池并行调用，每个地图实例独立更新
+// 性能注意：
+//   - 不同地图的更新可并行执行，同一地图内串行执行
+//   - 避免在此函数内进行阻塞操作
+// ============================================================================
 void Map::Update(uint32 t_diff)
 {
     _dynamicTree.update(t_diff);
@@ -1023,6 +1359,15 @@ void Map::RemovePlayerFromMap(Player* player, bool remove)
         DeleteFromWorld(player);
 }
 
+// ============================================================================
+// 从地图移除对象（模板函数）
+// 职责：将游戏对象从地图的网格系统中移除，清理相关状态
+// 参数：
+//   obj    - 要移除的对象指针
+//   remove  - 是否在移除后删除对象内存（true则删除）
+// 调用时机：对象销毁、传送离开地图、进入死亡状态等
+// 注意事项：此函数会修改对象状态，调用后对象不应再被引用（如果remove=true）
+// ============================================================================
 template<class T>
 void Map::RemoveFromMap(T *obj, bool remove)
 {
@@ -3262,6 +3607,13 @@ void Map::DoRespawn(SpawnObjectType type, ObjectGuid::LowType spawnId, uint32 gr
     }
 }
 
+// ============================================================================
+// 处理对象重生
+// 职责：检查并处理到期的生物/游戏对象重生，包括池化对象和普通对象
+// 参数：无
+// 调用时机：由 Map::Update() 在重生检测定时器到期时调用
+// 性能注意：使用优先队列（斐波那契堆）管理重生时间，复杂度 O(log n)
+// ============================================================================
 void Map::ProcessRespawns()
 {
     time_t now = GameTime::GetGameTime();

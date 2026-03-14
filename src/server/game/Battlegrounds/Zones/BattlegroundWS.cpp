@@ -15,6 +15,30 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file BattlegroundWS.cpp
+ * @brief 战歌峡谷战场实现
+ *
+ * 本文件实现了战歌峡谷战场的核心游戏逻辑，包括：
+ * - 夺旗机制（拾取、携带、掉落、返回）
+ * - 得分系统（夺取得分、超时判定）
+ * - 旗帜debuff系统（持久强攻）
+ * - 成就判定（拯救日等）
+ *
+ * 关键流程：
+ * 1. 战斗开始：打开大门，刷新旗帜
+ * 2. 旗帜拾取：玩家点击敌方旗帜，获得旗帜光环
+ * 3. 旗帜夺取：携带敌方旗帜回到己方基地并触碰己方旗帜
+ * 4. 旗帜掉落：携带者死亡，旗帜掉落在地上
+ * 5. 旗帜返回：队友点击掉落的旗帜返回基地
+ * 6. 胜利判定：先得3分或时间结束时得分高者获胜
+ *
+ * 特殊机制：
+ * - 10分钟后旗帜携带者获得"集中强攻"debuff
+ * - 15分钟后升级为"残暴强攻"debuff
+ * - 旗帜掉落后10秒自动返回基地
+ */
+
 #include "BattlegroundWS.h"
 #include "BattlegroundMgr.h"
 #include "DBCStores.h"
@@ -27,39 +51,67 @@
 #include "WorldPacket.h"
 #include "WorldStatePackets.h"
 
-// these variables aren't used outside of this file, so declare them only here
+/**
+ * @brief 战歌峡谷奖励枚举
+ *
+ * 仅在此文件内部使用的奖励类型
+ */
 enum BG_WSG_Rewards
 {
-    BG_WSG_WIN = 0,
-    BG_WSG_FLAG_CAP,
-    BG_WSG_MAP_COMPLETE,
-    BG_WSG_REWARD_NUM
+    BG_WSG_WIN = 0,          ///< 胜利奖励
+    BG_WSG_FLAG_CAP,         ///< 夺旗奖励
+    BG_WSG_MAP_COMPLETE,     ///< 地图完成奖励
+    BG_WSG_REWARD_NUM        ///< 奖励类型数量
 };
 
+/**
+ * @brief 荣誉奖励表
+ *
+ * 根据荣誉模式（普通/节日）和奖励类型定义荣誉值
+ */
 uint32 BG_WSG_Honor[BG_HONOR_MODE_NUM][BG_WSG_REWARD_NUM] =
 {
-    {20, 40, 40}, // normal honor
-    {60, 40, 80}  // holiday
+    {20, 40, 40}, // 普通模式荣誉奖励
+    {60, 40, 80}  // 节日模式荣誉奖励
 };
 
+/**
+ * @brief 构造函数
+ *
+ * 初始化战歌峡谷战场的成员变量：
+ * - 分配游戏对象和生物容器
+ * - 设置开始消息ID
+ * - 初始化所有状态变量和计时器
+ */
 BattlegroundWS::BattlegroundWS()
 {
+    // 分配游戏对象和生物容器大小
     BgObjects.resize(BG_WS_OBJECT_MAX);
     BgCreatures.resize(BG_CREATURES_MAX_WS);
 
-    StartMessageIds[BG_STARTING_EVENT_SECOND] = BG_WS_TEXT_START_ONE_MINUTE;
-    StartMessageIds[BG_STARTING_EVENT_THIRD]  = BG_WS_TEXT_START_HALF_MINUTE;
-    StartMessageIds[BG_STARTING_EVENT_FOURTH] = BG_WS_TEXT_BATTLE_HAS_BEGUN;
+    // 设置开始阶段的消息ID
+    StartMessageIds[BG_STARTING_EVENT_SECOND] = BG_WS_TEXT_START_ONE_MINUTE;   // 1分钟警告
+    StartMessageIds[BG_STARTING_EVENT_THIRD]  = BG_WS_TEXT_START_HALF_MINUTE;  // 30秒警告
+    StartMessageIds[BG_STARTING_EVENT_FOURTH] = BG_WS_TEXT_BATTLE_HAS_BEGUN;   // 战斗开始
 
+    // 初始化状态变量
     _flagSpellForceTimer = 0;
     _bothFlagsKept = false;
     _flagDebuffState = 0;
+
+    // 清空旗帜携带者GUID
     m_FlagKeepers[TEAM_ALLIANCE].Clear();
     m_FlagKeepers[TEAM_HORDE].Clear();
+
+    // 清空掉落旗帜GUID
     m_DroppedFlagGUID[TEAM_ALLIANCE].Clear();
     m_DroppedFlagGUID[TEAM_HORDE].Clear();
+
+    // 初始化旗帜状态为在基地
     _flagState[TEAM_ALLIANCE] = BG_WS_FLAG_STATE_ON_BASE;
     _flagState[TEAM_HORDE] = BG_WS_FLAG_STATE_ON_BASE;
+
+    // 初始化计时器
     _flagsTimer[TEAM_ALLIANCE] = 0;
     _flagsTimer[TEAM_HORDE] = 0;
     _flagsDropTimer[TEAM_ALLIANCE] = 0;
@@ -71,11 +123,19 @@ BattlegroundWS::BattlegroundWS()
     _minutesElapsed = 0;
 }
 
+/**
+ * @brief 构建目标数据块
+ * @param data 数据包
+ *
+ * 将战歌峡谷特有的得分数据序列化到数据包中：
+ * - 旗帜夺取次数
+ * - 旗帜返回次数
+ */
 void BattlegroundWGScore::BuildObjectivesBlock(WorldPacket& data)
 {
-    data << uint32(2); // Objectives Count
-    data << uint32(FlagCaptures);
-    data << uint32(FlagReturns);
+    data << uint32(2); // 目标数量
+    data << uint32(FlagCaptures);  // 旗帜夺取次数
+    data << uint32(FlagReturns);   // 旗帜返回次数
 }
 
 BattlegroundWS::~BattlegroundWS() { }

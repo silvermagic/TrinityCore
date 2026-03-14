@@ -15,7 +15,23 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-/*
+/**
+ * @file spell_hunter.cpp
+ * @brief 猎人法术脚本模块
+ *
+ * 本模块实现猎人职业相关法术的脚本逻辑，包括：
+ * - 守护系统：野兽守护、蝰蛇守护等
+ * - 射击技能：奇美拉射击、爆炸射击等
+ * - 宠物相关：治疗宠物、宠物召唤、宠物天赋等
+ * - 陷阱和毒蛇钉刺：各种陷阱效果和持续伤害
+ *
+ * 法术脚本主要处理：
+ * - 守护切换和效果触发
+ * - 法术连击和触发效果
+ * - 宠物和主人之间的互动
+ * - 天赋和雕文的特殊处理
+ * - 套装效果的额外处理
+ *
  * Scripts for spells with SPELLFAMILY_HUNTER, SPELLFAMILY_PET and SPELLFAMILY_GENERIC spells used by hunter players.
  * Ordered alphabetically using scriptname.
  * Scriptnames of files in this file should be prefixed with "spell_hun_".
@@ -30,59 +46,69 @@
 #include "SpellMgr.h"
 #include "SpellScript.h"
 
+/**
+ * @brief 猎人法术ID枚举
+ *
+ * 定义猎人法术脚本使用的各种法术ID
+ */
 enum HunterSpells
 {
-    SPELL_HUNTER_ASPECT_OF_THE_BEAST                = 13161,
-    SPELL_HUNTER_ASPECT_OF_THE_BEAST_PET            = 61669,
-    SPELL_HUNTER_ASPECT_OF_THE_VIPER                = 34074,
-    SPELL_HUNTER_ASPECT_OF_THE_VIPER_ENERGIZE       = 34075,
-    SPELL_HUNTER_BESTIAL_WRATH                      = 19574,
-    SPELL_HUNTER_CHIMERA_SHOT_SERPENT               = 53353,
-    SPELL_HUNTER_CHIMERA_SHOT_VIPER                 = 53358,
-    SPELL_HUNTER_CHIMERA_SHOT_SCORPID               = 53359,
-    SPELL_HUNTER_GLYPH_OF_ARCANE_SHOT               = 61389,
-    SPELL_HUNTER_GLYPH_OF_ASPECT_OF_THE_VIPER       = 56851,
-    SPELL_HUNTER_IMPROVED_MEND_PET                  = 24406,
-    SPELL_HUNTER_INVIGORATION_TRIGGERED             = 53398,
-    SPELL_HUNTER_MASTERS_CALL_TRIGGERED             = 62305,
-    SPELL_HUNTER_MISDIRECTION                       = 34477,
-    SPELL_HUNTER_MISDIRECTION_PROC                  = 35079,
-    SPELL_HUNTER_PET_LAST_STAND_TRIGGERED           = 53479,
-    SPELL_HUNTER_PET_HEART_OF_THE_PHOENIX           = 55709,
-    SPELL_HUNTER_PET_HEART_OF_THE_PHOENIX_TRIGGERED = 54114,
-    SPELL_HUNTER_PET_HEART_OF_THE_PHOENIX_DEBUFF    = 55711,
-    SPELL_HUNTER_PET_CARRION_FEEDER_TRIGGERED       = 54045,
-    SPELL_HUNTER_PIERCING_SHOTS                     = 63468,
-    SPELL_HUNTER_READINESS                          = 23989,
-    SPELL_HUNTER_SNIPER_TRAINING_R1                 = 53302,
-    SPELL_HUNTER_SNIPER_TRAINING_BUFF_R1            = 64418,
-    SPELL_HUNTER_T9_4P_GREATNESS                    = 68130,
-    SPELL_HUNTER_VICIOUS_VIPER                      = 61609,
-    SPELL_HUNTER_VIPER_ATTACK_SPEED                 = 60144,
-    SPELL_DRAENEI_GIFT_OF_THE_NAARU                 = 59543,
-    SPELL_ROAR_OF_SACRIFICE_TRIGGERED               = 67481,
-    SPELL_HUNTER_LOCK_AND_LOAD_TRIGGER              = 56453,
-    SPELL_HUNTER_LOCK_AND_LOAD_MARKER               = 67544,
-    SPELL_HUNTER_KILL_COMMAND_HUNTER                = 34027,
-    SPELL_HUNTER_THRILL_OF_THE_HUNT_MANA            = 34720,
-    SPELL_REPLENISHMENT                             = 57669,
-    SPELL_HUNTER_RAPID_RECUPERATION_MANA_R1         = 56654,
-    SPELL_HUNTER_RAPID_RECUPERATION_MANA_R2         = 58882,
-    SPELL_HUNTER_GLYPH_OF_MEND_PET_HAPPINESS        = 57894,
-    SPELL_HUNTER_EXPLOSIVE_SHOT_DAMAGE              = 53352,
-    SPELL_HUNTER_FEEDING_FRENZY_BUFF_R1             = 60096,
-    SPELL_HUNTER_FEEDING_FRENZY_BUFF_R2             = 60097,
-    SPELL_HUNTER_WYVERN_STING_DOT_R1                = 24131,
-    SPELL_HUNTER_WYVERN_STING_DOT_R2                = 24134,
-    SPELL_HUNTER_WYVERN_STING_DOT_R3                = 24135,
-    SPELL_HUNTER_WYVERN_STING_DOT_R4                = 27069,
-    SPELL_HUNTER_WYVERN_STING_DOT_R5                = 49009,
-    SPELL_HUNTER_WYVERN_STING_DOT_R6                = 49010
+    SPELL_HUNTER_ASPECT_OF_THE_BEAST                = 13161,  ///< 野兽守护 - 使猎人和宠物无法被追踪
+    SPELL_HUNTER_ASPECT_OF_THE_BEAST_PET            = 61669,  ///< 野兽守护宠物效果 - 宠物获得同样效果
+    SPELL_HUNTER_ASPECT_OF_THE_VIPER                = 34074,  ///< 蝰蛇守护 - 攻击恢复法力
+    SPELL_HUNTER_ASPECT_OF_THE_VIPER_ENERGIZE       = 34075,  ///< 蝰蛇守护充能 - 恢复法力效果
+    SPELL_HUNTER_BESTIAL_WRATH                      = 19574,  ///< 狂野怒火 - 宠物伤害提升
+    SPELL_HUNTER_CHIMERA_SHOT_SERPENT               = 53353,  ///< 奇美拉射击-毒蛇 - 触发毒蛇钉刺效果
+    SPELL_HUNTER_CHIMERA_SHOT_VIPER                 = 53358,  ///< 奇美拉射击-蝰蛇 - 触发蝰蛇钉刺效果
+    SPELL_HUNTER_CHIMERA_SHOT_SCORPID               = 53359,  ///< 奇美拉射击-蝎毒 - 触发蝎毒钉刺效果
+    SPELL_HUNTER_GLYPH_OF_ARCANE_SHOT               = 61389,  ///< 奥术射击雕文 - 对有钉刺目标恢复法力
+    SPELL_HUNTER_GLYPH_OF_ASPECT_OF_THE_VIPER       = 56851,  ///< 蝰蛇守护雕文 - 增加法力恢复
+    SPELL_HUNTER_IMPROVED_MEND_PET                  = 24406,  ///< 强化治疗宠物 - 有几率移除负面效果
+    SPELL_HUNTER_INVIGORATION_TRIGGERED             = 53398,  ///< 振奋触发 - 宠物暴击恢复集中值
+    SPELL_HUNTER_MASTERS_CALL_TRIGGERED             = 62305,  ///< 主人的呼唤触发 - 解除移动限制
+    SPELL_HUNTER_MISDIRECTION                       = 34477,  ///< 误导 - 将仇恨转移给目标
+    SPELL_HUNTER_MISDIRECTION_PROC                  = 35079,  ///< 误导触发 - 仇恨转移效果
+    SPELL_HUNTER_PET_LAST_STAND_TRIGGERED           = 53479,  ///< 宠物破釜沉舟触发 - 临时增加生命值
+    SPELL_HUNTER_PET_HEART_OF_THE_PHOENIX           = 55709,  ///< 凤凰之心 - 复活血宠
+    SPELL_HUNTER_PET_HEART_OF_THE_PHOENIX_TRIGGERED = 54114,  ///< 凤凰之心触发 - 复活效果
+    SPELL_HUNTER_PET_HEART_OF_THE_PHOENIX_DEBUFF    = 55711,  ///< 凤凰之心debuff - 复活后的虚弱状态
+    SPELL_HUNTER_PET_CARRION_FEEDER_TRIGGERED       = 54045,  ///< 食腐触发 - 进食恢复生命
+    SPELL_HUNTER_PIERCING_SHOTS                     = 63468,  ///< 穿刺射击 - 穿透护甲的流血效果
+    SPELL_HUNTER_READINESS                          = 23989,  ///< 战备 - 重置所有技能冷却
+    SPELL_HUNTER_SNIPER_TRAINING_R1                 = 53302,  ///< 狙击训练等级1 - 站立不动提升暴击
+    SPELL_HUNTER_SNIPER_TRAINING_BUFF_R1            = 64418,  ///< 狙击训练buff等级1
+    SPELL_HUNTER_T9_4P_GREATNESS                    = 68130,  ///< T9 4件套伟大效果
+    SPELL_HUNTER_VICIOUS_VIPER                      = 61609,  ///< 邪恶蝰蛇 - T7套装效果
+    SPELL_HUNTER_VIPER_ATTACK_SPEED                 = 60144,  ///< 蝰蛇攻击速度 - T7套装效果
+    SPELL_DRAENEI_GIFT_OF_THE_NAARU                 = 59543,  ///< 德莱尼纳鲁的赐福
+    SPELL_ROAR_OF_SACRIFICE_TRIGGERED               = 67481,  ///< 牺牲咆哮触发 - 转移伤害
+    SPELL_HUNTER_LOCK_AND_LOAD_TRIGGER              = 56453,  ///< 锁定装填触发 - 下一次瞄准/奥术/爆炸射击瞬发
+    SPELL_HUNTER_LOCK_AND_LOAD_MARKER               = 67544,  ///< 锁定装填标记
+    SPELL_HUNTER_KILL_COMMAND_HUNTER                = 34027,  ///< 杀戮命令猎人效果
+    SPELL_HUNTER_THRILL_OF_THE_HUNT_MANA            = 34720,  ///< 狩猎刺激法力 - 射击暴击恢复法力
+    SPELL_REPLENISHMENT                             = 57669,  ///< 补充 - 团队法力恢复
+    SPELL_HUNTER_RAPID_RECUPERATION_MANA_R1         = 56654,  ///< 急速恢复法力等级1
+    SPELL_HUNTER_RAPID_RECUPERATION_MANA_R2         = 58882,  ///< 急速恢复法力等级2
+    SPELL_HUNTER_GLYPH_OF_MEND_PET_HAPPINESS        = 57894,  ///< 治疗宠物雕文快乐值
+    SPELL_HUNTER_EXPLOSIVE_SHOT_DAMAGE              = 53352,  ///< 爆炸射击伤害
+    SPELL_HUNTER_FEEDING_FRENZY_BUFF_R1             = 60096,  ///< 狂乱进食buff等级1
+    SPELL_HUNTER_FEEDING_FRENZY_BUFF_R2             = 60097,  ///< 狂乱进食buff等级2
+    SPELL_HUNTER_WYVERN_STING_DOT_R1                = 24131,  ///< 飞龙钉刺DoT等级1
+    SPELL_HUNTER_WYVERN_STING_DOT_R2                = 24134,  ///< 飞龙钉刺DoT等级2
+    SPELL_HUNTER_WYVERN_STING_DOT_R3                = 24135,  ///< 飞龙钉刺DoT等级3
+    SPELL_HUNTER_WYVERN_STING_DOT_R4                = 27069,  ///< 飞龙钉刺DoT等级4
+    SPELL_HUNTER_WYVERN_STING_DOT_R5                = 49009,  ///< 飞龙钉刺DoT等级5
+    SPELL_HUNTER_WYVERN_STING_DOT_R6                = 49010   ///< 飞龙钉刺DoT等级6
 };
 
+/**
+ * @brief 猎人法术图标ID枚举
+ *
+ * 用于过滤特定法术，因为某些法术共享家族标志
+ */
 enum HunterSpellIcons
 {
-    SPELL_ICON_HUNTER_PET_IMPROVED_COWER            = 958
+    SPELL_ICON_HUNTER_PET_IMPROVED_COWER            = 958    ///< 强化畏缩图标ID
 };
 
 // 13161 - Aspect of the Beast

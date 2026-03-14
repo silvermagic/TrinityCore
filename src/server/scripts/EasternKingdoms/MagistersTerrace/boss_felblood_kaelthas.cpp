@@ -15,6 +15,24 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file boss_felblood_kaelthas.cpp
+ * @brief 魔导师平台副本最终BOSS - 凯尔萨斯·逐日者（魔血形态）AI脚本
+ *
+ * 本模块实现了魔导师平台副本中最终BOSS凯尔萨斯的战斗逻辑。
+ * 凯尔萨斯是魔导师平台的最终BOSS，拥有两个阶段的战斗：
+ * - 第一阶段：使用火球、火焰打击、凤凰等技能
+ * - 第二阶段（生命值低于50%）：重力 lapse 阶段，玩家会浮空并受到持续伤害
+ *
+ * 主要功能：
+ * - BOSS的AI逻辑和技能施放
+ * - 凤凰召唤物的AI实现
+ * - 火焰打击法术效果处理
+ * - 多阶段战斗流程控制
+ *
+ * @note 凯尔萨斯只能通过自杀法术死亡，不能被玩家直接击杀
+ */
+
 #include "ScriptMgr.h"
 #include "GameObject.h"
 #include "InstanceScript.h"
@@ -27,6 +45,11 @@
 #include "SpellInfo.h"
 #include "TemporarySummon.h"
 
+/**
+ * @brief 凯尔萨斯的对话文本枚举
+ *
+ * 定义了凯尔萨斯在战斗中各个时机的对话ID
+ */
 enum Says
 {
     // Kael'thas Sunstrider
@@ -41,6 +64,11 @@ enum Says
     SAY_DEATH                   = 8
 };
 
+/**
+ * @brief 凯尔萨斯及相关召唤物的法术ID枚举
+ *
+ * 包含凯尔萨斯使用的所有法术，以及凤凰和火焰打击相关的法术
+ */
 enum Spells
 {
     // Kael'thas Sunstrider
@@ -78,6 +106,12 @@ enum Spells
     SPELL_FULL_HEAL                             = 17683
 };
 
+/**
+ * @brief 重力牵引传送法术数组
+ *
+ * 包含5个不同方向的传送法术，用于将玩家传送到房间周围的不同位置
+ * 这些法术会在重力牵引阶段按顺序对玩家施放
+ */
 uint32 gravityLapseTeleportSpells[] =
 {
     SPELL_GRAVITY_LAPSE_LEFT_TELEPORT,
@@ -87,8 +121,20 @@ uint32 gravityLapseTeleportSpells[] =
     SPELL_GRAVITY_LAPSE_RIGHT_TELEPORT
 };
 
+/**
+ * @brief 重力牵引伤害法术宏定义
+ *
+ * 根据副本难度返回不同的法术ID
+ * 普通难度: 49887
+ * 英雄难度: 44226
+ */
 #define SPELL_GRAVITY_LAPSE_DAMAGE  RAID_MODE<uint32>(49887, 44226)
 
+/**
+ * @brief 凯尔萨斯和凤凰的事件ID枚举
+ *
+ * 定义了战斗中各种事件的时间调度ID
+ */
 enum Events
 {
     // Kael'thas Sunstrider
@@ -120,6 +166,11 @@ enum Events
     EVENT_PREPARE_REENGAGE
 };
 
+/**
+ * @brief 凯尔萨斯战斗阶段枚举
+ *
+ * 定义了凯尔萨斯战斗的四个主要阶段
+ */
 enum Phases
 {
     PHASE_INTRO = 0,
@@ -128,19 +179,53 @@ enum Phases
     PHASE_OUTRO = 3
 };
 
+/**
+ * @brief 凯尔萨斯·逐日者（魔血形态）BOSS AI
+ *
+ * 实现了凯尔萨斯的所有战斗逻辑，包括：
+ * - 开场对话序列
+ * - 第一阶段：基础技能循环（火球、火焰打击、凤凰召唤）
+ * - 第二阶段：重力牵引机制（50%生命值触发）
+ * - 死亡序列：凯尔萨斯只能通过自杀法术死亡
+ *
+ * 战斗特点：
+ * - 英雄难度会额外施放冲击屏障和炎爆术
+ * - 重力牵引阶段会将玩家浮空并召唤奥术宝珠
+ * - 凤凰会周期性死亡并重生
+ */
 struct boss_felblood_kaelthas : public BossAI
 {
+    /**
+     * @brief 构造函数
+     * @param creature 生物对象指针
+     */
     boss_felblood_kaelthas(Creature* creature) : BossAI(creature, DATA_KAELTHAS_SUNSTRIDER)
     {
         Initialize();
     }
 
+    /**
+     * @brief 初始化成员变量
+     *
+     * 重置重力牵引相关的计数器和标志位
+     * 在构造函数和Reset时调用
+     */
     void Initialize()
     {
-        _gravityLapseTargetCount = 0;
-        _firstGravityLapse = true;
+        _gravityLapseTargetCount = 0;  // 重力牵引目标计数器
+        _firstGravityLapse = true;      // 是否为第一次重力牵引
     }
 
+    /**
+     * @brief 进入战斗时调用
+     * @param who 进入战斗的目标
+     *
+     * 初始化第一阶段的事件调度：
+     * - 立即施放火球术
+     * - 44秒后施放火焰打击
+     * - 12秒后召唤凤凰
+     * - 英雄难度：61秒后施放冲击屏障
+     */
     void JustEngagedWith(Unit* who) override
     {
         BossAI::JustEngagedWith(who);
@@ -152,6 +237,11 @@ struct boss_felblood_kaelthas : public BossAI
             events.ScheduleEvent(EVENT_SHOCK_BARRIER, 1min + 1s, 0, PHASE_ONE);
     }
 
+    /**
+     * @brief 重置BOSS状态
+     *
+     * 调用基类重置函数，初始化变量，并设置回介绍阶段
+     */
     void Reset() override
     {
         _Reset();
@@ -159,12 +249,25 @@ struct boss_felblood_kaelthas : public BossAI
         events.SetPhase(PHASE_INTRO);
     }
 
+    /**
+     * @brief BOSS死亡时调用
+     * @param killer 击杀者（未使用）
+     *
+     * 不调用_JustDied()以避免重置事件导致死亡序列触发两次
+     * 直接设置BOSS状态为完成
+     */
     void JustDied(Unit* /*killer*/) override
     {
         // No _JustDied() here because otherwise we would reset the events which will trigger the death sequence twice.
         instance->SetBossState(DATA_KAELTHAS_SUNSTRIDER, DONE);
     }
 
+    /**
+     * @brief 进入脱战模式时调用
+     * @param why 脱战原因
+     *
+     * 清除所有玩家的飞行状态，脱战并移除所有召唤物
+     */
     void EnterEvadeMode(EvadeReason /*why*/) override
     {
         DoCastAOE(SPELL_CLEAR_FLIGHT, true);
@@ -173,6 +276,18 @@ struct boss_felblood_kaelthas : public BossAI
         _DespawnAtEvade();
     }
 
+    /**
+     * @brief 受到伤害时调用
+     * @param attacker 攻击者
+     * @param damage 伤害值（引用，可修改）
+     * @param damageType 伤害类型
+     * @param spellInfo 法术信息
+     *
+     * 处理关键战斗逻辑：
+     * 1. 致命伤害检查：触发死亡序列（PHASE_OUTRO）
+     * 2. 50%生命值检查：进入第二阶段（重力牵引）
+     * 3. 防止非自杀死亡：凯尔萨斯只能通过自杀法术死亡
+     */
     void DamageTaken(Unit* attacker, uint32& damage, DamageEffectType /*damageType*/, SpellInfo const* /*spellInfo = nullptr*/) override
     {
         // Checking for lethal damage first so we trigger the outro phase without triggering phase two in case of oneshot attacks
@@ -205,6 +320,15 @@ struct boss_felblood_kaelthas : public BossAI
             damage = me->GetHealth() - 1;
     }
 
+    /**
+     * @brief 设置数据时调用
+     * @param type 数据类型
+     * @param data 数据值
+     *
+     * 处理介绍阶段的触发：
+     * - 当Kael'thas的小怪全部死亡时，实例脚本会调用此函数
+     * - 触发开场对话序列
+     */
     void SetData(uint32 type, uint32 /*data*/) override
     {
         if (type == DATA_KAELTHAS_INTRO)
@@ -218,6 +342,15 @@ struct boss_felblood_kaelthas : public BossAI
         }
     }
 
+    /**
+     * @brief 法术命中目标时调用
+     * @param target 目标对象
+     * @param spellInfo 法术信息
+     *
+     * 处理重力牵引相关法术效果：
+     * - SPELL_GRAVITY_LAPSE_INITIAL：传送玩家到不同位置并施加飞行和伤害效果
+     * - SPELL_CLEAR_FLIGHT：移除飞行和重力牵引伤害效果
+     */
     void SpellHitTarget(WorldObject* target, SpellInfo const* spellInfo) override
     {
         Unit* unitTarget = target->ToUnit();
@@ -248,6 +381,14 @@ struct boss_felblood_kaelthas : public BossAI
         }
     }
 
+    /**
+     * @brief 召唤生物时调用
+     * @param summon 被召唤的生物
+     *
+     * 处理召唤物的初始化：
+     * - 奥术宝珠：跟随随机目标
+     * - 火焰打击：施放火焰打击虚拟法术并在15秒后消失
+     */
     void JustSummoned(Creature* summon) override
     {
         summons.Summon(summon);
@@ -267,6 +408,25 @@ struct boss_felblood_kaelthas : public BossAI
         }
     }
 
+    /**
+     * @brief 更新AI逻辑
+     * @param diff 距离上次更新的时间差（毫秒）
+     *
+     * 主要战斗逻辑循环：
+     * - 检查是否有目标或处于介绍阶段
+     * - 更新事件计时器
+     * - 检查是否正在施法
+     * - 处理各种事件的执行
+     *
+     * 事件处理包括：
+     * - 介绍对话序列
+     * - 火球术施放
+     * - 火焰打击施放
+     * - 冲击屏障和炎爆术（英雄难度）
+     * - 凤凰召唤
+     * - 重力牵引阶段处理
+     * - 死亡序列动画
+     */
     void UpdateAI(uint32 diff) override
     {
         if (!UpdateVictim() && !events.IsInPhase(PHASE_INTRO))
@@ -376,23 +536,51 @@ struct boss_felblood_kaelthas : public BossAI
     }
 
 private:
-    uint8 _gravityLapseTargetCount;
-    bool _firstGravityLapse;
+    uint8 _gravityLapseTargetCount;  ///< 重力牵引目标计数器，用于分配不同的传送位置
+    bool _firstGravityLapse;         ///< 是否为第一次重力牵引，用于选择不同的对话文本
 };
 
+/**
+ * @brief 凯尔萨斯的凤凰召唤物AI
+ *
+ * 实现凤凰的战斗逻辑：
+ * - 持续燃烧效果（对周围造成伤害）
+ * - 死亡时变为凤凰蛋
+ * - 15秒后从蛋中重生
+ * - 如果蛋被摧毁，凤凰会消失
+ */
 struct npc_felblood_kaelthas_phoenix : public ScriptedAI
 {
+    /**
+     * @brief 构造函数
+     * @param creature 生物对象指针
+     */
     npc_felblood_kaelthas_phoenix(Creature* creature) : ScriptedAI(creature), _instance(creature->GetInstanceScript())
     {
         Initialize();
     }
 
+    /**
+     * @brief 初始化成员变量
+     *
+     * 设置凤凰为被动反应状态，初始化蛋状态标志
+     */
     void Initialize()
     {
-        me->SetReactState(REACT_PASSIVE);
-        _isInEgg = false;
+        me->SetReactState(REACT_PASSIVE);  // 设置为被动反应，等待事件激活
+        _isInEgg = false;                   // 初始状态不是蛋形态
     }
 
+    /**
+     * @brief 被召唤时调用
+     * @param summoner 召唤者
+     *
+     * 凤凰被召唤时：
+     * - 进入战斗状态
+     * - 施放燃烧效果
+     * - 施放重生效果
+     * - 2秒后开始攻击玩家
+     */
     void IsSummonedBy(WorldObject* /*summoner*/) override
     {
         DoZoneInCombat();
@@ -401,8 +589,28 @@ struct npc_felblood_kaelthas_phoenix : public ScriptedAI
         _events.ScheduleEvent(EVENT_ATTACK_PLAYERS, 2s);
     }
 
+    /**
+     * @brief 进入战斗时调用
+     * @param who 进入战斗的目标（未使用）
+     *
+     * 空实现，因为凤凰在召唤时就已经进入战斗
+     */
     void JustEngagedWith(Unit* /*who*/) override { }
 
+    /**
+     * @brief 受到伤害时调用
+     * @param attacker 攻击者（未使用）
+     * @param damage 伤害值（引用，可修改）
+     * @param damageType 伤害类型
+     * @param spellInfo 法术信息
+     *
+     * 处理凤凰死亡逻辑：
+     * - 致命伤害时变为凤凰蛋
+     * - 施放余烬爆炸
+     * - 召唤凤凰蛋
+     * - 15秒后从蛋中重生
+     * - 防止真正死亡（将伤害设为生命值-1）
+     */
     void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType /*damageType*/, SpellInfo const* /*spellInfo = nullptr*/) override
     {
         if (damage >= me->GetHealth())
@@ -432,12 +640,29 @@ struct npc_felblood_kaelthas_phoenix : public ScriptedAI
 
     }
 
+    /**
+     * @brief 召唤物死亡时调用
+     * @param summon 死亡的召唤物
+     * @param killer 击杀者
+     *
+     * 当凤凰蛋在15秒内被摧毁时，凤凰会消失
+     */
     void SummonedCreatureDies(Creature* /*summon*/, Unit* /*killer*/) override
     {
         // Egg has been destroyed within 15 seconds so we lose the phoenix.
         me->DespawnOrUnsummon();
     }
 
+    /**
+     * @brief 更新AI逻辑
+     * @param diff 距离上次更新的时间差（毫秒）
+     *
+     * 处理凤凰的各种状态转换：
+     * - 攻击玩家事件：激活攻击行为
+     * - 从蛋中孵化事件：移除蛋并重生
+     * - 重生事件：施放重生效果
+     * - 重新参战事件：恢复满血，移除蛋状态标志，重新施放燃烧效果
+     */
     void UpdateAI(uint32 diff) override
     {
         if (!UpdateVictim())
@@ -480,34 +705,69 @@ struct npc_felblood_kaelthas_phoenix : public ScriptedAI
         DoMeleeAttackIfReady();
     }
 private:
-    InstanceScript* _instance;
-    EventMap _events;
-    bool _isInEgg;
-    ObjectGuid _eggGUID;
+    InstanceScript* _instance;     ///< 副本脚本实例指针
+    EventMap _events;              ///< 事件映射表，用于调度凤凰的各种行为
+    bool _isInEgg;                 ///< 是否处于蛋形态
+    ObjectGuid _eggGUID;           ///< 凤凰蛋的GUID
 };
 
+/**
+ * @brief 火焰打击法术光环脚本
+ *
+ * 处理火焰打击法术的效果：
+ * - 火焰打击先施放一个虚拟法术（SPELL_FLAME_STRIKE_DUMMY）
+ * - 光环移除后施放实际伤害法术（SPELL_FLAME_STRIKE_DAMAGE）
+ * - 这造成了视觉预警和实际伤害之间的延迟效果
+ */
 // 44191 - Flame Strike
 class spell_felblood_kaelthas_flame_strike : public AuraScript
 {
     PrepareAuraScript(spell_felblood_kaelthas_flame_strike);
 
+    /**
+     * @brief 验证法术信息
+     * @param spellInfo 法术信息
+     * @return 验证是否成功
+     *
+     * 验证火焰打击伤害法术是否存在
+     */
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
         return ValidateSpellInfo({ SPELL_FLAME_STRIKE_DAMAGE });
     }
 
+    /**
+     * @brief 光环移除后调用
+     * @param aurEff 光环效果
+     * @param mode 光环效果处理模式
+     *
+     * 光环移除时施放实际的火焰打击伤害法术
+     */
     void AfterRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
     {
         if (Unit* target = GetTarget())
             target->CastSpell(target, SPELL_FLAME_STRIKE_DAMAGE);
     }
 
+    /**
+     * @brief 注册光环脚本
+     *
+     * 注册光环移除后的回调函数
+     */
     void Register() override
     {
         AfterEffectRemove += AuraEffectRemoveFn(spell_felblood_kaelthas_flame_strike::AfterRemove, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
     }
 };
 
+/**
+ * @brief 注册凯尔萨斯相关脚本
+ *
+ * 注册以下脚本：
+ * - boss_felblood_kaelthas：凯尔萨斯BOSS AI
+ * - npc_felblood_kaelthas_phoenix：凤凰召唤物AI
+ * - spell_felblood_kaelthas_flame_strike：火焰打击法术脚本
+ */
 void AddSC_boss_felblood_kaelthas()
 {
     RegisterMagistersTerraceCreatureAI(boss_felblood_kaelthas);

@@ -15,6 +15,24 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file ChatHandler.cpp
+ * @brief 聊天消息处理模块
+ *
+ * 本模块负责处理游戏中所有聊天相关的网络消息，包括：
+ * - 各类频道聊天（说、喊、密语、队伍、团队、公会等）
+ * - 表情动作
+ * - 文字表情
+ * - AFK/DND状态
+ * - 频道消息处理
+ *
+ * 主要职责：
+ * 1. 验证聊天消息的合法性（语言、权限、等级限制等）
+ * 2. 处理聊天命令和GM命令
+ * 3. 广播聊天消息到相应的频道或目标
+ * 4. 处理聊天过滤和恶意消息防护
+ */
+
 #include "WorldSession.h"
 #include "AccountMgr.h"
 #include "CellImpl.h"
@@ -44,15 +62,62 @@
 #include "WorldPacket.h"
 #include <algorithm>
 
+/**
+ * @brief 检查字符是否为恶意字符
+ *
+ * 检查给定字符是否为不可接受的恶意字符（ASCII控制字符等）。
+ * 用于过滤聊天消息中的非法字符，防止客户端利用特殊字符进行作弊或攻击。
+ *
+ * @param c 要检查的字符
+ * @return true 如果是恶意字符
+ * @return false 如果是合法字符
+ *
+ * @note 制表符('\t')被特殊处理，不算作恶意字符
+ */
 inline bool isNasty(uint8 c)
 {
+    // 制表符是合法的
     if (c == '\t')
         return false;
+    // ASCII控制字符块（0x00-0x1F）被视为恶意字符
     if (c <= '\037') // ASCII control block
         return true;
     return false;
 }
 
+/**
+ * @brief 处理聊天消息操作码
+ *
+ * 这是聊天系统的核心处理函数，负责处理所有类型的聊天消息。
+ * 主要流程：
+ * 1. 解析消息类型和语言
+ * 2. 验证消息类型是否有效
+ * 3. 验证语言权限（防止使用未学会的语言）
+ * 4. 处理插件消息的特殊验证
+ * 5. 检查禁言状态和发言冷却时间
+ * 6. 解析消息内容和目标
+ * 7. 验证消息内容合法性
+ * 8. 根据消息类型分发到相应的处理逻辑
+ *
+ * 支持的消息类型：
+ * - CHAT_MSG_SAY: 说话（周围玩家可见）
+ * - CHAT_MSG_EMOTE: 表情动作
+ * - CHAT_MSG_YELL: 喊话（更大范围可见）
+ * - CHAT_MSG_WHISPER: 密语（私聊）
+ * - CHAT_MSG_PARTY: 队伍频道
+ * - CHAT_MSG_GUILD: 公会频道
+ * - CHAT_MSG_OFFICER: 公会官员频道
+ * - CHAT_MSG_RAID: 团队频道
+ * - CHAT_MSG_RAID_WARNING: 团队警告
+ * - CHAT_MSG_BATTLEGROUND: 战场频道
+ * - CHAT_MSG_CHANNEL: 自定义频道
+ * - CHAT_MSG_AFK: 离开状态
+ * - CHAT_MSG_DND: 请勿打扰状态
+ *
+ * @param recvData 接收到的网络数据包，包含消息类型、语言和消息内容
+ *
+ * @note 此函数包含大量的安全检查，防止作弊和滥用
+ */
 void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
 {
     uint32 type;
@@ -276,11 +341,12 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
             return;
     }
 
+    // 根据消息类型进行不同的处理
     switch (type)
     {
-        case CHAT_MSG_SAY:
+        case CHAT_MSG_SAY:  // 说（周围玩家可见）
         {
-            // Prevent cheating
+            // 防止作弊：死亡玩家不能说话
             if (!sender->IsAlive())
                 return;
 
@@ -293,9 +359,9 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
             sender->Say(msg, Language(lang));
             break;
         }
-        case CHAT_MSG_EMOTE:
+        case CHAT_MSG_EMOTE:  // 表情动作（显示在聊天框中的自定义动作）
         {
-            // Prevent cheating
+            // 防止作弊：死亡玩家不能做表情动作
             if (!sender->IsAlive())
                 return;
 
@@ -308,9 +374,9 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
             sender->TextEmote(msg);
             break;
         }
-        case CHAT_MSG_YELL:
+        case CHAT_MSG_YELL:  // 喊话（比说更大的范围可见）
         {
-            // Prevent cheating
+            // 防止作弊：死亡玩家不能喊话
             if (!sender->IsAlive())
                 return;
 
@@ -323,7 +389,7 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
             sender->Yell(msg, Language(lang));
             break;
         }
-        case CHAT_MSG_WHISPER:
+        case CHAT_MSG_WHISPER:  // 密语（私聊）
         {
             if (!normalizePlayerName(to))
             {
@@ -369,8 +435,8 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
             GetPlayer()->Whisper(msg, Language(lang), receiver);
             break;
         }
-        case CHAT_MSG_PARTY:
-        case CHAT_MSG_PARTY_LEADER:
+        case CHAT_MSG_PARTY:         // 队伍频道
+        case CHAT_MSG_PARTY_LEADER:  // 队长在队伍频道的发言
         {
             // if player is in battleground, he cannot say to battleground members by /p
             Group* group = GetPlayer()->GetOriginalGroup();
@@ -393,7 +459,7 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
             group->BroadcastPacket(&data, false, group->GetMemberGroup(GetPlayer()->GetGUID()));
             break;
         }
-        case CHAT_MSG_GUILD:
+        case CHAT_MSG_GUILD:  // 公会频道
         {
             if (GetPlayer()->GetGuildId())
             {
@@ -406,7 +472,7 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
             }
             break;
         }
-        case CHAT_MSG_OFFICER:
+        case CHAT_MSG_OFFICER:  // 公会官员频道
         {
             if (GetPlayer()->GetGuildId())
             {
@@ -419,7 +485,7 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
             }
             break;
         }
-        case CHAT_MSG_RAID:
+        case CHAT_MSG_RAID:  // 团队频道
         {
             // if player is in battleground, he cannot say to battleground members by /ra
             Group* group = GetPlayer()->GetOriginalGroup();
@@ -437,7 +503,7 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
             group->BroadcastPacket(&data, false);
             break;
         }
-        case CHAT_MSG_RAID_LEADER:
+        case CHAT_MSG_RAID_LEADER:  // 团长在团队频道的发言
         {
             // if player is in battleground, he cannot say to battleground members by /ra
             Group* group = GetPlayer()->GetOriginalGroup();
@@ -568,6 +634,22 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
     }
 }
 
+/**
+ * @brief 处理表情动作操作码
+ *
+ * 处理客户端发送的表情动作请求（如挥手等）。
+ * 仅支持客户端硬编码的少数表情动作（EMOTE_ONESHOT_NONE和EMOTE_ONESHOT_WAVE）。
+ *
+ * @param packet 接收到的网络数据包，包含表情动作ID
+ *
+ * 主要流程：
+ * 1. 验证表情动作是否合法（仅允许特定的硬编码表情）
+ * 2. 检查玩家是否存活且未处于死亡状态
+ * 3. 触发脚本事件
+ * 4. 执行表情动作
+ *
+ * @note 其他表情动作通过HandleTextEmoteOpcode处理
+ */
 void WorldSession::HandleEmoteOpcode(WorldPackets::Chat::EmoteClient& packet)
 {
     Emote emoteId = static_cast<Emote>(packet.EmoteID);
@@ -583,8 +665,19 @@ void WorldSession::HandleEmoteOpcode(WorldPackets::Chat::EmoteClient& packet)
     _player->HandleEmoteCommand(emoteId);
 }
 
+/**
+ * @namespace Trinity
+ * @brief TrinityCore命名空间，包含表情聊天构建器等辅助类
+ */
 namespace Trinity
 {
+    /**
+     * @class EmoteChatBuilder
+     * @brief 表情聊天数据包构建器
+     *
+     * 用于构建表情动作相关的聊天数据包。
+     * 该类遵循访问者模式，通过operator()方法构建数据包。
+     */
     class EmoteChatBuilder
     {
         public:
@@ -608,13 +701,34 @@ namespace Trinity
             }
 
         private:
-            Player const& i_player;
-            uint32        i_text_emote;
-            uint32        i_emote_num;
-            Unit const*   i_target;
+            Player const& i_player;      ///< 执行表情动作的玩家
+            uint32        i_text_emote;  ///< 文字表情ID（如"挥手"、"跳舞"等）
+            uint32        i_emote_num;   ///< 表情动作序号
+            Unit const*   i_target;      ///< 表情动作的目标单位（可为nullptr）
     };
 }                                                           // namespace Trinity
 
+/**
+ * @brief 处理文字表情操作码
+ *
+ * 处理客户端发送的文字表情请求（如/挥手、/跳舞、/坐下等）。
+ * 文字表情与简单表情动作不同，会显示在聊天框中并影响角色状态。
+ *
+ * @param recvData 接收到的网络数据包，包含表情ID、表情序号和目标GUID
+ *
+ * 主要流程：
+ * 1. 验证玩家是否存活和是否有发言权限
+ * 2. 解析表情ID、表情序号和目标GUID
+ * 3. 触发脚本事件
+ * 4. 根据表情类型执行相应动作：
+ *    - EMOTE_STATE_SLEEP/SIT/KNEEL: 改变角色姿态状态
+ *    - 其他表情: 执行一次性表情动作
+ * 5. 向周围玩家广播表情消息
+ * 6. 更新成就进度
+ * 7. 通知NPC接收表情事件（用于任务交互）
+ *
+ * @note 某些表情（如坐下、睡觉）会改变角色的持续状态
+ */
 void WorldSession::HandleTextEmoteOpcode(WorldPacket& recvData)
 {
     if (!GetPlayer()->IsAlive())
@@ -677,6 +791,20 @@ void WorldSession::HandleTextEmoteOpcode(WorldPacket& recvData)
         ((Creature*)unit)->AI()->ReceiveEmote(GetPlayer(), text_emote);
 }
 
+/**
+ * @brief 处理聊天忽略操作码
+ *
+ * 处理玩家忽略某人密语的请求。
+ * 当玩家将某人加入忽略列表后，被忽略者发来的密语会触发此消息，
+ * 服务器会向被忽略者发送"对方已忽略你的消息"提示。
+ *
+ * @param recvData 接收到的网络数据包，包含被忽略玩家的GUID和未知标志
+ *
+ * 主要流程：
+ * 1. 解析被忽略玩家的GUID
+ * 2. 查找被忽略玩家是否在线
+ * 3. 向被忽略者发送"已被忽略"的提示消息
+ */
 void WorldSession::HandleChatIgnoredOpcode(WorldPacket& recvData)
 {
     ObjectGuid iguid;
@@ -695,11 +823,27 @@ void WorldSession::HandleChatIgnoredOpcode(WorldPacket& recvData)
     player->SendDirectMessage(&data);
 }
 
+/**
+ * @brief 处理拒绝频道邀请操作码
+ *
+ * 处理玩家拒绝频道邀请的请求。
+ * 目前仅记录日志，未实现具体功能。
+ *
+ * @param recvPacket 接收到的网络数据包
+ */
 void WorldSession::HandleChannelDeclineInvite(WorldPacket &recvPacket)
 {
     TC_LOG_DEBUG("network", "Opcode {}", recvPacket.GetOpcode());
 }
 
+/**
+ * @brief 发送玩家未找到通知
+ *
+ * 向客户端发送玩家未找到的系统消息。
+ * 当密语的对象不存在或不在线时使用。
+ *
+ * @param name 未找到的玩家名称
+ */
 void WorldSession::SendPlayerNotFoundNotice(std::string const& name)
 {
     WorldPacket data(SMSG_CHAT_PLAYER_NOT_FOUND, name.size()+1);
@@ -707,6 +851,14 @@ void WorldSession::SendPlayerNotFoundNotice(std::string const& name)
     SendPacket(&data);
 }
 
+/**
+ * @brief 发送玩家名称歧义通知
+ *
+ * 向客户端发送玩家名称歧义的系统消息。
+ * 当输入的玩家名称匹配多个在线玩家时使用（部分匹配）。
+ *
+ * @param name 产生歧义的玩家名称
+ */
 void WorldSession::SendPlayerAmbiguousNotice(std::string const& name)
 {
     WorldPacket data(SMSG_CHAT_PLAYER_AMBIGUOUS, name.size()+1);
@@ -714,12 +866,26 @@ void WorldSession::SendPlayerAmbiguousNotice(std::string const& name)
     SendPacket(&data);
 }
 
+/**
+ * @brief 发送阵营错误通知
+ *
+ * 向客户端发送阵营错误的系统消息。
+ * 当玩家尝试与对立阵营玩家进行某些交互（如密语）被禁止时使用。
+ */
 void WorldSession::SendWrongFactionNotice()
 {
     WorldPacket data(SMSG_CHAT_WRONG_FACTION, 0);
     SendPacket(&data);
 }
 
+/**
+ * @brief 发送聊天受限通知
+ *
+ * 向客户端发送聊天受限的系统消息。
+ * 当玩家的聊天行为受到某些限制时使用（如新手等级限制、试用期限制等）。
+ *
+ * @param restriction 限制类型枚举值
+ */
 void WorldSession::SendChatRestrictedNotice(ChatRestrictionType restriction)
 {
     WorldPacket data(SMSG_CHAT_RESTRICTED, 1);

@@ -15,6 +15,21 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file cs_lookup.cpp
+ * @brief 查找命令模块
+ *
+ * 本模块实现了游戏内各种资源的查找功能,包括:
+ * - 区域、生物、游戏事件、阵营的查找
+ * - 物品、物品套装、游戏对象的查找
+ * - 任务、技能、法术的查找
+ * - 出租车站点、传送点、称号的查找
+ * - 地图信息的查找
+ * - 玩家账户相关查找(IP、账号、邮箱)
+ *
+ * 所有查找命令都支持模糊匹配和多语言搜索,并支持最大结果数限制。
+ */
+
 /* ScriptData
 Name: lookup_commandscript
 %Complete: 100
@@ -43,11 +58,44 @@ EndScriptData */
 
 using namespace Trinity::ChatCommands;
 
+/**
+ * @class lookup_commandscript
+ * @brief 查找命令脚本类
+ *
+ * 继承自 CommandScript,负责注册和处理所有查找相关的 GM 命令。
+ * 提供对游戏中各类资源的搜索和查询功能,支持按名称、ID 等多种方式查找。
+ */
 class lookup_commandscript : public CommandScript
 {
 public:
+    /**
+     * @brief 构造函数
+     *
+     * 初始化查找命令脚本,设置脚本名称为 "lookup_commandscript"
+     */
     lookup_commandscript() : CommandScript("lookup_commandscript") { }
 
+    /**
+     * @brief 获取命令表
+     * @return 返回所有查找命令的注册表
+     *
+     * 注册所有 lookup 相关的子命令,包括:
+     * - lookup player: 玩家查找命令组(ip/account/email)
+     * - lookup area: 区域查找
+     * - lookup creature: 生物查找
+     * - lookup event: 事件查找
+     * - lookup faction: 阵营查找
+     * - lookup item/item id: 物品查找
+     * - lookup item set: 物品套装查找
+     * - lookup object: 游戏对象查找
+     * - lookup quest/quest id: 任务查找
+     * - lookup skill: 技能查找
+     * - lookup spell/spell id: 法术查找
+     * - lookup taxinode: 出租车站点查找
+     * - lookup tele: 传送点查找
+     * - lookup title: 称号查找
+     * - lookup map/map id: 地图查找
+     */
     std::vector<ChatCommand> GetCommands() const override
     {
         static std::vector<ChatCommand> lookupPlayerCommandTable =
@@ -87,6 +135,20 @@ public:
         return commandTable;
     }
 
+    /**
+     * @brief 处理区域查找命令
+     * @param handler 聊天处理器,用于发送消息和获取会话信息
+     * @param args 命令参数,包含要查找的区域名称(部分匹配)
+     * @return true 表示命令执行成功,false 表示参数错误
+     *
+     * 调用时机: 当 GM 使用 .lookup area 命令时
+     * 性能注意事项:
+     * - 遍历所有区域条目(AreaTable.dbc)
+     * - 支持多语言搜索,在首选语言未找到时搜索其他语言
+     * - 受 CONFIG_MAX_RESULTS_LOOKUP_COMMANDS 配置限制最大结果数
+     *
+     * 输出格式: "id - [区域名称 语言]"
+     */
     static bool HandleLookupAreaCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
@@ -162,6 +224,20 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理生物查找命令
+     * @param handler 聊天处理器,用于发送消息和获取会话信息
+     * @param args 命令参数,包含要查找的生物名称(部分匹配)
+     * @return true 表示命令执行成功,false 表示参数错误
+     *
+     * 调用时机: 当 GM 使用 .lookup creature 命令时
+     * 性能注意事项:
+     * - 遍历所有生物模板数据
+     * - 优先搜索本地化名称,若未找到则搜索默认名称
+     * - 受 CONFIG_MAX_RESULTS_LOOKUP_COMMANDS 配置限制最大结果数
+     *
+     * 输出格式: 游戏内显示为可点击链接,控制台显示纯文本
+     */
     static bool HandleLookupCreatureCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
@@ -240,6 +316,20 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理游戏事件查找命令
+     * @param handler 聊天处理器,用于发送消息和获取会话信息
+     * @param args 命令参数,包含要查找的事件描述(部分匹配)
+     * @return true 表示命令执行成功,false 表示参数错误
+     *
+     * 调用时机: 当 GM 使用 .lookup event 命令时
+     * 性能注意事项:
+     * - 遍历所有游戏事件数据
+     * - 显示事件是否处于激活状态
+     * - 受 CONFIG_MAX_RESULTS_LOOKUP_COMMANDS 配置限制最大结果数
+     *
+     * 输出格式: "id - [事件描述] [激活状态]"
+     */
     static bool HandleLookupEventCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
@@ -295,6 +385,22 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理阵营查找命令
+     * @param handler 聊天处理器,用于发送消息和获取会话信息
+     * @param args 命令参数,包含要查找的阵营名称(部分匹配)
+     * @return true 表示命令执行成功,false 表示参数错误
+     *
+     * 调用时机: 当 GM 使用 .lookup faction 命令时
+     * 性能注意事项:
+     * - 遍历所有阵营数据(Faction.dbc)
+     * - 若有选中玩家,则显示该玩家对各个阵营的声望状态
+     * - 支持多语言搜索
+     * - 受 CONFIG_MAX_RESULTS_LOOKUP_COMMANDS 配置限制最大结果数
+     *
+     * 输出格式: "id - [阵营名称] 声望等级 (当前声望值) [状态标记]"
+     * 状态标记包括: 可见、交战、强制和平、隐藏、强制不可见、未激活
+     */
     static bool HandleLookupFactionCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
@@ -397,6 +503,20 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理物品名称查找命令
+     * @param handler 聊天处理器,用于发送消息和获取会话信息
+     * @param args 命令参数,包含要查找的物品名称(部分匹配)
+     * @return true 表示命令执行成功,false 表示参数错误
+     *
+     * 调用时机: 当 GM 使用 .lookup item 命令时
+     * 性能注意事项:
+     * - 遍历所有物品模板数据(item_template 表)
+     * - 优先搜索本地化名称,若未找到则搜索默认名称
+     * - 受 CONFIG_MAX_RESULTS_LOOKUP_COMMANDS 配置限制最大结果数
+     *
+     * 输出格式: 游戏内显示为可点击的物品链接,控制台显示纯文本
+     */
     static bool HandleLookupItemCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
@@ -475,6 +595,19 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理物品ID查找命令
+     * @param handler 聊天处理器,用于发送消息和获取会话信息
+     * @param args 命令参数,包含要查找的物品ID
+     * @return true 表示命令执行成功,false 表示参数错误
+     *
+     * 调用时机: 当 GM 使用 .lookup item id 命令时
+     * 性能注意事项:
+     * - 直接通过ID查找物品模板,性能高效
+     * - 只返回单个物品的查找结果
+     *
+     * 输出格式: 游戏内显示为可点击的物品链接,控制台显示纯文本
+     */
     static bool HandleLookupItemIdCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
@@ -503,6 +636,20 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理物品套装查找命令
+     * @param handler 聊天处理器,用于发送消息和获取会话信息
+     * @param args 命令参数,包含要查找的套装名称(部分匹配)
+     * @return true 表示命令执行成功,false 表示参数错误
+     *
+     * 调用时机: 当 GM 使用 .lookup item set 命令时
+     * 性能注意事项:
+     * - 遍历所有物品套装数据(ItemSet.dbc)
+     * - 支持多语言搜索
+     * - 受 CONFIG_MAX_RESULTS_LOOKUP_COMMANDS 配置限制最大结果数
+     *
+     * 输出格式: "id - [套装名称 语言]"
+     */
     static bool HandleLookupItemSetCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
@@ -574,6 +721,20 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理游戏对象查找命令
+     * @param handler 聊天处理器,用于发送消息和获取会话信息
+     * @param args 命令参数,包含要查找的游戏对象名称(部分匹配)
+     * @return true 表示命令执行成功,false 表示参数错误
+     *
+     * 调用时机: 当 GM 使用 .lookup object 命令时
+     * 性能注意事项:
+     * - 遍历所有游戏对象模板数据
+     * - 优先搜索本地化名称,若未找到则搜索默认名称
+     * - 受 CONFIG_MAX_RESULTS_LOOKUP_COMMANDS 配置限制最大结果数
+     *
+     * 输出格式: 游戏内显示为可点击的游戏对象链接,控制台显示纯文本
+     */
     static bool HandleLookupObjectCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
@@ -650,6 +811,21 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理任务查找命令
+     * @param handler 聊天处理器,用于发送消息和获取会话信息
+     * @param args 命令参数,包含要查找的任务标题(部分匹配)
+     * @return true 表示命令执行成功,false 表示参数错误
+     *
+     * 调用时机: 当 GM 使用 .lookup quest 命令时
+     * 性能注意事项:
+     * - 遍历所有任务模板数据
+     * - 若有选中玩家,则显示该玩家对各个任务的状态(完成、进行中、已奖励)
+     * - 优先搜索本地化标题,若未找到则搜索默认标题
+     * - 受 CONFIG_MAX_RESULTS_LOOKUP_COMMANDS 配置限制最大结果数
+     *
+     * 输出格式: "id - [任务标题] [任务状态]"
+     */
     static bool HandleLookupQuestCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
@@ -770,6 +946,20 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理任务ID查找命令
+     * @param handler 聊天处理器,用于发送消息和获取会话信息
+     * @param args 命令参数,包含要查找的任务ID
+     * @return true 表示命令执行成功,false 表示参数错误
+     *
+     * 调用时机: 当 GM 使用 .lookup quest id 命令时
+     * 性能注意事项:
+     * - 直接通过ID查找任务模板,性能高效
+     * - 若有选中玩家,则显示该玩家对此任务的状态
+     * - 只返回单个任务的查找结果
+     *
+     * 输出格式: "id - [任务标题] [任务状态]"
+     */
     static bool HandleLookupQuestIdCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
@@ -820,6 +1010,21 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理技能查找命令
+     * @param handler 聊天处理器,用于发送消息和获取会话信息
+     * @param args 命令参数,包含要查找的技能名称(部分匹配)
+     * @return true 表示命令执行成功,false 表示参数错误
+     *
+     * 调用时机: 当 GM 使用 .lookup skill 命令时
+     * 性能注意事项:
+     * - 遍历所有技能数据(SkillLine.dbc)
+     * - 若有选中玩家,则显示该玩家的技能等级信息
+     * - 支持多语言搜索
+     * - 受 CONFIG_MAX_RESULTS_LOOKUP_COMMANDS 配置限制最大结果数
+     *
+     * 输出格式: "id - [技能名称 语言] [已知] [当前值/最大值/永久加成/临时加成]"
+     */
     static bool HandleLookupSkillCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
@@ -908,6 +1113,22 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理法术查找命令
+     * @param handler 聊天处理器,用于发送消息和获取会话信息
+     * @param args 命令参数,包含要查找的法术名称(部分匹配)
+     * @return true 表示命令执行成功,false 表示参数错误
+     *
+     * 调用时机: 当 GM 使用 .lookup spell 命令时
+     * 性能注意事项:
+     * - 遍历所有法术数据(Spell.dbc),数据量较大
+     * - 若有选中玩家,则显示该玩家是否已学习该法术
+     * - 检测法术类型:天赋、被动、学习类法术等
+     * - 支持多语言搜索
+     * - 受 CONFIG_MAX_RESULTS_LOOKUP_COMMANDS 配置限制最大结果数
+     *
+     * 输出格式: "id - [法术名称 等级N] [天赋] [被动] [学习] [已知] [激活]"
+     */
     static bool HandleLookupSpellCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
@@ -1022,6 +1243,20 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理法术ID查找命令
+     * @param handler 聊天处理器,用于发送消息和获取会话信息
+     * @param args 命令参数,包含要查找的法术ID
+     * @return true 表示命令执行成功,false 表示参数错误
+     *
+     * 调用时机: 当 GM 使用 .lookup spell id 命令时
+     * 性能注意事项:
+     * - 直接通过ID查找法术信息,性能高效
+     * - 若有选中玩家,则显示该玩家的法术状态
+     * - 只返回单个法术的查找结果
+     *
+     * 输出格式: "id - [法术名称 等级N] [天赋] [被动] [学习] [已知] [激活]"
+     */
     static bool HandleLookupSpellIdCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
@@ -1094,6 +1329,20 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理出租车站点查找命令
+     * @param handler 聊天处理器,用于发送消息和获取会话信息
+     * @param args 命令参数,包含要查找的出租车站点名称(部分匹配)
+     * @return true 表示命令执行成功,false 表示参数错误
+     *
+     * 调用时机: 当 GM 使用 .lookup taxinode 命令时
+     * 性能注意事项:
+     * - 遍历所有出租车站点数据(TaxiNodes.dbc)
+     * - 支持多语言搜索
+     * - 受 CONFIG_MAX_RESULTS_LOOKUP_COMMANDS 配置限制最大结果数
+     *
+     * 输出格式: "id - [站点名称 语言] (Map:m X:x Y:y Z:z)"
+     */
     static bool HandleLookupTaxiNodeCommand(ChatHandler* handler, const char * args)
     {
         if (!*args)
@@ -1167,6 +1416,20 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理传送点查找命令
+     * @param handler 聊天处理器,用于发送消息和获取会话信息
+     * @param args 命令参数,包含要查找的传送点名称(部分匹配)
+     * @return true 表示命令执行成功,false 表示参数错误
+     *
+     * 调用时机: 当 GM 使用 .lookup tele 命令时
+     * 性能注意事项:
+     * - 遍历所有游戏传送点数据(game_tele 表)
+     * - 按名称排序输出结果
+     * - 受 CONFIG_MAX_RESULTS_LOOKUP_COMMANDS 配置限制最大结果数
+     *
+     * 输出格式: 游戏内显示为可点击的传送点链接,控制台显示纯文本
+     */
     // Find tele in game_tele order by name
     static bool HandleLookupTeleCommand(ChatHandler* handler, char const* args)
     {
@@ -1226,6 +1489,22 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理称号查找命令
+     * @param handler 聊天处理器,用于发送消息和获取会话信息
+     * @param args 命令参数,包含要查找的称号名称(部分匹配)
+     * @return true 表示命令执行成功,false 表示参数错误
+     *
+     * 调用时机: 当 GM 使用 .lookup title 命令时
+     * 性能注意事项:
+     * - 遍历所有称号数据(CharTitles.dbc)
+     * - 若有选中玩家,则显示该玩家是否已获得和激活该称号
+     * - 支持多语言搜索
+     * - 受 CONFIG_MAX_RESULTS_LOOKUP_COMMANDS 配置限制最大结果数
+     *
+     * 输出格式: "id (idx:idx) - [称号名称 语言] [已知] [激活]"
+     * 注意: 称号名称会格式化为包含玩家名字的形式
+     */
     static bool HandleLookupTitleCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
@@ -1311,6 +1590,20 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理地图查找命令
+     * @param handler 聊天处理器,用于发送消息和获取会话信息
+     * @param args 命令参数,包含要查找的地图名称(部分匹配)
+     * @return true 表示命令执行成功,false 表示参数错误
+     *
+     * 调用时机: 当 GM 使用 .lookup map 命令时
+     * 性能注意事项:
+     * - 遍历所有地图数据(Map.dbc)
+     * - 显示地图类型:大陆、副本、团队副本、战场、竞技场
+     * - 受 CONFIG_MAX_RESULTS_LOOKUP_COMMANDS 配置限制最大结果数
+     *
+     * 输出格式: "id - [地图名称] [地图类型]"
+     */
     static bool HandleLookupMapCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
@@ -1380,6 +1673,19 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理地图ID查找命令
+     * @param handler 聊天处理器,用于发送消息和获取会话信息
+     * @param args 命令参数,包含要查找的地图ID
+     * @return true 表示命令执行成功,false 表示参数错误
+     *
+     * 调用时机: 当 GM 使用 .lookup map id 命令时
+     * 性能注意事项:
+     * - 直接通过ID查找地图信息,性能高效
+     * - 只返回单个地图的查找结果
+     *
+     * 输出格式: "id - [地图名称] [地图类型]"
+     */
     static bool HandleLookupMapIdCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
@@ -1427,6 +1733,21 @@ public:
         return true;
     }
 
+    /**
+     * @brief 处理玩家IP查找命令
+     * @param handler 聊天处理器,用于发送消息和获取会话信息
+     * @param args 命令参数,格式为 "IP [limit]",若不提供则使用选中玩家的IP
+     * @return true 表示命令执行成功,false 表示参数错误
+     *
+     * 调用时机: 当 GM 使用 .lookup player ip 命令时
+     * 性能注意事项:
+     * - 查询登录数据库获取使用该IP的账号
+     * - 再查询角色数据库获取每个账号下的角色
+     * - 可选的 limit 参数限制每个账号返回的角色数量
+     * - 受 CONFIG_MAX_RESULTS_LOOKUP_COMMANDS 配置限制最大结果数
+     *
+     * 输出格式: 显示账号信息和该账号下的所有角色(包含在线状态)
+     */
     static bool HandleLookupPlayerIpCommand(ChatHandler* handler, char const* args)
     {
         std::string ip;
@@ -1457,6 +1778,21 @@ public:
         return LookupPlayerSearchCommand(result, limit, handler);
     }
 
+    /**
+     * @brief 处理玩家账号查找命令
+     * @param handler 聊天处理器,用于发送消息和获取会话信息
+     * @param args 命令参数,格式为 "account [limit]"
+     * @return true 表示命令执行成功,false 表示参数错误
+     *
+     * 调用时机: 当 GM 使用 .lookup player account 命令时
+     * 性能注意事项:
+     * - 查询登录数据库获取账号信息
+     * - 再查询角色数据库获取该账号下的角色
+     * - limit 参数限制返回的角色数量
+     * - 受 CONFIG_MAX_RESULTS_LOOKUP_COMMANDS 配置限制最大结果数
+     *
+     * 输出格式: 显示账号信息和该账号下的所有角色(包含在线状态)
+     */
     static bool HandleLookupPlayerAccountCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
@@ -1477,6 +1813,21 @@ public:
         return LookupPlayerSearchCommand(result, limit, handler);
     }
 
+    /**
+     * @brief 处理玩家邮箱查找命令
+     * @param handler 聊天处理器,用于发送消息和获取会话信息
+     * @param args 命令参数,格式为 "email [limit]"
+     * @return true 表示命令执行成功,false 表示参数错误
+     *
+     * 调用时机: 当 GM 使用 .lookup player email 命令时
+     * 性能注意事项:
+     * - 查询登录数据库获取使用该邮箱的账号
+     * - 再查询角色数据库获取每个账号下的角色
+     * - limit 参数限制每个账号返回的角色数量
+     * - 受 CONFIG_MAX_RESULTS_LOOKUP_COMMANDS 配置限制最大结果数
+     *
+     * 输出格式: 显示账号信息和该账号下的所有角色(包含在线状态)
+     */
     static bool HandleLookupPlayerEmailCommand(ChatHandler* handler, char const* args)
     {
         if (!*args)
@@ -1493,6 +1844,22 @@ public:
         return LookupPlayerSearchCommand(result, limit, handler);
     }
 
+    /**
+     * @brief 玩家搜索命令的通用处理函数
+     * @param result 登录数据库查询结果,包含账号ID和账号名
+     * @param limit 每个账号最多返回的角色数量,-1 表示无限制
+     * @param handler 聊天处理器,用于发送消息和获取会话信息
+     * @return true 表示找到并显示了玩家,false 表示未找到任何玩家
+     *
+     * 调用时机: 由 HandleLookupPlayerIpCommand/HandleLookupPlayerAccountCommand/HandleLookupPlayerEmailCommand 调用
+     * 性能注意事项:
+     * - 对每个找到的账号执行一次角色数据库查询
+     * - 嵌套循环处理可能影响性能,受最大结果数限制
+     *
+     * 输出格式:
+     * - 先显示账号信息: "Account: accountName (accountId)"
+     * - 再显示该账号下的所有角色: "  Character: name [online]"
+     */
     static bool LookupPlayerSearchCommand(PreparedQueryResult result, int32 limit, ChatHandler* handler)
     {
         if (!result)
@@ -1552,6 +1919,12 @@ public:
     }
 };
 
+/**
+ * @brief 注册查找命令脚本
+ *
+ * 此函数由脚本系统在启动时调用,用于创建并注册 lookup_commandscript 实例。
+ * 使查找命令在游戏中可用。
+ */
 void AddSC_lookup_commandscript()
 {
     new lookup_commandscript();

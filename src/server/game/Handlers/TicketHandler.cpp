@@ -15,6 +15,21 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file TicketHandler.cpp
+ * @brief GM 工单系统数据包处理器
+ *
+ * 本文件实现了玩家与 GM 工单系统交互的所有网络消息处理函数,包括:
+ * - 工单的创建、更新、删除和查询
+ * - 工单系统状态查询
+ * - GM 服务满意度调查提交
+ * - 延迟报告功能
+ * - GM 响应解决处理
+ *
+ * 这些处理函数作为 WorldSession 的成员函数,负责处理客户端发送的工单相关数据包,
+ * 并与 TicketMgr 管理器协同工作,实现完整的工单生命周期管理。
+ */
+
 #include "WorldSession.h"
 #include "Common.h"
 #include "DatabaseEnv.h"

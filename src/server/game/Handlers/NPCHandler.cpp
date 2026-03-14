@@ -15,6 +15,27 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file NPCHandler.cpp
+ * @brief NPC交互处理模块实现文件
+ *
+ * @职责 处理玩家与各种NPC的交互操作,包括:
+ *       - 训练师交互(技能学习、技能列表查询)
+ *       - 商人交互(购买、出售、修理装备)
+ *       - 管理员交互(公会徽章设计、银行、邮箱)
+ *       - 宠物管理员交互(宠物管理、宠物栏操作)
+ *       - 旅店老板交互(设置炉石绑定)
+ *       - 灵魂医者交互(灵魂复活)
+ *       - 任务NPC交互(对话、任务信息)
+ *
+ * @调用时机 当玩家与NPC交互时,客户端发送相应的操作码,服务器根据NPC类型分发到对应的处理函数
+ *
+ * @性能注意事项
+ *       - 稳定宠物操作涉及数据库事务,需要合理处理
+ *       - 装备修理计算涉及大量物品耐久度检查
+ *       - NPC对话系统需要缓存机制避免频繁数据库查询
+ */
+
 #include "WorldSession.h"
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
@@ -42,21 +63,46 @@
 #include "World.h"
 #include "WorldPacket.h"
 
+/**
+ * @enum StableResultCode
+ * @brief 宠物栏操作结果代码
+ *
+ * @职责 定义宠物栏操作(寄养、取出、购买栏位等)的返回结果代码
+ *       客户端根据这些代码显示对应的错误提示或成功消息
+ */
 enum StableResultCode
 {
-    STABLE_ERR_MONEY        = 0x01,                         // "you don't have enough money"
-    STABLE_ERR_STABLE       = 0x06,                         // currently used in most fail cases
-    STABLE_SUCCESS_STABLE   = 0x08,                         // stable success
-    STABLE_SUCCESS_UNSTABLE = 0x09,                         // unstable/swap success
-    STABLE_SUCCESS_BUY_SLOT = 0x0A,                         // buy slot success
-    STABLE_ERR_EXOTIC       = 0x0C                          // "you are unable to control exotic creatures"
+    STABLE_ERR_MONEY        = 0x01,   ///< 错误:金钱不足 (you don't have enough money)
+    STABLE_ERR_STABLE       = 0x06,   ///< 错误:宠物栏操作失败 (通用错误代码,大多数失败情况使用)
+    STABLE_SUCCESS_STABLE   = 0x08,   ///< 成功:宠物寄养成功
+    STABLE_SUCCESS_UNSTABLE = 0x09,   ///< 成功:宠物取出或交换成功
+    STABLE_SUCCESS_BUY_SLOT = 0x0A,   ///< 成功:购买宠物栏位成功
+    STABLE_ERR_EXOTIC       = 0x0C    ///< 错误:无法控制奇异宠物 (you are unable to control exotic creatures)
 };
 
+/**
+ * @brief 处理公会徽章设计师激活操作码
+ *
+ * @职责 处理玩家与公会徽章设计师NPC的交互
+ *       验证NPC有效性并发送徽章设计界面给客户端
+ *
+ * @param recvData 接收到的网络包数据
+ *        - guid: NPC的GUID
+ *
+ * @返回值 无
+ *
+ * @主要流程
+ *   1. 读取NPC的GUID
+ *   2. 验证玩家是否可以与该NPC交互(NPC类型检查)
+ *   3. 移除玩家的假死状态
+ *   4. 发送徽章设计界面给客户端
+ */
 void WorldSession::HandleTabardVendorActivateOpcode(WorldPacket& recvData)
 {
     ObjectGuid guid;
     recvData >> guid;
 
+    // 验证NPC是否存在且玩家可以与之交互(NPC必须有UNIT_NPC_FLAG_TABARDDESIGNER标志)
     Creature* unit = GetPlayer()->GetNPCIfCanInteractWith(guid, UNIT_NPC_FLAG_TABARDDESIGNER);
     if (!unit)
     {
@@ -64,13 +110,23 @@ void WorldSession::HandleTabardVendorActivateOpcode(WorldPacket& recvData)
         return;
     }
 
-    // remove fake death
+    // 移除假死状态
     if (GetPlayer()->HasUnitState(UNIT_STATE_DIED))
         GetPlayer()->RemoveAurasByType(SPELL_AURA_FEIGN_DEATH);
 
+    // 发送徽章设计界面
     SendTabardVendorActivate(guid);
 }
 
+/**
+ * @brief 发送公会徽章设计师激活消息
+ *
+ * @职责 向客户端发送公会徽章设计界面打开消息
+ *
+ * @param guid NPC的GUID
+ *
+ * @返回值 无
+ */
 void WorldSession::SendTabardVendorActivate(ObjectGuid guid)
 {
     WorldPacket data(MSG_TABARDVENDOR_ACTIVATE, 8);
@@ -78,6 +134,16 @@ void WorldSession::SendTabardVendorActivate(ObjectGuid guid)
     SendPacket(&data);
 }
 
+/**
+ * @brief 发送邮箱界面
+ *
+ * @职责 向客户端发送邮箱界面打开消息
+ *       用于邮递员NPC或邮箱交互
+ *
+ * @param guid 邮递员NPC或邮箱的GUID
+ *
+ * @返回值 无
+ */
 void WorldSession::SendShowMailBox(ObjectGuid guid)
 {
     WorldPackets::Mail::ShowMailbox packet;
@@ -85,8 +151,24 @@ void WorldSession::SendShowMailBox(ObjectGuid guid)
     SendPacket(packet.Write());
 }
 
+/**
+ * @brief 处理训练师列表查询操作码
+ *
+ * @职责 处理玩家与训练师NPC的交互请求
+ *       验证NPC有效性并发送可学习的技能列表给客户端
+ *
+ * @param packet 接收到的网络包数据
+ *        - Unit: NPC的GUID
+ *
+ * @返回值 无
+ *
+ * @主要流程
+ *   1. 验证NPC是否存在且可以交互
+ *   2. 调用SendTrainerList发送技能列表
+ */
 void WorldSession::HandleTrainerListOpcode(WorldPackets::NPC::Hello& packet)
 {
+    // 验证NPC是否存在且玩家可以与之交互(NPC必须有UNIT_NPC_FLAG_TRAINER标志)
     Creature* npc = GetPlayer()->GetNPCIfCanInteractWith(packet.Unit, UNIT_NPC_FLAG_TRAINER);
     if (!npc)
     {
@@ -97,12 +179,29 @@ void WorldSession::HandleTrainerListOpcode(WorldPackets::NPC::Hello& packet)
     SendTrainerList(npc);
 }
 
+/**
+ * @brief 发送训练师技能列表
+ *
+ * @职责 向客户端发送训练师可教授的技能列表
+ *       包含技能名称、费用、等级要求、技能点要求等信息
+ *
+ * @param npc 训练师NPC指针
+ *
+ * @返回值 无
+ *
+ * @主要流程
+ *   1. 移除玩家的假死状态
+ *   2. 从对象管理器获取训练师数据
+ *   3. 验证训练师是否对玩家有效(职业、阵营等条件)
+ *   4. 发送技能列表给客户端
+ */
 void WorldSession::SendTrainerList(Creature* npc)
 {
-    // remove fake death
+    // 移除假死状态
     if (GetPlayer()->HasUnitState(UNIT_STATE_DIED))
         GetPlayer()->RemoveAurasByType(SPELL_AURA_FEIGN_DEATH);
 
+    // 获取训练师数据
     Trainer::Trainer const* trainer = sObjectMgr->GetTrainer(npc->GetEntry());
     if (!trainer)
     {
@@ -110,19 +209,39 @@ void WorldSession::SendTrainerList(Creature* npc)
         return;
     }
 
+    // 验证训练师是否对玩家有效(检查职业、阵营等条件)
     if (!trainer->IsTrainerValidForPlayer(_player))
     {
         TC_LOG_DEBUG("network", "WorldSession: SendTrainerList - trainer {} not valid for player {}", npc->GetGUID().ToString(), GetPlayerInfo());
         return;
     }
 
+    // 发送技能列表(包含本地化信息)
     trainer->SendSpells(npc, _player, GetSessionDbLocaleIndex());
 }
 
+/**
+ * @brief 处理训练师购买技能操作码
+ *
+ * @职责 处理玩家向训练师购买/学习技能的请求
+ *       验证条件并教授技能给玩家
+ *
+ * @param packet 接收到的网络包数据
+ *        - TrainerGUID: 训练师NPC的GUID
+ *        - SpellID: 要学习的技能ID
+ *
+ * @返回值 无
+ *
+ * @主要流程
+ *   1. 验证训练师NPC有效性
+ *   2. 获取训练师数据
+ *   3. 调用TeachSpell教授技能(包含金钱检查、技能点检查、前置技能检查等)
+ */
 void WorldSession::HandleTrainerBuySpellOpcode(WorldPackets::NPC::TrainerBuySpell& packet)
 {
     TC_LOG_DEBUG("network", "WORLD: Received CMSG_TRAINER_BUY_SPELL {}, learn spell id is: {}", packet.TrainerGUID.ToString(), packet.SpellID);
 
+    // 验证NPC是否存在且玩家可以与之交互
     Creature* npc = GetPlayer()->GetNPCIfCanInteractWith(packet.TrainerGUID, UNIT_NPC_FLAG_TRAINER);
     if (!npc)
     {
@@ -130,17 +249,39 @@ void WorldSession::HandleTrainerBuySpellOpcode(WorldPackets::NPC::TrainerBuySpel
         return;
     }
 
-    // remove fake death
+    // 移除假死状态
     if (GetPlayer()->HasUnitState(UNIT_STATE_DIED))
         GetPlayer()->RemoveAurasByType(SPELL_AURA_FEIGN_DEATH);
 
+    // 获取训练师数据
     Trainer::Trainer const* trainer = sObjectMgr->GetTrainer(npc->GetEntry());
     if (!trainer)
         return;
 
+    // 教授技能(包含所有条件检查和金钱扣除)
     trainer->TeachSpell(npc, _player, packet.SpellID);
 }
 
+/**
+ * @brief 处理NPC对话Hello操作码
+ *
+ * @职责 处理玩家与NPC对话的开始交互
+ *       显示NPC的对话菜单或执行特殊NPC逻辑
+ *
+ * @param recvData 接收到的网络包数据
+ *        - guid: NPC的GUID
+ *
+ * @返回值 无
+ *
+ * @主要流程
+ *   1. 验证NPC是否可以交互
+ *   2. 设置阵营可见性
+ *   3. 移除会打断对话的光环
+ *   4. 如果NPC在移动,暂停其移动
+ *   5. 特殊处理:战场灵魂医者直接加入复活队列
+ *   6. 触发脚本事件OnGossipHello
+ *   7. 如果脚本未处理,显示默认对话菜单
+ */
 void WorldSession::HandleGossipHelloOpcode(WorldPacket& recvData)
 {
     TC_LOG_DEBUG("network", "WORLD: Received CMSG_GOSSIP_HELLO");
@@ -148,6 +289,7 @@ void WorldSession::HandleGossipHelloOpcode(WorldPacket& recvData)
     ObjectGuid guid;
     recvData >> guid;
 
+    // 验证NPC是否存在且玩家可以与之交互(NPC必须有UNIT_NPC_FLAG_GOSSIP标志)
     Creature* unit = GetPlayer()->GetNPCIfCanInteractWith(guid, UNIT_NPC_FLAG_GOSSIP);
     if (!unit)
     {
@@ -155,21 +297,23 @@ void WorldSession::HandleGossipHelloOpcode(WorldPacket& recvData)
         return;
     }
 
-    // set faction visible if needed
+    // 如果需要,设置阵营可见性(首次接触该阵营时)
     if (FactionTemplateEntry const* factionTemplateEntry = sFactionTemplateStore.LookupEntry(unit->GetFaction()))
         _player->GetReputationMgr().SetVisible(factionTemplateEntry);
 
+    // 移除会打断对话的光环
     GetPlayer()->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_TALK);
-    // remove fake death
+    // 移除假死状态 (已注释,似乎不需要)
     //if (GetPlayer()->HasUnitState(UNIT_STATE_DIED))
     //    GetPlayer()->RemoveAurasByType(SPELL_AURA_FEIGN_DEATH);
 
-    // Stop the npc if moving
+    // 如果NPC在移动,暂停其移动
     if (uint32 pause = unit->GetMovementTemplate().GetInteractionPauseTimer())
         unit->PauseMovement(pause);
+    // 设置NPC的初始位置(防止交互后NPC走回原位)
     unit->SetHomePosition(unit->GetPosition());
 
-    // If spiritguide, no need for gossip menu, just put player into resurrect queue
+    // 特殊处理:如果是战场灵魂医者,不需要对话菜单,直接将玩家加入复活队列
     if (unit->IsSpiritGuide())
     {
         Battleground* bg = _player->GetBattleground();
@@ -181,15 +325,36 @@ void WorldSession::HandleGossipHelloOpcode(WorldPacket& recvData)
         }
     }
 
+    // 清空玩家的对话菜单
     _player->PlayerTalkClass->ClearMenus();
+
+    // 触发脚本的OnGossipHello事件
+    // 如果脚本返回true,表示脚本已处理,不再显示默认菜单
     if (!unit->AI()->OnGossipHello(_player))
     {
+        // 脚本未处理,准备并发送默认对话菜单
 //        _player->TalkedToCreature(unit->GetEntry(), unit->GetGUID());
         _player->PrepareGossipMenu(unit, unit->GetCreatureTemplate()->GossipMenuId, true);
         _player->SendPreparedGossip(unit);
     }
 }
 
+/**
+ * @brief 处理灵魂医者激活操作码
+ *
+ * @职责 处理玩家(灵魂状态)与灵魂医者的交互
+ *       允许玩家在灵魂状态下复活
+ *
+ * @param recvData 接收到的网络包数据
+ *        - guid: 灵魂医者NPC的GUID
+ *
+ * @返回值 无
+ *
+ * @主要流程
+ *   1. 验证NPC是否为灵魂医者
+ *   2. 移除假死状态
+ *   3. 执行复活逻辑
+ */
 void WorldSession::HandleSpiritHealerActivateOpcode(WorldPacket& recvData)
 {
     TC_LOG_DEBUG("network", "WORLD: CMSG_SPIRIT_HEALER_ACTIVATE");
@@ -197,6 +362,7 @@ void WorldSession::HandleSpiritHealerActivateOpcode(WorldPacket& recvData)
     ObjectGuid guid;
     recvData >> guid;
 
+    // 验证NPC是否存在且玩家可以与之交互(NPC必须有UNIT_NPC_FLAG_SPIRITHEALER标志)
     Creature* unit = GetPlayer()->GetNPCIfCanInteractWith(guid, UNIT_NPC_FLAG_SPIRITHEALER);
     if (!unit)
     {
@@ -204,19 +370,39 @@ void WorldSession::HandleSpiritHealerActivateOpcode(WorldPacket& recvData)
         return;
     }
 
-    // remove fake death
+    // 移除假死状态
     if (GetPlayer()->HasUnitState(UNIT_STATE_DIED))
         GetPlayer()->RemoveAurasByType(SPELL_AURA_FEIGN_DEATH);
 
+    // 执行灵魂复活
     SendSpiritResurrect();
 }
 
+/**
+ * @brief 执行灵魂复活
+ *
+ * @职责 处理玩家在灵魂医者处复活的实际逻辑
+ *       包括复活玩家、扣除耐久度、传送至墓地等
+ *
+ * @参数 无(使用玩家当前状态)
+ *
+ * @返回值 无
+ *
+ * @主要流程
+ *   1. 复活玩家(恢复50%生命值)
+ *   2. 对所有装备造成25%耐久度损失
+ *   3. 生成尸骨(尸体消失)
+ *   4. 如果尸体所在墓地与灵魂所在墓地不同,传送至尸体所在墓地
+ */
 void WorldSession::SendSpiritResurrect()
 {
+    // 复活玩家,恢复50%生命值,使用SFX效果
     _player->ResurrectPlayer(0.5f, true);
+
+    // 所有装备耐久度损失25%
     _player->DurabilityLossAll(0.25f, true);
 
-    // get corpse nearest graveyard
+    // 获取尸体最近的墓地
     WorldSafeLocsEntry const* corpseGrave = nullptr;
     if (_player->HasCorpse())
     {
@@ -225,10 +411,11 @@ void WorldSession::SendSpiritResurrect()
             corpseLocation.GetPositionZ(), corpseLocation.GetMapId(), _player->GetTeam());
     }
 
-    // now can spawn bones
+    // 生成尸骨,尸体消失
     _player->SpawnCorpseBones();
 
-    // teleport to nearest from corpse graveyard, if different from nearest to player ghost
+    // 如果尸体最近的墓地与玩家灵魂最近的墓地不同,传送至尸体所在墓地
+    // 这样可以避免玩家复活在远离尸体的地方
     if (corpseGrave)
     {
         WorldSafeLocsEntry const* ghostGrave = sObjectMgr->GetClosestGraveyard(
@@ -239,14 +426,33 @@ void WorldSession::SendSpiritResurrect()
     }
 }
 
+/**
+ * @brief 处理旅店老板激活操作码
+ *
+ * @职责 处理玩家与旅店老板的交互
+ *       将玩家的炉石绑定点设置到当前位置
+ *
+ * @param recvData 接收到的网络包数据
+ *        - npcGUID: 旅店老板NPC的GUID
+ *
+ * @返回值 无
+ *
+ * @主要流程
+ *   1. 检查玩家是否在世界中且存活
+ *   2. 验证NPC是否为旅店老板
+ *   3. 移除假死状态
+ *   4. 设置绑定点
+ */
 void WorldSession::HandleBinderActivateOpcode(WorldPacket& recvData)
 {
     ObjectGuid npcGUID;
     recvData >> npcGUID;
 
+    // 玩家必须在世界中且存活
     if (!GetPlayer()->IsInWorld() || !GetPlayer()->IsAlive())
         return;
 
+    // 验证NPC是否存在且玩家可以与之交互(NPC必须有UNIT_NPC_FLAG_INNKEEPER标志)
     Creature* unit = GetPlayer()->GetNPCIfCanInteractWith(npcGUID, UNIT_NPC_FLAG_INNKEEPER);
     if (!unit)
     {
@@ -254,29 +460,49 @@ void WorldSession::HandleBinderActivateOpcode(WorldPacket& recvData)
         return;
     }
 
-    // remove fake death
+    // 移除假死状态
     if (GetPlayer()->HasUnitState(UNIT_STATE_DIED))
         GetPlayer()->RemoveAurasByType(SPELL_AURA_FEIGN_DEATH);
 
+    // 设置绑定点
     SendBindPoint(unit);
 }
 
+/**
+ * @brief 发送绑定点设置消息
+ *
+ * @职责 实际执行炉石绑定点的设置
+ *       施放绑定法术并通知客户端
+ *
+ * @param npc 旅店老板NPC指针
+ *
+ * @返回值 无
+ *
+ * @主要流程
+ *   1. 检查是否在副本中(副本不允许设置绑定点)
+ *   2. 施放绑定法术(3286)
+ *   3. 发送成功消息给客户端
+ *   4. 关闭对话菜单
+ */
 void WorldSession::SendBindPoint(Creature* npc)
 {
-    // prevent set homebind to instances in any case
+    // 防止在副本中设置炉石绑定点
     if (GetPlayer()->GetMap()->Instanceable())
         return;
 
+    // 绑定法术ID: 3286 (Bind)
     uint32 bindspell = 3286;
 
-    // send spell for homebinding (3286)
+    // 施放绑定法术
     npc->CastSpell(_player, bindspell, true);
 
+    // 发送法术学习成功消息给客户端
     WorldPacket data(SMSG_TRAINER_BUY_SUCCEEDED, (8+4));
     data << uint64(npc->GetGUID());
     data << uint32(bindspell);
     SendPacket(&data);
 
+    // 关闭对话菜单
     _player->PlayerTalkClass->SendCloseGossip();
 }
 

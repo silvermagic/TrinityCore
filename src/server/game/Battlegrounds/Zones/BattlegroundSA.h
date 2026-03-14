@@ -15,6 +15,23 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file BattlegroundSA.h
+ * @brief 远古海滩（Strand of the Ancients）战场模块
+ *
+ * 本模块实现了远古海滩战场的核心逻辑，包括：
+ * - 攻防两轮制战斗机制
+ * - 泰坦遗迹争夺战
+ * - 动态大门和墓地系统
+ * - 攻城器械和防御炮塔管理
+ *
+ * 远古海滩特点：
+ * - 双轮制：每个阵营轮流担任攻方和守方
+ * - 时间限制：每轮10分钟，通过大门摧毁速度决定胜负
+ * - 战术元素：攻城炸弹、墓地控制、大门破坏
+ * - 载具战斗：攻城器械和防御炮塔
+ */
+
 #ifndef __BATTLEGROUNDSA_H
 #define __BATTLEGROUNDSA_H
 
@@ -22,24 +39,37 @@
 #include "BattlegroundScore.h"
 #include "Object.h"
 
+/// 旗帜数量常量
 #define BG_SA_FLAG_AMOUNT           3
+
+/// 攻城器械数量常量
 #define BG_SA_DEMOLISHER_AMOUNT     4
 
+/**
+ * @brief 远古海滩战场状态枚举
+ *
+ * 定义战场的各个阶段状态
+ */
 enum BG_SA_Status
 {
-    BG_SA_NOT_STARTED = 0,
-    BG_SA_WARMUP,
-    BG_SA_ROUND_ONE,
-    BG_SA_SECOND_WARMUP,
-    BG_SA_ROUND_TWO,
-    BG_SA_BONUS_ROUND
+    BG_SA_NOT_STARTED = 0,    ///< 未开始状态
+    BG_SA_WARMUP,             ///< 热身阶段（准备时间）
+    BG_SA_ROUND_ONE,          ///< 第一轮战斗
+    BG_SA_SECOND_WARMUP,      ///< 第二轮热身（交换攻防）
+    BG_SA_ROUND_TWO,          ///< 第二轮战斗
+    BG_SA_BONUS_ROUND         ///< 奖励轮次
 };
 
+/**
+ * @brief 大门状态枚举
+ *
+ * 定义大门的损坏程度状态
+ */
 enum BG_SA_GateState
 {
-    BG_SA_GATE_OK           = 1,
-    BG_SA_GATE_DAMAGED      = 2,
-    BG_SA_GATE_DESTROYED    = 3
+    BG_SA_GATE_OK           = 1,  ///< 大门完好
+    BG_SA_GATE_DAMAGED      = 2,  ///< 大门受损
+    BG_SA_GATE_DESTROYED    = 3   ///< 大门被摧毁
 };
 
 enum BG_SA_EventIds
@@ -490,16 +520,28 @@ enum BG_SA_BroadcastTexts
     BG_SA_TEXT_ROUND_TWO_START_HALF_MINUTE      = 29449
 };
 
+/**
+ * @struct GateInfo
+ * @brief 大门信息结构
+ *
+ * 存储单个大门的基本信息，包括：
+ * - 大门ID和游戏对象ID
+ * - 世界状态ID
+ * - 损坏和摧毁时的文本提示
+ */
 struct GateInfo
 {
-    uint8 GateId;
-    uint32 GameObjectId;
-    uint32 WorldState;
-    uint8 DamagedText;
-    uint8 DestroyedText;
+    uint8 GateId;          ///< 大门ID（在BG_SA_Objects枚举中的索引）
+    uint32 GameObjectId;   ///< 游戏对象模板ID
+    uint32 WorldState;     ///< 世界状态ID
+    uint8 DamagedText;     ///< 大门受损时的广播文本ID
+    uint8 DestroyedText;   ///< 大门被摧毁时的广播文本ID
 };
 
+/// 大门总数
 #define MAX_GATES 6
+
+/// 所有大门的配置信息数组
 GateInfo const Gates[MAX_GATES] =
 {
     { BG_SA_GREEN_GATE,   GO_GATE_OF_THE_GREEN_EMERALD,   BG_SA_GREEN_GATEWS,   TEXT_GREEN_GATE_UNDER_ATTACK,   TEXT_GREEN_GATE_DESTROYED   },
@@ -510,19 +552,46 @@ GateInfo const Gates[MAX_GATES] =
     { BG_SA_ANCIENT_GATE, GO_CHAMBER_OF_ANCIENT_RELICS,   BG_SA_ANCIENT_GATEWS, TEXT_ANCIENT_GATE_UNDER_ATTACK, TEXT_ANCIENT_GATE_DESTROYED }
 };
 
+/**
+ * @struct BG_SA_RoundScore
+ * @brief 回合得分结构
+ *
+ * 记录单个回合的胜负结果和用时
+ */
 struct BG_SA_RoundScore
 {
-    TeamId winner;
-    uint32 time;
+    TeamId winner;  ///< 回合胜利方
+    uint32 time;    ///< 回合用时（毫秒）
 };
 
+/**
+ * @struct BattlegroundSAScore
+ * @brief 远古海滩玩家得分结构
+ *
+ * 继承自BattlegroundScore，添加远古海滩特有的得分统计：
+ * - 摧毁攻城器械数量
+ * - 摧毁大门数量
+ */
 struct BattlegroundSAScore final : public BattlegroundScore
 {
     friend class BattlegroundSA;
 
     protected:
+        /**
+         * @brief 构造函数
+         * @param playerGuid 玩家GUID
+         */
         BattlegroundSAScore(ObjectGuid playerGuid) : BattlegroundScore(playerGuid), DemolishersDestroyed(0), GatesDestroyed(0) { }
 
+        /**
+         * @brief 更新得分
+         * @param type 得分类型
+         * @param value 得分值
+         *
+         * 处理远古海滩特有的得分类型：
+         * - SCORE_DESTROYED_DEMOLISHER：摧毁攻城器械
+         * - SCORE_DESTROYED_WALL：摧毁大门
+         */
         void UpdateScore(uint32 type, uint32 value) override
         {
             switch (type)
@@ -539,52 +608,200 @@ struct BattlegroundSAScore final : public BattlegroundScore
             }
         }
 
+        /**
+         * @brief 构建目标数据块
+         * @param data 数据包
+         *
+         * 将玩家得分数据序列化到数据包中
+         */
         void BuildObjectivesBlock(WorldPacket& data) final override;
 
         uint32 GetAttr1() const final override { return DemolishersDestroyed; }
         uint32 GetAttr2() const final override { return GatesDestroyed; }
 
-        uint32 DemolishersDestroyed;
-        uint32 GatesDestroyed;
+        uint32 DemolishersDestroyed;  ///< 摧毁的攻城器械数量
+        uint32 GatesDestroyed;         ///< 摧毁的大门数量
 };
 
-/// Class for manage Strand of Ancient battleground
+/**
+ * @class BattlegroundSA
+ * @brief 远古海滩战场管理类
+ *
+ * 继承自Battleground，实现远古海滩战场的完整逻辑：
+ *
+ * 核心机制：
+ * - 双轮制战斗：双方轮流担任攻方和守方
+ * - 大门系统：6道大门，从海滩到泰坦遗迹
+ * - 墓地控制：3个可占领墓地，提供复活点和攻城器械
+ * - 泰坦遗迹：攻方目标，激活即获胜
+ *
+ * 战斗流程：
+ * 1. 热身阶段（2分钟）：玩家准备，船只出发
+ * 2. 第一轮（10分钟）：随机一方进攻
+ * 3. 热身阶段（1分钟）：交换攻防
+ * 4. 第二轮（10分钟）：另一方进攻
+ * 5. 结算：比较两轮用时，时间短者获胜
+ *
+ * 特殊机制：
+ * - 攻城炸弹：海滩和墓地提供的炸弹用于炸门
+ * - 攻城器械：可驾驶的投石车，对大门造成伤害
+ * - 防御炮塔：守方可使用的固定炮台
+ */
 class BattlegroundSA : public Battleground
 {
     public:
+        /**
+         * @brief 构造函数
+         *
+         * 初始化战场成员变量，设置初始状态
+         */
         BattlegroundSA();
+
+        /**
+         * @brief 析构函数
+         */
         ~BattlegroundSA();
 
         /**
-         * \brief Called every time for update battle data
-         * -Update timer
-         * -Round switch
+         * @brief 战场更新实现
+         * @param diff 距离上次更新的时间间隔（毫秒）
+         *
+         * 核心更新逻辑，处理：
+         * - 状态机流转（热身、第一轮、第二轮）
+         * - 计时器更新和同步
+         * - 回合切换和胜负判定
+         *
+         * 调用时机：每次战场更新循环
          */
         void PostUpdateImpl(uint32 diff) override;
 
-        /* inherited from BattlegroundClass */
-        /// Called when a player join battle
+        /* 继承自Battleground的虚函数 */
+
+        /**
+         * @brief 添加玩家到战场
+         * @param player 要添加的玩家
+         *
+         * 创建玩家得分记录，发送船只初始化包，传送玩家到入口
+         *
+         * 调用时机：玩家进入战场时
+         */
         void AddPlayer(Player* player) override;
-        /// Called when battle start
+
+        /**
+         * @brief 关门事件（准备阶段）
+         *
+         * 准备阶段的初始化操作
+         *
+         * 调用时机：战场准备阶段开始
+         */
         void StartingEventCloseDoors() override;
+
+        /**
+         * @brief 开门事件（战斗开始）
+         *
+         * 战斗开始时的操作
+         *
+         * 调用时机：战场正式开始
+         */
         void StartingEventOpenDoors() override;
-        /// Called for ini battleground, after that the first player be entered
+
+        /**
+         * @brief 设置战场
+         * @return 设置成功返回true，否则返回false
+         *
+         * 创建所有战场游戏对象和生物：
+         * - 大门、船只、泰坦遗迹
+         * - 攻城器械、防御炮塔
+         * - 墓地旗帜、攻城炸弹
+         * - 灵魂 healer
+         *
+         * 调用时机：战场初始化时
+         */
         bool SetupBattleground() override;
+
+        /**
+         * @brief 重置战场
+         *
+         * 重置所有状态变量，随机选择攻击方
+         *
+         * 调用时机：战场重置时
+         */
         void Reset() override;
-        /// Called for generate packet contain worldstate data
+
+        /**
+         * @brief 填充初始世界状态
+         * @param packet 世界状态数据包
+         *
+         * 向客户端发送战场的初始世界状态信息
+         *
+         * 调用时机：玩家进入战场时
+         */
         void FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& packet) override;
-        /// Called when a player kill a unit in bg
+
+        /**
+         * @brief 处理击杀单位
+         * @param creature 被击杀的生物
+         * @param killer 击杀者
+         *
+         * 处理攻城器械被摧毁时的得分和成就判定
+         *
+         * 调用时机：生物死亡时
+         */
         void HandleKillUnit(Creature* creature, Player* killer) override;
-        /// Return the nearest graveyard where player can respawn
+
+        /**
+         * @brief 获取最近的墓地
+         * @param player 需要复活的玩家
+         * @return 最近的墓地位置信息
+         *
+         * 根据玩家位置和墓地控制权，返回最近的可用墓地
+         *
+         * 调用时机：玩家死亡需要选择复活点时
+         */
         WorldSafeLocsEntry const* GetClosestGraveyard(Player* player) override;
-        /// Called when someone activates an event
+
+        /**
+         * @brief 处理事件
+         * @param obj 触发事件的对象
+         * @param eventId 事件ID
+         * @param invoker 触发者
+         *
+         * 处理游戏对象事件：
+         * - 大门损坏/摧毁
+         * - 泰坦遗迹激活
+         *
+         * 调用时机：游戏对象触发事件时
+         */
         void ProcessEvent(WorldObject* /*obj*/, uint32 /*eventId*/, WorldObject* /*invoker*/ = nullptr) override;
-        /// Called when a player click on flag (graveyard flag)
+
+        /**
+         * @brief 玩家点击旗帜事件
+         * @param source 点击旗帜的玩家
+         * @param go 被点击的游戏对象
+         *
+         * 处理墓地旗帜点击，占领墓地
+         *
+         * 调用时机：玩家点击墓地旗帜时
+         */
         void EventPlayerClickedOnFlag(Player* source, GameObject* go) override;
-        /// Called when a player clicked on relic
+
+        /**
+         * @brief 泰坦遗迹激活
+         * @param clicker 激活遗迹的玩家
+         *
+         * 处理泰坦遗迹激活，判定回合胜利
+         *
+         * 调用时机：玩家激活泰坦遗迹时
+         */
         void TitanRelicActivated(Player* clicker);
 
-        /// Return GateInfo, relative to bg data, according to gameobject entry
+        /**
+         * @brief 获取大门信息
+         * @param entry 游戏对象模板ID
+         * @return 大门信息结构指针，未找到返回nullptr
+         *
+         * 根据游戏对象ID查找对应的大门信息
+         */
         GateInfo const* GetGate(uint32 entry)
         {
             for (uint8 i = 0; i < MAX_GATES; ++i)
@@ -593,112 +810,259 @@ class BattlegroundSA : public Battleground
             return nullptr;
         }
 
-        /// Called on battleground ending
+        /**
+         * @brief 结束战场
+         * @param winner 获胜方阵营ID（ALLIANCE/HORDE/0表示平局）
+         *
+         * 发放荣誉奖励，调用基类结束逻辑
+         *
+         * 调用时机：战斗结束判定时
+         */
         void EndBattleground(uint32 winner) override;
 
-        /// Called when a player leave battleground
+        /**
+         * @brief 移除玩家
+         * @param player 离开的玩家
+         * @param guid 玩家GUID
+         * @param team 玩家阵营
+         *
+         * 处理玩家离开战场
+         *
+         * 调用时机：玩家离开战场时
+         */
         void RemovePlayer(Player* player, ObjectGuid guid, uint32 team) override;
+
+        /**
+         * @brief 处理区域触发
+         * @param Source 触发区域的玩家
+         * @param Trigger 区域触发器ID
+         *
+         * 处理玩家进入特定区域的事件
+         *
+         * 调用时机：玩家进入区域触发器范围时
+         */
         void HandleAreaTrigger(Player* Source, uint32 Trigger) override;
 
-        /* Scorekeeping */
+        /* 成就系统 */
 
-        // Achievement: Not Even a Scratch
+        /**
+         * @brief 检查成就条件是否满足
+         * @param criteriaId 成就条件ID
+         * @param source 检查成就的玩家
+         * @param target 目标单位
+         * @param miscValue 额外数值
+         * @return 满足条件返回true，否则返回false
+         *
+         * 检查远古海滩特有成就：
+         * - BG_CRITERIA_CHECK_NOT_EVEN_A_SCRATCH：无伤胜利
+         * - BG_CRITERIA_CHECK_DEFENSE_OF_THE_ANCIENTS：远古守护者
+         */
         bool CheckAchievementCriteriaMeet(uint32 criteriaId, Player const* source, Unit const* target = nullptr, uint32 miscValue = 0) override;
 
-        // Control Phase Shift
+        /**
+         * @brief 检查法术是否允许
+         * @param spellId 法术ID
+         * @param player 施法玩家
+         * @return 允许返回true，否则返回false
+         *
+         * 控制相位转换法术的施放条件
+         */
         bool IsSpellAllowed(uint32 spellId, Player const* player) const override;
 
     private:
 
         /**
-         * \brief Called on setup and between the two round
-         * -Delete all gameobject / creature
-         * -Respawn all gameobject / creature to have good faction
+         * @brief 重置所有游戏对象
+         * @return 重置成功返回true，否则返回false
+         *
+         * 删除并重新创建所有游戏对象和生物：
+         * - 移除旧对象
+         * - 根据当前攻击方重新设置阵营
+         * - 重置大门、旗帜、炸弹等
+         *
+         * 调用时机：战场初始化和两轮之间
          */
         bool ResetObjs();
-        /// Called for start ship movement
-        void StartShips();
+
         /**
-         * \brief Called between the two round
-         * -Teleport all players to good location
+         * @brief 启动船只移动
+         *
+         * 打开船只门，发送更新包给所有玩家
+         *
+         * 调用时机：热身阶段结束后
+         */
+        void StartShips();
+
+        /**
+         * @brief 传送所有玩家
+         *
+         * 在两轮之间传送玩家到正确的起始位置：
+         * - 攻方传送到船只或海滩
+         * - 守方传送到防御位置
+         * - 复活所有死亡玩家
+         * - 施放准备法术
+         *
+         * 调用时机：两轮切换时
          */
         void TeleportPlayers();
-        void TeleportToEntrancePosition(Player* player);
+
         /**
-         * \brief Called on start and between the two round
-         * -Update faction of all vehicle
+         * @brief 传送玩家到入口位置
+         * @param player 要传送的玩家
+         *
+         * 根据玩家阵营（攻方/守方）传送到对应入口：
+         * - 攻方：船只（如果船未开）或海滩
+         * - 守方：防御者房间
+         */
+        void TeleportToEntrancePosition(Player* player);
+
+        /**
+         * @brief 重写炮塔阵营
+         *
+         * 设置所有防御炮塔和攻城器械的阵营
+         * 防止阵营覆盖问题
+         *
+         * 调用时机：战场初始化和两轮切换时
          */
         void OverrideGunFaction();
-        /// Set selectable or not demolisher, called on battle start, when boats arrive to dock
-        void DemolisherStartState(bool start);
-        /// Checks if a player can interact with the given object
-        bool CanInteractWithObject(uint32 objectId);
-        /// Updates interaction flags of specific objects
-        void UpdateObjectInteractionFlags(uint32 objectId);
-        void UpdateObjectInteractionFlags();
+
         /**
-         * \brief Called when a gate is destroy
-         * -Give honor to player witch destroy it
-         * -Update worldstate
-         * -Delete gameobject in front of door (lighting object, with different colours for each door)
+         * @brief 设置攻城器械状态
+         * @param start true=初始状态（不可攻击），false=战斗状态（可攻击）
+         *
+         * 控制海滩攻城器械的可交互性：
+         * - 初始状态：不可攻击，等待船只到达
+         * - 战斗状态：可攻击，玩家可驾驶
+         *
+         * 调用时机：战场开始和船只到达时
+         */
+        void DemolisherStartState(bool start);
+
+        /**
+         * @brief 检查是否可以与对象交互
+         * @param objectId 对象ID
+         * @return 可以交互返回true，否则返回false
+         *
+         * 检查特定条件：
+         * - 泰坦遗迹：黄色和远古大门必须被摧毁
+         * - 中央旗帜：红色或紫色大门必须被摧毁
+         * - 左右旗帜：绿色或蓝色大门必须被摧毁
+         */
+        bool CanInteractWithObject(uint32 objectId);
+
+        /**
+         * @brief 更新对象交互标志
+         * @param objectId 对象ID
+         *
+         * 根据CanInteractWithObject的结果设置GO_FLAG_NOT_SELECTABLE
+         */
+        void UpdateObjectInteractionFlags(uint32 objectId);
+
+        /**
+         * @brief 更新所有关键对象的交互标志
+         *
+         * 更新旗帜和泰坦遗迹的可交互状态
+         */
+        void UpdateObjectInteractionFlags();
+
+        /**
+         * @brief 摧毁大门
+         * @param player 摧毁大门的玩家
+         * @param go 被摧毁的大门对象
+         *
+         * 处理大门摧毁事件：
+         * - 给予荣誉奖励
+         * - 更新世界状态
+         * - 删除大门前的视觉效果对象
+         *
+         * 调用时机：大门被摧毁时
          */
         void DestroyGate(Player* player, GameObject* go) override;
-        /// Update timer worldstate
-        void SendTime();
+
         /**
-         * \brief Called when a graveyard is capture
-         * -Update spiritguide
-         * -Update gameobject (flag)
-         * -Update Worldstate
-         * -Send warning for announce this
-         * \param i : id of graveyard
-         * \param Source : Player who capture gy
+         * @brief 发送时间
+         *
+         * 更新客户端计时器显示
+         */
+        void SendTime();
+
+        /**
+         * @brief 占领墓地
+         * @param i 墓地ID
+         * @param Source 占领墓地的玩家
+         *
+         * 处理墓地占领：
+         * - 更新灵魂 healer
+         * - 更新旗帜对象
+         * - 更新世界状态
+         * - 生成攻城器械
+         * - 发送广播消息
+         *
+         * 调用时机：玩家点击墓地旗帜并满足条件时
          */
         void CaptureGraveyard(BG_SA_Graveyards i, Player* Source);
-        /// Switch on/off timer worldstate
+
+        /**
+         * @brief 切换计时器
+         *
+         * 开启或关闭客户端计时器显示
+         */
         void ToggleTimer();
 
-        /// Respawn dead demolisher
+        /**
+         * @brief 更新攻城器械刷新
+         *
+         * 检查死亡的攻城器械，30秒后复活
+         *
+         * 调用时机：战场更新循环
+         */
         void UpdateDemolisherSpawns();
 
-        /// Send packet to player for create boats (client part)
+        /**
+         * @brief 发送运输工具初始化
+         * @param player 目标玩家
+         *
+         * 向玩家发送船只创建数据包
+         *
+         * 调用时机：玩家进入战场时
+         */
         void SendTransportInit(Player* player);
-        /// Send packet to player for destroy boats (client part)
+
+        /**
+         * @brief 发送运输工具移除
+         * @param player 目标玩家
+         *
+         * 向玩家发送船只移除数据包
+         *
+         * 调用时机：玩家离开或战场重置时
+         */
         void SendTransportsRemove(Player* player);
 
-        /// Id of attacker team
-        TeamId Attackers;
+        TeamId Attackers;          ///< 当前攻击方阵营ID
 
-        /// Totale elapsed time of current round
-        uint32 TotalTime;
-        /// Max time of round
-        uint32 EndRoundTimer;
-        /// For know if boats has start moving or not yet
-        bool ShipsStarted;
-        /// Status of each gate (Destroy/Damage/Intact)
-        BG_SA_GateState GateStatus[MAX_GATES];
-        /// Statu of battle (Start or not, and what round)
-        BG_SA_Status Status;
-        /// Team witch conntrol each graveyard
-        TeamId GraveyardStatus[BG_SA_MAX_GY];
-        /// Score of each round
-        BG_SA_RoundScore RoundScores[2];
-        /// used for know we are in timer phase or not (used for worldstate update)
-        bool TimerEnabled;
-        /// 5secs before starting the 1min countdown for second round
-        uint32 UpdateWaitTimer;
-        /// for know if warning about second round start has been sent
-        bool SignaledRoundTwo;
-        /// for know if warning about second round start has been sent
-        bool SignaledRoundTwoHalfMin;
-        /// for know if second round has been init
-        bool InitSecondRound;
-        std::map<uint32/*id*/, uint32/*timer*/> DemoliserRespawnList;
+        uint32 TotalTime;          ///< 当前回合总用时（毫秒）
+        uint32 EndRoundTimer;      ///< 回合结束计时器（毫秒）
+        bool ShipsStarted;         ///< 船只是否已启动
 
-        // Achievement: Defense of the Ancients
-        bool _gateDestroyed;
+        BG_SA_GateState GateStatus[MAX_GATES];  ///< 各大门状态数组
 
-        // Achievement: Not Even a Scratch
-        bool _allVehiclesAlive[PVP_TEAMS_COUNT];
+        BG_SA_Status Status;       ///< 战场当前状态
+        TeamId GraveyardStatus[BG_SA_MAX_GY];   ///< 各墓地控制方数组
+
+        BG_SA_RoundScore RoundScores[2];  ///< 两轮得分记录
+
+        bool TimerEnabled;         ///< 计时器是否启用
+        uint32 UpdateWaitTimer;    ///< 更新等待计时器
+        bool SignaledRoundTwo;     ///< 是否已发送第二轮1分钟警告
+        bool SignaledRoundTwoHalfMin;  ///< 是否已发送第二轮30秒警告
+        bool InitSecondRound;      ///< 是否已初始化第二轮
+
+        std::map<uint32/*id*/, uint32/*timer*/> DemoliserRespawnList;  ///< 攻城器械复活列表
+
+        // 成就：Defense of the Ancients（远古守护者）
+        bool _gateDestroyed;       ///< 是否有大门被摧毁（成就条件）
+
+        // 成就：Not Even a Scratch（毫发无损）
+        bool _allVehiclesAlive[PVP_TEAMS_COUNT];  ///< 各阵营是否所有载具存活
 };
 #endif

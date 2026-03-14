@@ -15,6 +15,73 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+// ============================================================================
+// 模块：Unit（单位）
+// ============================================================================
+//
+// 职责说明：
+// 本文件实现了 Unit 类，Unit 是所有可战斗游戏实体（玩家、生物、宠物等）的基类。
+// 它是 TrinityCore 游戏世界中最重要的类之一，管理着游戏实体的核心功能。
+//
+// 主要功能模块：
+// 1. 属性系统
+//    - 生命值和能量值（法力、怒气、集中等）的管理
+//    - 基础属性（力量、敏捷、耐力、智力、精神）的计算
+//    - 抗性和护甲的处理
+//    - 攻击强度和武器伤害的计算
+//
+// 2. 战斗系统
+//    - 近战攻击和武器攻击的处理
+//    - 法术伤害和非法术伤害的计算
+//    - 命中、暴击、闪避、招架、格挡等战斗事件
+//    - 威胁管理和仇恨列表维护
+//    - 战斗状态的进入和退出
+//
+// 3. 法术系统
+//    - 法术施放的启动、更新和取消
+//    - 光环（Buff/Debuff）的应用、更新和移除
+//    - 法术冷却和触发效果的管理
+//    - 引导法术和通道法术的特殊处理
+//
+// 4. 移动系统
+//    - 移动生成器的协调（通过 MotionMaster）
+//    - 样条移动（Spline Movement）的实现
+//    - 移动速度的计算和调整
+//    - 位置同步和更新
+//
+// 5. AI 系统
+//    - AI 状态的管理和切换
+//    - 魅惑和附身状态下的 AI 处理
+//    - AI 更新周期的调度
+//
+// 6. 状态管理
+//    - 单位状态标志（昏迷、恐惧、迷惑等）
+//    - 死亡状态的处理
+//    - 控制效果的应用
+//
+// 7. 关系管理
+//    - 召唤物和召唤者的关系
+//    - 魅惑者和被魅惑者的关系
+//    - 宠物和主人的关系
+//    - 载具和乘客的关系
+//
+// 核心设计原则：
+// - Unit 是一个抽象基类，Player 和 Creature 继承自它
+// - 使用组件模式管理复杂子系统（如 MotionMaster, ThreatManager）
+// - 采用观察者模式处理事件和回调
+// - 状态机模式管理单位状态标志
+//
+// 性能注意事项：
+// - Update() 函数是性能关键路径，每帧调用
+// - 光环更新和法术处理是主要开销
+// - 避免在热点路径中进行复杂计算
+//
+// 相关文件：
+// - Unit.h：类声明和接口定义
+// - Player.cpp：玩家特定实现
+// - Creature.cpp：生物特定实现
+// ============================================================================
+
 #include "Unit.h"
 #include "AbstractFollower.h"
 #include "Battlefield.h"
@@ -81,161 +148,296 @@
 #include "WorldSession.h"
 #include <cmath>
 
+// ============================================================================
+// 基础移动速度常量
+// ============================================================================
+// 所有单位（生物和玩家）的默认移动速度配置
+// 这些值是游戏设计的基础数据，单位为码/秒
+// ============================================================================
 float baseMoveSpeed[MAX_MOVE_TYPE] =
 {
-    2.5f,                  // MOVE_WALK
-    7.0f,                  // MOVE_RUN
-    4.5f,                  // MOVE_RUN_BACK
-    4.722222f,             // MOVE_SWIM
-    2.5f,                  // MOVE_SWIM_BACK
-    3.141594f,             // MOVE_TURN_RATE
-    7.0f,                  // MOVE_FLIGHT
-    4.5f,                  // MOVE_FLIGHT_BACK
-    3.14f                  // MOVE_PITCH_RATE
+    2.5f,                  // MOVE_WALK - 行走速度
+    7.0f,                  // MOVE_RUN - 跑步速度
+    4.5f,                  // MOVE_RUN_BACK - 后退速度
+    4.722222f,             // MOVE_SWIM - 游泳速度
+    2.5f,                  // MOVE_SWIM_BACK - 游泳后退速度
+    3.141594f,             // MOVE_TURN_RATE - 转身速率（弧度/秒）
+    7.0f,                  // MOVE_FLIGHT - 飞行速度
+    4.5f,                  // MOVE_FLIGHT_BACK - 飞行后退速度
+    3.14f                  // MOVE_PITCH_RATE - 俯仰速率（弧度/秒）
 };
 
+// ============================================================================
+// 玩家基础移动速度常量
+// ============================================================================
+// 玩家单位的默认移动速度，大部分与普通单位相同
+// 但某些移动类型可能有特殊调整
+// ============================================================================
 float playerBaseMoveSpeed[MAX_MOVE_TYPE] =
 {
-    2.5f,                  // MOVE_WALK
-    7.0f,                  // MOVE_RUN
-    4.5f,                  // MOVE_RUN_BACK
-    4.722222f,             // MOVE_SWIM
-    2.5f,                  // MOVE_SWIM_BACK
-    3.141594f,             // MOVE_TURN_RATE
-    7.0f,                  // MOVE_FLIGHT
-    4.5f,                  // MOVE_FLIGHT_BACK
-    3.14f                  // MOVE_PITCH_RATE
+    2.5f,                  // MOVE_WALK - 行走速度
+    7.0f,                  // MOVE_RUN - 跑步速度
+    4.5f,                  // MOVE_RUN_BACK - 后退速度
+    4.722222f,             // MOVE_SWIM - 游泳速度
+    2.5f,                  // MOVE_SWIM_BACK - 游泳后退速度
+    3.141594f,             // MOVE_TURN_RATE - 转身速率
+    7.0f,                  // MOVE_FLIGHT - 飞行速度
+    4.5f,                  // MOVE_FLIGHT_BACK - 飞行后退速度
+    3.14f                  // MOVE_PITCH_RATE - 俯仰速率
 };
 
+// ============================================================================
+// DamageInfo 类实现 - 伤害信息容器
+// ============================================================================
+// DamageInfo 是一个封装伤害计算结果的类，用于在伤害处理流程中传递数据
+// 它包含攻击者、受害者、伤害值、吸收、抵抗、格挡等完整信息
+// ============================================================================
+
+/**
+ * @brief 基础构造函数 - 初始化伤害信息
+ * @param attacker 攻击者单位
+ * @param victim 受害者单位
+ * @damage 基础伤害值
+ * @param spellInfo 法术信息（如果是法术伤害），nullptr 表示物理伤害
+ * @param schoolMask 伤害类型掩码（物理、火焰、冰霜等）
+ * @param damageType 伤害效果类型（直接伤害、持续伤害、治疗等）
+ * @param attackType 攻击类型（主手、副手、远程）
+ *
+ * 调用时机：在计算伤害时创建，用于 proc 系统、光环触发等场景
+ */
 DamageInfo::DamageInfo(Unit* attacker, Unit* victim, uint32 damage, SpellInfo const* spellInfo, SpellSchoolMask schoolMask, DamageEffectType damageType, WeaponAttackType attackType)
     : m_attacker(attacker), m_victim(victim), m_damage(damage), m_spellInfo(spellInfo), m_schoolMask(schoolMask), m_damageType(damageType), m_attackType(attackType),
     m_absorb(0), m_resist(0), m_block(0), m_hitMask(0)
 {
 }
 
+/**
+ * @brief 合并构造函数 - 合并两个伤害信息对象
+ * @param dmg1 第一个伤害信息
+ * @param dmg2 第二个伤害信息
+ *
+ * 调用时机：用于双持武器攻击时，将主手和副手伤害合并
+ * 注意：伤害值、吸收、抵抗会相加，攻击者、受害者、法术信息取自第一个对象
+ */
 DamageInfo::DamageInfo(DamageInfo const& dmg1, DamageInfo const& dmg2)
     : m_attacker(dmg1.m_attacker), m_victim(dmg1.m_victim), m_damage(dmg1.m_damage + dmg2.m_damage), m_spellInfo(dmg1.m_spellInfo), m_schoolMask(SpellSchoolMask(dmg1.m_schoolMask | dmg2.m_schoolMask)),
     m_damageType(dmg1.m_damageType), m_attackType(dmg1.m_attackType), m_absorb(dmg1.m_absorb + dmg2.m_absorb), m_resist(dmg1.m_resist + dmg2.m_resist), m_block(dmg1.m_block), m_hitMask(dmg1.m_hitMask | dmg2.m_hitMask)
 {
 }
 
+/**
+ * @brief CalcDamageInfo 转换构造函数 - 将近战伤害计算结果转换为 DamageInfo
+ * @param dmgInfo 近战伤害计算结构
+ *
+ * 调用时机：近战攻击计算完成后，用于 proc 系统触发
+ * 内部会调用双参数版本的构造函数合并主手和副手伤害
+ */
 DamageInfo::DamageInfo(CalcDamageInfo const& dmgInfo) : DamageInfo(DamageInfo(dmgInfo, 0), DamageInfo(dmgInfo, 1))
 {
 }
 
+/**
+ * @brief CalcDamageInfo 索引构造函数 - 提取单次攻击的伤害信息
+ * @param dmgInfo 近战伤害计算结构
+ * @param damageIndex 伤害索引（0=主手/基础伤害，1=副手/额外伤害）
+ *
+ * 调用时机：需要单独处理主手或副手伤害时使用
+ *
+ * 实现细节：
+ * - 根据目标状态设置命中掩码（免疫、格挡）
+ * - 根据命中信息设置吸收和抵抗标志
+ * - 根据命中结果设置暴击、闪避、招架等标志
+ */
 DamageInfo::DamageInfo(CalcDamageInfo const& dmgInfo, uint8 damageIndex)
     : m_attacker(dmgInfo.Attacker), m_victim(dmgInfo.Target), m_damage(dmgInfo.Damages[damageIndex].Damage), m_spellInfo(nullptr), m_schoolMask(SpellSchoolMask(dmgInfo.Damages[damageIndex].DamageSchoolMask)),
     m_damageType(DIRECT_DAMAGE), m_attackType(dmgInfo.AttackType), m_absorb(dmgInfo.Damages[damageIndex].Absorb), m_resist(dmgInfo.Damages[damageIndex].Resist), m_block(dmgInfo.Blocked), m_hitMask(0)
 {
+    // 根据目标状态设置命中掩码
     switch (dmgInfo.TargetState)
     {
         case VICTIMSTATE_IS_IMMUNE:
-            m_hitMask |= PROC_HIT_IMMUNE;
+            m_hitMask |= PROC_HIT_IMMUNE;           // 免疫状态
             break;
         case VICTIMSTATE_BLOCKS:
-            m_hitMask |= PROC_HIT_FULL_BLOCK;
+            m_hitMask |= PROC_HIT_FULL_BLOCK;       // 完全格挡
             break;
     }
 
+    // 设置吸收标志
     if (dmgInfo.HitInfo & (HITINFO_PARTIAL_ABSORB | HITINFO_FULL_ABSORB))
         m_hitMask |= PROC_HIT_ABSORB;
 
+    // 设置完全抵抗标志
     if (dmgInfo.HitInfo & HITINFO_FULL_RESIST)
         m_hitMask |= PROC_HIT_FULL_RESIST;
 
+    // 设置格挡标志
     if (m_block)
         m_hitMask |= PROC_HIT_BLOCK;
 
+    // 检查伤害是否被完全无效化
     bool const damageNullified = (dmgInfo.HitInfo & (HITINFO_FULL_ABSORB | HITINFO_FULL_RESIST)) != 0 ||
         (m_hitMask & (PROC_HIT_IMMUNE | PROC_HIT_FULL_BLOCK)) != 0;
+
+    // 根据命中结果类型设置相应的标志
     switch (dmgInfo.HitOutCome)
     {
         case MELEE_HIT_MISS:
-            m_hitMask |= PROC_HIT_MISS;
+            m_hitMask |= PROC_HIT_MISS;             // 未命中
             break;
         case MELEE_HIT_DODGE:
-            m_hitMask |= PROC_HIT_DODGE;
+            m_hitMask |= PROC_HIT_DODGE;            // 闪避
             break;
         case MELEE_HIT_PARRY:
-            m_hitMask |= PROC_HIT_PARRY;
+            m_hitMask |= PROC_HIT_PARRY;            // 招架
             break;
         case MELEE_HIT_EVADE:
-            m_hitMask |= PROC_HIT_EVADE;
+            m_hitMask |= PROC_HIT_EVADE;            // 规避（脱离战斗）
             break;
         case MELEE_HIT_BLOCK:
         case MELEE_HIT_CRUSHING:
         case MELEE_HIT_GLANCING:
         case MELEE_HIT_NORMAL:
             if (!damageNullified)
-                m_hitMask |= PROC_HIT_NORMAL;
+                m_hitMask |= PROC_HIT_NORMAL;       // 普通命中
             break;
         case MELEE_HIT_CRIT:
             if (!damageNullified)
-                m_hitMask |= PROC_HIT_CRITICAL;
+                m_hitMask |= PROC_HIT_CRITICAL;     // 暴击
             break;
     }
 }
 
+/**
+ * @brief SpellNonMeleeDamage 转换构造函数 - 将法术伤害信息转换为 DamageInfo
+ * @param spellNonMeleeDamage 法术非近战伤害结构
+ * @param damageType 伤害效果类型
+ * @param attackType 攻击类型
+ * @param hitMask 命中掩码
+ *
+ * 调用时机：法术伤害计算完成后，用于 proc 系统触发
+ */
 DamageInfo::DamageInfo(SpellNonMeleeDamage const& spellNonMeleeDamage, DamageEffectType damageType, WeaponAttackType attackType, uint32 hitMask)
     : m_attacker(spellNonMeleeDamage.attacker), m_victim(spellNonMeleeDamage.target), m_damage(spellNonMeleeDamage.damage),
     m_spellInfo(sSpellMgr->GetSpellInfo(spellNonMeleeDamage.SpellID)), m_schoolMask(SpellSchoolMask(spellNonMeleeDamage.schoolMask)), m_damageType(damageType),
     m_attackType(attackType), m_absorb(spellNonMeleeDamage.absorb), m_resist(spellNonMeleeDamage.resist), m_block(spellNonMeleeDamage.blocked), m_hitMask(hitMask)
 {
+    // 如果有格挡值，设置格挡标志
     if (spellNonMeleeDamage.blocked)
         m_hitMask |= PROC_HIT_BLOCK;
+    // 如果有吸收值，设置吸收标志
     if (spellNonMeleeDamage.absorb)
         m_hitMask |= PROC_HIT_ABSORB;
 }
 
+/**
+ * @brief 修改伤害值
+ * @param amount 修改量（可为负数）
+ *
+ * 调用时机：光环效果修改伤害时调用
+ * 注意：伤害值不能被减少到负数
+ */
 void DamageInfo::ModifyDamage(int32 amount)
 {
     amount = std::max(amount, -static_cast<int32>(GetDamage()));
     m_damage += amount;
 }
 
+/**
+ * @brief 吸收伤害
+ * @param amount 吸收量
+ *
+ * 调用时机：伤害吸收效果生效时调用
+ * 效果：减少实际伤害，增加吸收统计，设置吸收标志
+ */
 void DamageInfo::AbsorbDamage(uint32 amount)
 {
-    amount = std::min(amount, GetDamage());
+    amount = std::min(amount, GetDamage());        // 吸收量不能超过当前伤害
     m_absorb += amount;
     m_damage -= amount;
-    m_hitMask |= PROC_HIT_ABSORB;
+    m_hitMask |= PROC_HIT_ABSORB;                  // 设置吸收标志供 proc 系统使用
 }
 
+/**
+ * @brief 抵抗伤害
+ * @param amount 抵抗量
+ *
+ * 调用时机：抗性减少伤害时调用
+ * 效果：减少实际伤害，增加抵抗统计，如果伤害归零则设置完全抵抗标志
+ */
 void DamageInfo::ResistDamage(uint32 amount)
 {
     amount = std::min(amount, GetDamage());
     m_resist += amount;
     m_damage -= amount;
+    // 如果伤害被完全抵抗，更新命中掩码
     if (!m_damage)
     {
-        m_hitMask |= PROC_HIT_FULL_RESIST;
-        m_hitMask &= ~(PROC_HIT_NORMAL | PROC_HIT_CRITICAL);
+        m_hitMask |= PROC_HIT_FULL_RESIST;         // 完全抵抗
+        m_hitMask &= ~(PROC_HIT_NORMAL | PROC_HIT_CRITICAL);  // 清除普通命中和暴击标志
     }
 }
 
+/**
+ * @brief 格挡伤害
+ * @param amount 格挡量
+ *
+ * 调用时机：盾牌格挡减少伤害时调用
+ * 效果：减少实际伤害，增加格挡统计，如果伤害归零则设置完全格挡标志
+ */
 void DamageInfo::BlockDamage(uint32 amount)
 {
     amount = std::min(amount, GetDamage());
     m_block += amount;
     m_damage -= amount;
-    m_hitMask |= PROC_HIT_BLOCK;
+    m_hitMask |= PROC_HIT_BLOCK;                   // 设置格挡标志
+    // 如果伤害被完全格挡，更新命中掩码
     if (!m_damage)
     {
-        m_hitMask |= PROC_HIT_FULL_BLOCK;
+        m_hitMask |= PROC_HIT_FULL_BLOCK;          // 完全格挡
         m_hitMask &= ~(PROC_HIT_NORMAL | PROC_HIT_CRITICAL);
     }
 }
 
+/**
+ * @brief 获取命中掩码
+ * @return 命中结果标志位组合
+ *
+ * 调用时机：proc 系统判断触发条件时使用
+ */
 uint32 DamageInfo::GetHitMask() const
 {
     return m_hitMask;
 }
 
+// ============================================================================
+// HealInfo 类实现 - 治疗信息容器
+// ============================================================================
+// HealInfo 封装治疗计算结果，结构与 DamageInfo 类似
+// ============================================================================
+
+/**
+ * @brief 构造函数 - 初始化治疗信息
+ * @param healer 治疗者单位
+ * @param target 目标单位
+ * @param heal 治疗量
+ * @param spellInfo 法术信息
+ * @param schoolMask 法术类型掩码
+ *
+ * 调用时机：治疗法术或效果计算时创建
+ */
 HealInfo::HealInfo(Unit* healer, Unit* target, uint32 heal, SpellInfo const* spellInfo, SpellSchoolMask schoolMask)
     : _healer(healer), _target(target), _heal(heal), _effectiveHeal(0), _absorb(0), _spellInfo(spellInfo), _schoolMask(schoolMask), _hitMask(0)
 {
 }
 
+/**
+ * @brief 吸收治疗量
+ * @param amount 被吸收的治疗量
+ *
+ * 调用时机：目标有治疗吸收效果时调用（如神圣庇护）
+ * 效果：减少实际治疗量，记录吸收量
+ */
 void HealInfo::AbsorbHeal(uint32 amount)
 {
     amount = std::min(amount, GetHeal());
@@ -246,11 +448,37 @@ void HealInfo::AbsorbHeal(uint32 amount)
     _hitMask |= PROC_HIT_ABSORB;
 }
 
+/**
+ * @brief 获取命中掩码
+ * @return 命中结果标志位组合
+ */
 uint32 HealInfo::GetHitMask() const
 {
     return _hitMask;
 }
 
+// ============================================================================
+// ProcEventInfo 类实现 - 触发事件信息容器
+// ============================================================================
+// ProcEventInfo 封装触发事件（proc）的所有相关信息
+// 用于光环触发、特效触发等场景，提供统一的触发事件数据访问接口
+// ============================================================================
+
+/**
+ * @brief 构造函数 - 初始化触发事件信息
+ * @param actor 行动者（触发事件的单位）
+ * @param actionTarget 行动目标
+ * @param procTarget 触发目标（可能与行动目标不同）
+ * @param typeMask 触发类型掩码（PROC_FLAG_*）
+ * @param spellTypeMask 法术类型掩码
+ * @param spellPhaseMask 法术阶段掩码
+ * @param hitMask 命中结果掩码
+ * @param spell 当前法术（如果有）
+ * @param damageInfo 伤害信息（如果是伤害触发）
+ * @param healInfo 治疗信息（如果是治疗触发）
+ *
+ * 调用时机：在 HandleProc、HandleDummyAuraProc 等触发处理函数中创建
+ */
 ProcEventInfo::ProcEventInfo(Unit* actor, Unit* actionTarget, Unit* procTarget,
                              uint32 typeMask, uint32 spellTypeMask,
                              uint32 spellPhaseMask, uint32 hitMask,
@@ -262,6 +490,12 @@ ProcEventInfo::ProcEventInfo(Unit* actor, Unit* actionTarget, Unit* procTarget,
     _damageInfo(damageInfo), _healInfo(healInfo)
 { }
 
+/**
+ * @brief 获取关联的法术信息
+ * @return 法术信息指针，如果没有关联法术则返回 nullptr
+ *
+ * 检查顺序：当前法术 -> 伤害信息中的法术 -> 治疗信息中的法术
+ */
 SpellInfo const* ProcEventInfo::GetSpellInfo() const
 {
     if (_spell)
@@ -273,6 +507,12 @@ SpellInfo const* ProcEventInfo::GetSpellInfo() const
     return nullptr;
 }
 
+/**
+ * @brief 获取法术类型掩码
+ * @return 法术类型掩码（物理、火焰、冰霜等）
+ *
+ * 检查顺序：当前法术 -> 伤害信息 -> 治疗信息
+ */
 SpellSchoolMask ProcEventInfo::GetSchoolMask() const
 {
     if (_spell)
@@ -284,6 +524,19 @@ SpellSchoolMask ProcEventInfo::GetSchoolMask() const
     return SPELL_SCHOOL_MASK_NONE;
 }
 
+// ============================================================================
+// DispelableAura 类实现 - 可驱散的光环包装器
+// ============================================================================
+// DispelableAura 封装光环的驱散相关信息
+// 用于驱散和偷取法术系统，跟踪光环的驱散几率和剩余层数
+// ============================================================================
+
+/**
+ * @brief 构造函数 - 创建可驱散光环包装器
+ * @param aura 被包装的光环
+ * @param dispelChance 驱散几率（百分比）
+ * @param dispelCharges 可驱散的层数
+ */
 DispelableAura::DispelableAura(Aura* aura, int32 dispelChance, uint8 dispelCharges) :
     _aura(aura), _chance(dispelChance), _charges(dispelCharges)
 {
@@ -291,11 +544,35 @@ DispelableAura::DispelableAura(Aura* aura, int32 dispelChance, uint8 dispelCharg
 
 DispelableAura::~DispelableAura() = default;
 
+/**
+ * @brief 进行驱散掷骰
+ * @return true 表示驱散成功，false 表示驱散失败
+ *
+ * 调用时机：驱散法术尝试驱散每个光环时调用
+ */
 bool DispelableAura::RollDispel() const
 {
     return roll_chance_i(_chance);
 }
 
+// ============================================================================
+// Unit 类实现 - 单位类核心功能
+// ============================================================================
+// Unit 是所有可战斗实体的基类，实现了游戏世界中单位的核心逻辑
+// ============================================================================
+
+/**
+ * @brief Unit 构造函数 - 初始化单位对象
+ * @param isWorldObject 是否为世界对象
+ *
+ * 职责：
+ * - 初始化所有成员变量为默认值
+ * - 设置对象类型标志
+ * - 分配子系统对象（移动管理器、法术历史等）
+ *
+ * 调用时机：Player 和 Creature 的构造函数会调用此构造函数
+ * 注意：这是性能关键代码，避免在此进行复杂初始化
+ */
 Unit::Unit(bool isWorldObject) :
     WorldObject(isWorldObject), m_lastSanctuaryTime(0), LastCharmerGUID(), movespline(new Movement::MoveSpline()),
     m_ControlledByPlayer(false), m_AutoRepeatFirstCast(false), m_procDeep(0), m_transformSpell(0),
@@ -304,101 +581,130 @@ Unit::Unit(bool isWorldObject) :
     m_unitTypeMask(UNIT_MASK_NONE), m_Diminishing(), m_combatManager(this), m_threatManager(this),
     m_aiLocked(false), m_comboTarget(nullptr), m_comboPoints(0), _spellHistory(new SpellHistory(this))
 {
-    m_objectType |= TYPEMASK_UNIT;
-    m_objectTypeId = TYPEID_UNIT;
+    // === 对象类型设置 ===
+    m_objectType |= TYPEMASK_UNIT;                          // 标记为单位类型
+    m_objectTypeId = TYPEID_UNIT;                           // 设置类型ID
 
+    // === 更新标志设置 ===
     m_updateFlag = (UPDATEFLAG_LIVING | UPDATEFLAG_STATIONARY_POSITION);
 
-    m_attackTimer[BASE_ATTACK] = 0;
-    m_attackTimer[OFF_ATTACK] = 0;
-    m_attackTimer[RANGED_ATTACK] = 0;
-    m_modAttackSpeedPct[BASE_ATTACK] = 1.0f;
-    m_modAttackSpeedPct[OFF_ATTACK] = 1.0f;
-    m_modAttackSpeedPct[RANGED_ATTACK] = 1.0f;
+    // === 攻击系统初始化 ===
+    m_attackTimer[BASE_ATTACK] = 0;                         // 主手攻击计时器
+    m_attackTimer[OFF_ATTACK] = 0;                          // 副手攻击计时器
+    m_attackTimer[RANGED_ATTACK] = 0;                       // 远程攻击计时器
+    m_modAttackSpeedPct[BASE_ATTACK] = 1.0f;                // 主手攻击速度修正
+    m_modAttackSpeedPct[OFF_ATTACK] = 1.0f;                 // 副手攻击速度修正
+    m_modAttackSpeedPct[RANGED_ATTACK] = 1.0f;              // 远程攻击速度修正
 
-    m_canDualWield = false;
+    m_canDualWield = false;                                 // 是否可以双持
 
-    m_movementCounter = 0;
+    // === 移动系统初始化 ===
+    m_movementCounter = 0;                                  // 移动计数器
 
-    m_rootTimes = 0;
+    m_rootTimes = 0;                                        // 定身次数计数
 
-    m_state = 0;
-    m_deathState = ALIVE;
+    // === 状态初始化 ===
+    m_state = 0;                                            // 单位状态标志
+    m_deathState = ALIVE;                                   // 死亡状态
 
+    // === 当前法术槽初始化 ===
     for (uint8 i = 0; i < CURRENT_MAX_SPELL; ++i)
         m_currentSpells[i] = nullptr;
 
+    // === 召唤槽和物体槽初始化 ===
     for (uint8 i = 0; i < MAX_SUMMON_SLOT; ++i)
         m_SummonSlot[i].Clear();
 
     for (uint8 i = 0; i < MAX_GAMEOBJECT_SLOT; ++i)
         m_ObjectSlot[i].Clear();
 
+    // === 光环系统初始化 ===
     m_auraUpdateIterator = m_ownedAuras.end();
 
-    m_interruptMask = 0;
-    m_canModifyStats = false;
+    m_interruptMask = 0;                                    // 光环中断掩码
+    m_canModifyStats = false;                               // 是否可以修改属性
 
+    // === 属性修正器初始化 ===
     for (uint8 i = 0; i < UNIT_MOD_END; ++i)
     {
-        m_auraFlatModifiersGroup[i][BASE_VALUE] = 0.0f;
-        m_auraFlatModifiersGroup[i][TOTAL_VALUE] = 0.0f;
-        m_auraPctModifiersGroup[i][BASE_PCT] = 1.0f;
-        m_auraPctModifiersGroup[i][TOTAL_PCT] = 1.0f;
+        m_auraFlatModifiersGroup[i][BASE_VALUE] = 0.0f;     // 基础值固定修正
+        m_auraFlatModifiersGroup[i][TOTAL_VALUE] = 0.0f;    // 总值固定修正
+        m_auraPctModifiersGroup[i][BASE_PCT] = 1.0f;        // 基础值百分比修正
+        m_auraPctModifiersGroup[i][TOTAL_PCT] = 1.0f;       // 总值百分比修正
     }
-                                                            // implement 50% base damage from offhand
+    // 副手武器基础伤害为 50%（双持惩罚）
     m_auraPctModifiersGroup[UNIT_MOD_DAMAGE_OFFHAND][TOTAL_PCT] = 0.5f;
 
+    // === 武器伤害初始化 ===
     for (uint8 i = 0; i < MAX_ATTACK; ++i)
     {
-        m_weaponDamage[i][MINDAMAGE][0] = BASE_MINDAMAGE;
-        m_weaponDamage[i][MAXDAMAGE][0] = BASE_MAXDAMAGE;
+        m_weaponDamage[i][MINDAMAGE][0] = BASE_MINDAMAGE;   // 基础最小伤害
+        m_weaponDamage[i][MAXDAMAGE][0] = BASE_MAXDAMAGE;   // 基础最大伤害
 
-        m_weaponDamage[i][MINDAMAGE][1] = 0.f;
-        m_weaponDamage[i][MAXDAMAGE][1] = 0.f;
+        m_weaponDamage[i][MINDAMAGE][1] = 0.f;              // 额外最小伤害
+        m_weaponDamage[i][MAXDAMAGE][1] = 0.f;              // 额外最大伤害
     }
 
+    // === 创建时属性初始化 ===
     for (uint8 i = 0; i < MAX_STATS; ++i)
         m_createStats[i] = 0.0f;
 
-    m_attacking = nullptr;
-    m_modMeleeHitChance = 0.0f;
-    m_modRangedHitChance = 0.0f;
-    m_modSpellHitChance = 0.0f;
-    m_baseSpellCritChance = 5.0f;
+    // === 命中和暴击修正初始化 ===
+    m_attacking = nullptr;                                  // 当前攻击目标
+    m_modMeleeHitChance = 0.0f;                             // 近战命中修正
+    m_modRangedHitChance = 0.0f;                            // 远程命中修正
+    m_modSpellHitChance = 0.0f;                             // 法术命中修正
+    m_baseSpellCritChance = 5.0f;                           // 基础法术暴击率 5%
 
-    m_lastManaUse = 0;
+    m_lastManaUse = 0;                                      // 上次使用法力的时间
 
+    // === 移动速度初始化 ===
     for (uint8 i = 0; i < MAX_MOVE_TYPE; ++i)
-        m_speed_rate[i] = 1.0f;
+        m_speed_rate[i] = 1.0f;                             // 所有移动类型速度倍率为 1.0
 
-    m_charmInfo = nullptr;
-    _gameClientMovingMe = nullptr;
+    // === 魅惑和控制初始化 ===
+    m_charmInfo = nullptr;                                  // 魅惑信息
+    _gameClientMovingMe = nullptr;                          // 控制移动的客户端
 
-    // remove aurastates allowing special moves
+    // === 反应性能力计时器初始化 ===
+    // 清除允许特殊动作的光环状态（如复仇、反击）
     for (uint8 i = 0; i < MAX_REACTIVE; ++i)
         m_reactiveTimer[i] = 0;
 
-    m_cleanupDone = false;
-    m_duringRemoveFromWorld = false;
+    // === 清理和状态标志初始化 ===
+    m_cleanupDone = false;                                  // 清理完成标志
+    m_duringRemoveFromWorld = false;                        // 正在从世界移除标志
 
+    // === 服务器端可见性设置 ===
     m_serverSideVisibility.SetValue(SERVERSIDE_VISIBILITY_GHOST, GHOST_VISIBILITY_ALIVE);
 
-    _lastLiquid = nullptr;
+    // === 其他状态初始化 ===
+    _lastLiquid = nullptr;                                  // 最后所在液体
 
-    _oldFactionId = 0;
-    _isWalkingBeforeCharm = false;
-    _instantCast = false;
-    _isCombatDisallowed = false;
+    _oldFactionId = 0;                                      // 魅惑前的阵营ID
+    _isWalkingBeforeCharm = false;                          // 魅惑前是否在行走
+    _instantCast = false;                                   // 瞬发施法标志
+    _isCombatDisallowed = false;                            // 是否禁止进入战斗
 
-    _lastExtraAttackSpell = 0;
+    _lastExtraAttackSpell = 0;                              // 上次额外攻击法术
 }
 
-////////////////////////////////////////////////////////////
-// Methods of class Unit
+/**
+ * @brief Unit 析构函数 - 清理单位对象
+ *
+ * 职责：
+ * - 断开所有当前法术的引用
+ * - 取消所有待处理事件
+ * - 清理光环系统
+ * - 删除动态分配的子系统对象
+ * - 断言检查确保单位已正确清理
+ *
+ * 调用时机：Player 和 Creature 对象销毁时自动调用
+ * 警告：析构前必须先调用 RemoveFromWorld 和清理相关引用
+ */
 Unit::~Unit()
 {
-    // set current spells as deletable
+    // 标记当前法术为可删除，防止悬垂引用
     for (uint8 i = 0; i < CURRENT_MAX_SPELL; ++i)
         if (m_currentSpells[i])
         {
@@ -406,49 +712,72 @@ Unit::~Unit()
             m_currentSpells[i] = nullptr;
         }
 
+    // 取消所有待处理的事件（包括 AI 事件、法术事件等）
     m_Events.KillAllEvents(true);
 
+    // 清理已删除光环的缓存
     _DeleteRemovedAuras();
 
-    delete i_motionMaster;
-    delete m_charmInfo;
-    delete movespline;
-    delete _spellHistory;
+    // 删除动态分配的子系统
+    delete i_motionMaster;                                  // 移动管理器
+    delete m_charmInfo;                                     // 魅惑信息
+    delete movespline;                                      // 移动样条
+    delete _spellHistory;                                   // 法术历史
 
-    ASSERT(!m_duringRemoveFromWorld);
-    ASSERT(!m_attacking);
-    ASSERT(m_attackers.empty());
-    ASSERT(m_sharedVision.empty());
-    ASSERT(m_Controlled.empty());
-    ASSERT(m_appliedAuras.empty());
-    ASSERT(m_ownedAuras.empty());
-    ASSERT(m_removedAuras.empty());
-    ASSERT(m_gameObj.empty());
-    ASSERT(m_dynObj.empty());
-    ASSERT(!_gameClientMovingMe || _gameClientMovingMe->GetBasePlayer() == this);
+    // === 断言检查：确保所有引用已正确清理 ===
+    // 这些断言失败表明存在内存泄漏或悬垂指针
+    ASSERT(!m_duringRemoveFromWorld);                       // 必须已完成从世界移除
+    ASSERT(!m_attacking);                                   // 必须无攻击目标
+    ASSERT(m_attackers.empty());                            // 必须无攻击者
+    ASSERT(m_sharedVision.empty());                         // 必须无共享视野
+    ASSERT(m_Controlled.empty());                           // 必须无控制单位
+    ASSERT(m_appliedAuras.empty());                         // 必须无应用的光环
+    ASSERT(m_ownedAuras.empty());                           // 必须无拥有的光环
+    ASSERT(m_removedAuras.empty());                         // 必须无待删除光环
+    ASSERT(m_gameObj.empty());                              // 必须无关联的游戏对象
+    ASSERT(m_dynObj.empty());                               // 必须无关联的动态对象
+    ASSERT(!_gameClientMovingMe || _gameClientMovingMe->GetBasePlayer() == this);  // 客户端引用检查
 }
 
+// ============================================================================
+// 单位更新主循环
+// ============================================================================
+// 职责：驱动单位的每帧更新，处理事件系统、法术、战斗、移动、光环等核心逻辑
+// 参数：p_time - 距离上一帧的时间差（毫秒），通常为 50ms
+// 返回值：无
+// 调用时机：由 Map::Update() 每帧调用，是游戏循环的核心入口
+// 性能注意：此函数是性能关键路径，应避免阻塞操作和复杂计算
+// 警告：函数内部执行顺序非常重要，不可随意更改！
+// ============================================================================
 void Unit::Update(uint32 p_time)
 {
-    // WARNING! Order of execution here is important, do not change.
-    // Spells must be processed with event system BEFORE they go to _UpdateSpells.
-    // Or else we may have some SPELL_STATE_FINISHED spells stalled in pointers, that is bad.
+    // === 第一阶段：事件系统更新 ===
+    // 注意：事件系统必须在 _UpdateSpells 之前处理，否则可能导致
+    // SPELL_STATE_FINISHED 状态的法术残留在指针中，造成严重问题
     m_Events.Update(p_time);
-
+    // 检查待处理的移动确认包
     CheckPendingMovementAcks();
 
+    // 如果单位不在世界中，直接返回
     if (!IsInWorld())
         return;
 
+    // === 第二阶段：法术更新 ===
+    // 更新当前正在施放的所有法术
     _UpdateSpells(p_time);
 
-    // If this is set during update SetCantProc(false) call is missing somewhere in the code
-    // Having this would prevent spells from being proced, so let's crash
+    // 断言检查：确保触发深度计数器已归零
+    // 如果此断言失败，说明某处代码缺少 SetCantProc(false) 调用
     ASSERT(!m_procDeep);
 
+    // === 第三阶段：战斗管理器更新 ===
     m_combatManager.Update(p_time);
 
+    // 重置最后受伤害目标GUID
     _lastDamagedTargetGuid = ObjectGuid::Empty;
+
+    // === 第四阶段：处理额外攻击 ===
+    // 处理由风怒武器等效果触发的额外攻击
     if (_lastExtraAttackSpell)
     {
         while (!extraAttacksTargets.empty())
@@ -463,41 +792,66 @@ void Unit::Update(uint32 p_time)
         _lastExtraAttackSpell = 0;
     }
 
-    // not implemented before 3.0.2
+    // === 第五阶段：攻击计时器更新 ===
+    // 更新主手攻击计时器（3.0.2之前版本的实现）
     if (uint32 base_att = getAttackTimer(BASE_ATTACK))
         setAttackTimer(BASE_ATTACK, (p_time >= base_att ? 0 : base_att - p_time));
+    // 更新远程攻击计时器
     if (uint32 ranged_att = getAttackTimer(RANGED_ATTACK))
         setAttackTimer(RANGED_ATTACK, (p_time >= ranged_att ? 0 : ranged_att - p_time));
+    // 更新副手攻击计时器
     if (uint32 off_att = getAttackTimer(OFF_ATTACK))
         setAttackTimer(OFF_ATTACK, (p_time >= off_att ? 0 : off_att - p_time));
 
-    // update abilities available only for fraction of time
+    // === 第六阶段：反应性能力更新 ===
+    // 更新仅在短时间窗口内可用的能力（如复仇、反击等）
+    // === 第六阶段：反应性能力更新 ===
+    // 更新仅在短时间窗口内可用的能力（如复仇、反击等）
     UpdateReactives(p_time);
 
+    // === 第七阶段：光环状态更新 ===
     if (IsAlive())
     {
+        // 根据生命值百分比更新光环状态
         ModifyAuraState(AURA_STATE_HEALTHLESS_20_PERCENT, HealthBelowPct(20));
         ModifyAuraState(AURA_STATE_HEALTHLESS_35_PERCENT, HealthBelowPct(35));
         ModifyAuraState(AURA_STATE_HEALTH_ABOVE_75_PERCENT, HealthAbovePct(75));
     }
 
+    // === 第八阶段：移动更新 ===
+    // 更新样条移动（平滑移动路径）
     UpdateSplineMovement(p_time);
+    // 更新移动生成器
     i_motionMaster->Update(p_time);
 
-    // Wait with the aura interrupts until we have updated our movement generators and position
+    // === 第九阶段：移动中断光环 ===
+    // 在移动生成器和位置更新之后再处理光环中断
     if (GetTypeId() == TYPEID_PLAYER)
         InterruptMovementBasedAuras();
     else if (!movespline->Finalized())
         InterruptMovementBasedAuras();
 
-    // All position info based actions have been executed, reset info
+    // 重置位置更新信息，所有基于位置的动作已执行完毕
     _positionUpdateInfo.Reset();
 
+    // === 第十阶段：AI更新 ===
+    // 检查并更新魅惑AI（如果有计划的AI变更）
     if (HasScheduledAIChange() && (GetTypeId() != TYPEID_PLAYER || (IsCharmed() && GetCharmerGUID().IsCreature())))
         UpdateCharmAI();
+    // 刷新AI状态
     RefreshAI();
 }
 
+/**
+ * @brief 检查单位是否装备副手武器
+ * @return true 如果有副手武器，false 如果没有
+ *
+ * 实现细节：
+ * - 对于玩家：检查是否装备了副手武器
+ * - 对于生物：检查是否具有双持能力
+ *
+ * 调用时机：近战攻击计算、招架 haste 计算等场景
+ */
 bool Unit::haveOffhandWeapon() const
 {
     if (Player const* player = ToPlayer())
@@ -506,6 +860,19 @@ bool Unit::haveOffhandWeapon() const
     return CanDualWield();
 }
 
+/**
+ * @brief 以指定速度移动到目标位置（怪物移动）
+ * @param x 目标X坐标
+ * @param y 目标Y坐标
+ * @param z 目标Z坐标
+ * @param speed 移动速度（码/秒）
+ * @param generatePath 是否生成寻路路径
+ * @param forceDestination 是否强制到达目的地
+ *
+ * 职责：启动一个样条移动，将单位移动到指定位置
+ * 调用时机：NPC巡逻、脚本控制移动、击退等场景
+ * 性能注意：会创建 lambda 对象和样条初始化器
+ */
 void Unit::MonsterMoveWithSpeed(float x, float y, float z, float speed, bool generatePath, bool forceDestination)
 {
     std::function<void(Movement::MoveSplineInit&)> initializer = [=](Movement::MoveSplineInit& init)
@@ -516,6 +883,20 @@ void Unit::MonsterMoveWithSpeed(float x, float y, float z, float speed, bool gen
     GetMotionMaster()->LaunchMoveSpline(std::move(initializer), 0, MOTION_PRIORITY_NORMAL, POINT_MOTION_TYPE);
 }
 
+/**
+ * @brief 更新样条移动状态
+ * @param t_diff 距离上一帧的时间差（毫秒）
+ *
+ * 职责：
+ * - 更新样条移动的状态机
+ * - 处理循环路径的同步
+ * - 检测到达终点
+ * - 更新单位位置
+ *
+ * 调用时机：Unit::Update 主循环中每帧调用
+ * 性能注意：此函数在热点路径中，应保持高效
+ * 网络同步：循环路径每5秒同步一次（官方值，不可更改）
+ */
 void Unit::UpdateSplineMovement(uint32 t_diff)
 {
     if (movespline->Finalized())
@@ -529,7 +910,7 @@ void Unit::UpdateSplineMovement(uint32 t_diff)
         m_splineSyncTimer.Update(t_diff);
         if (m_splineSyncTimer.Passed())
         {
-            m_splineSyncTimer.Reset(5000); // Retail value, do not change
+            m_splineSyncTimer.Reset(5000); // 官方值，不可更改
 
             WorldPacket data(SMSG_FLIGHT_SPLINE_SYNC, 4 + GetPackGUID().size());
             Movement::PacketBuilder::WriteSplineSync(*movespline, data);
@@ -549,6 +930,18 @@ void Unit::UpdateSplineMovement(uint32 t_diff)
     UpdateSplinePosition();
 }
 
+/**
+ * @brief 更新样条移动的位置
+ *
+ * 职责：
+ * - 从样条计算当前位置
+ * - 处理载具上的移动
+ * - 应用朝向限制
+ * - 更新单位的世界坐标
+ *
+ * 调用时机：UpdateSplineMovement() 中调用
+ * 特殊处理：如果单位在载具上，需要转换为世界坐标
+ */
 void Unit::UpdateSplinePosition()
 {
     Movement::Location loc = movespline->ComputePosition();
@@ -573,9 +966,20 @@ void Unit::UpdateSplinePosition()
     UpdatePosition(loc.x, loc.y, loc.z, loc.orientation);
 }
 
+/**
+ * @brief 中断基于移动的光环
+ *
+ * 职责：
+ * - 如果单位转身，移除具有 AURA_INTERRUPT_FLAG_TURNING 标志的光环
+ * - 如果单位移动，移除具有 AURA_INTERRUPT_FLAG_MOVE 标志的光环
+ *
+ * 调用时机：位置更新后调用
+ * 注意：载具上的乘客不会因移动而中断光环
+ * TODO: 应该检查载具朝向偏移是否改变，而不仅仅是全局朝向
+ */
 void Unit::InterruptMovementBasedAuras()
 {
-    // TODO: Check if orientation transport offset changed instead of only global orientation
+    // TODO: 应该检查载具朝向偏移是否改变，而不仅仅是全局朝向
     if (_positionUpdateInfo.Turned)
         RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_TURNING);
 
@@ -583,17 +987,43 @@ void Unit::InterruptMovementBasedAuras()
         RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_MOVE);
 }
 
+/**
+ * @brief 禁用样条移动
+ *
+ * 职责：
+ * - 移除样条移动标志
+ * - 中断样条移动状态
+ *
+ * 调用时机：到达目的地、被中断、或停止移动时
+ */
 void Unit::DisableSpline()
 {
     m_movementInfo.RemoveMovementFlag(MovementFlags(MOVEMENTFLAG_SPLINE_ENABLED|MOVEMENTFLAG_FORWARD));
     movespline->_Interrupt();
 }
 
+/**
+ * @brief 重置攻击计时器
+ * @param type 攻击类型（主手、副手、远程）
+ *
+ * 职责：根据攻击速度修正重置攻击冷却时间
+ * 调用时机：攻击完成后、攻击被招架加速后
+ */
 void Unit::resetAttackTimer(WeaponAttackType type)
 {
     m_attackTimer[type] = uint32(GetAttackTime(type) * m_modAttackSpeedPct[type]);
 }
 
+/**
+ * @brief 检查是否在战斗范围内
+ * @param obj 目标单位
+ * @param dist2compare 比较距离（平方值）
+ * @return true 如果在范围内，false 如果不在范围内
+ *
+ * 职责：检查两个单位之间的距离是否小于指定值
+ * 实现细节：使用碰撞半径计算实际距离
+ * 调用时机：近战攻击范围检查、法术距离检查等
+ */
 bool Unit::IsWithinCombatRange(Unit const* obj, float dist2compare) const
 {
     if (!obj || !IsInMap(obj) || !InSamePhase(obj))
@@ -610,6 +1040,15 @@ bool Unit::IsWithinCombatRange(Unit const* obj, float dist2compare) const
     return distsq < maxdist * maxdist;
 }
 
+/**
+ * @brief 检查在指定位置是否在近战范围内
+ * @param pos 要检查的位置
+ * @param obj 目标单位
+ * @return true 如果在近战范围内，false 如果不在
+ *
+ * 职责：判断如果在指定位置，是否能攻击到目标
+ * 调用时机：移动判断、攻击范围预测等场景
+ */
 bool Unit::IsWithinMeleeRangeAt(Position const& pos, Unit const* obj) const
 {
     if (!obj || !IsInMap(obj) || !InSamePhase(obj))
@@ -707,6 +1146,24 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit* excludeCasterChannel) cons
     }
 }
 
+// ============================================================================
+// 造成伤害（静态函数）
+// ============================================================================
+// 职责：处理伤害应用的完整流程，包括AI通知、光环中断、伤害分担、怒气奖励、
+//       决斗处理、成就更新、击杀判定等
+// 参数：
+//   attacker       - 攻击者单位（可为nullptr表示环境伤害）
+//   victim         - 受害者单位
+//   damage         - 伤害数值
+//   cleanDamage    - 纯净伤害信息（包含吸收、攻击类型等）
+//   damagetype     - 伤害类型（DIRECT_DAMAGE, DOT, SPELL_DIRECT_DAMAGE等）
+//   damageSchoolMask - 伤害学派掩码
+//   spellProto     - 触发伤害的法术信息（nullptr表示普通攻击）
+//   durabilityLoss - 是否造成装备耐久度损失
+// 返回值：实际造成的伤害值
+// 调用时机：所有伤害来源最终都会调用此函数进行伤害应用
+// 性能注意：此函数逻辑复杂，包含多次迭代和条件判断
+// ============================================================================
 /*static*/ uint32 Unit::DealDamage(Unit* attacker, Unit* victim, uint32 damage, CleanDamage const* cleanDamage, DamageEffectType damagetype, SpellSchoolMask damageSchoolMask, SpellInfo const* spellProto, bool durabilityLoss)
 {
     uint32 rage_damage = damage + (cleanDamage ? cleanDamage->absorbed_damage : 0);
@@ -979,6 +1436,14 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit* excludeCasterChannel) cons
     return damage;
 }
 
+/**
+ * @brief 停止施放所有法术（除了指定的法术）
+ * @param except_spellid 要保留的法术ID
+ *
+ * 职责：中断所有正在施放的法术，除了指定的法术
+ * 调用时机：沉默、昏迷、死亡等需要打断施法的场景
+ * 范围：包括通用法术、引导法术、自动重复法术等
+ */
 void Unit::CastStop(uint32 except_spellid)
 {
     for (uint32 i = CURRENT_FIRST_NON_MELEE_SPELL; i < CURRENT_MAX_SPELL; i++)
@@ -986,6 +1451,34 @@ void Unit::CastStop(uint32 except_spellid)
             InterruptSpell(CurrentSpellTypes(i), false);
 }
 
+/**
+ * @brief 计算法术伤害承受
+ * @param damageInfo 法术伤害信息结构
+ * @param damage 基础伤害值
+ * @param spellInfo 法术信息
+ * @param attackType 攻击类型
+ * @param crit 是否暴击
+ * @param blocked 是否被格挡
+ * @param spell 当前法术对象
+ *
+ * 职责：
+ * - 根据伤害类型计算伤害修正（护甲、暴击、格挡等）
+ * - 应用韧性（PvP伤害减免）
+ * - 计算吸收和抵抗
+ * - 更新伤害信息结构
+ *
+ * 调用时机：法术伤害应用前调用
+ * 支持类型：近战法术、远程法术、魔法法术
+ *
+ * 伤害计算流程：
+ * 1. 检查伤害有效性
+ * 2. 根据伤害类型应用护甲减免
+ * 3. 计算暴击伤害加成
+ * 4. 计算格挡减免
+ * 5. 应用韧性
+ * 6. 触发脚本修改
+ * 7. 计算吸收和抵抗
+ */
 void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int32 damage, SpellInfo const* spellInfo, WeaponAttackType attackType, bool crit /*= false*/, bool blocked /*= false*/, Spell* spell /*= nullptr*/)
 {
     if (damage < 0)
@@ -1100,6 +1593,18 @@ void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int32 dama
     damageInfo->damage = dmgInfo.GetDamage();
 }
 
+/**
+ * @brief 应用法术伤害
+ * @param damageInfo 法术伤害信息
+ * @param durabilityLoss 是否造成装备耐久度损失
+ *
+ * 职责：
+ * - 验证伤害有效性
+ * - 调用 DealDamage 应用实际伤害
+ *
+ * 调用时机：法术伤害计算完成后，应用伤害前调用
+ * 前置条件：damageInfo 必须有效，受害者必须存活
+ */
 void Unit::DealSpellDamage(SpellNonMeleeDamage const* damageInfo, bool durabilityLoss)
 {
     if (!damageInfo)
@@ -1119,12 +1624,28 @@ void Unit::DealSpellDamage(SpellNonMeleeDamage const* damageInfo, bool durabilit
         return;
     }
 
-    // Call default DealDamage
+    // 调用默认的 DealDamage 函数
     CleanDamage cleanDamage(damageInfo->cleanDamage, damageInfo->absorb, BASE_ATTACK, MELEE_HIT_NORMAL);
     Unit::DealDamage(this, victim, damageInfo->damage, &cleanDamage, SPELL_DIRECT_DAMAGE, SpellSchoolMask(damageInfo->schoolMask), spellProto, durabilityLoss);
 }
 
-/// @todo for melee need create structure as in
+/**
+ * @brief 计算近战伤害
+ * @param victim 受害者单位
+ * @param damageInfo 伤害计算结果结构
+ * @param attackType 攻击类型（主手、副手、远程）
+ *
+ * 职责：
+ * - 初始化伤害信息结构
+ * - 执行攻击判定（未命中、闪避、招架、格挡等）
+ * - 计算实际伤害值
+ * - 计算 proc 标志
+ *
+ * 调用时机：近战攻击触发时调用
+ * 输出：填充 CalcDamageInfo 结构
+ *
+ * @todo 近战需要创建类似法术的结构
+ */
 void Unit::CalculateMeleeDamage(Unit* victim, CalcDamageInfo* damageInfo, WeaponAttackType attackType)
 {
     damageInfo->Attacker         = this;
@@ -1424,6 +1945,21 @@ void Unit::CalculateMeleeDamage(Unit* victim, CalcDamageInfo* damageInfo, Weapon
         damageInfo->HitInfo |= (tmpHitInfo[0] & HITINFO_PARTIAL_RESIST);
 }
 
+/**
+ * @brief 应用近战伤害
+ * @param damageInfo 近战伤害计算结果
+ * @param durabilityLoss 是否造成装备耐久度损失
+ *
+ * 职责：
+ * - 验证伤害有效性
+ * - 处理招架加速效果
+ * - 应用实际伤害
+ * - 触发伤害护盾效果
+ * - 处理从背后攻击的眩晕效果
+ *
+ * 调用时机：近战攻击判定完成后调用
+ * 特殊处理：招架会加速下一次攻击
+ */
 void Unit::DealMeleeDamage(CalcDamageInfo* damageInfo, bool durabilityLoss)
 {
     Unit* victim = damageInfo->Target;
@@ -1439,7 +1975,7 @@ void Unit::DealMeleeDamage(CalcDamageInfo* damageInfo, bool durabilityLoss)
     if (damageInfo->TargetState == VICTIMSTATE_PARRY &&
         (victim->GetTypeId() != TYPEID_UNIT || (victim->ToCreature()->GetCreatureTemplate()->flags_extra & CREATURE_FLAG_EXTRA_NO_PARRY_HASTEN) == 0))
     {
-        // Get attack timers
+        // 获取攻击计时器
         float offtime  = float(victim->getAttackTimer(OFF_ATTACK));
         float basetime = float(victim->getAttackTimer(BASE_ATTACK));
         // Reduce attack time
@@ -2859,6 +3395,7 @@ void Unit::_UpdateSpells(uint32 time)
         ++m_auraUpdateIterator;                            // need shift to next for allow update if need into aura update
         // 光环效果更新
         // 寒冰箭 - 更新减速光环效果剩余时间
+        // 暴风雪 - 触发周期性技能
         i_aura->UpdateOwner(time, this);
     }
 
@@ -5537,6 +6074,16 @@ Unit* Unit::getAttackerForHelper() const                 // If someone wants to 
     return nullptr;
 }
 
+// ============================================================================
+// 攻击目标
+// ============================================================================
+// 职责：建立与目标的攻击关系，设置攻击状态、目标、AI反应等
+// 参数：
+//   victim      - 攻击目标
+//   meleeAttack - 是否为近战攻击（true=近战，false=远程/魔法）
+// 返回值：true表示攻击建立成功，false表示失败
+// 调用时机：单位开始攻击某个目标时调用
+// ============================================================================
 bool Unit::Attack(Unit* victim, bool meleeAttack)
 {
     if (!victim || victim == this)
@@ -9359,6 +9906,15 @@ void Unit::SetLevel(uint8 lvl, bool sendUpdate/* = true*/)
     }
 }
 
+// ============================================================================
+// 设置生命值
+// ============================================================================
+// 职责：设置单位的当前生命值，处理死亡状态、上限检查和组队同步
+// 参数：val - 要设置的生命值
+// 返回值：无
+// 调用时机：任何需要修改单位生命值的地方（治疗、伤害、复活等）
+// 注意：此函数不会触发死亡逻辑，仅设置数值
+// ============================================================================
 void Unit::SetHealth(uint32 val)
 {
     if (getDeathState() == JUST_DIED || getDeathState() == CORPSE)
@@ -11995,6 +12551,16 @@ void Unit::SetPvP(bool state)
         RemovePvpFlag(UNIT_BYTE2_FLAG_PVP);
 }
 
+// ============================================================================
+// 添加光环效果（通过法术ID）
+// ============================================================================
+// 职责：向目标单位添加指定的光环效果
+// 参数：
+//   spellId - 法术ID
+//   target  - 目标单位
+// 返回值：成功创建的光环指针，失败返回nullptr
+// 调用时机：需要为单位添加光环效果时（如触发法术、脚本等）
+// ============================================================================
 Aura* Unit::AddAura(uint32 spellId, Unit* target)
 {
     if (!target)
@@ -12007,6 +12573,17 @@ Aura* Unit::AddAura(uint32 spellId, Unit* target)
     return AddAura(spellInfo, MAX_EFFECT_MASK, target);
 }
 
+// ============================================================================
+// 添加光环效果（通过法术信息）
+// ============================================================================
+// 职责：向目标单位添加指定的光环效果，支持指定效果掩码
+// 参数：
+//   spellInfo - 法术信息指针
+//   effMask   - 效果掩码，指定哪些效果生效
+//   target    - 目标单位
+// 返回值：成功创建的光环指针，失败返回nullptr
+// 调用时机：需要精确控制光环效果时
+// ============================================================================
 Aura* Unit::AddAura(SpellInfo const* spellInfo, uint8 effMask, Unit* target)
 {
     if (!spellInfo)

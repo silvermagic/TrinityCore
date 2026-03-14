@@ -15,6 +15,40 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file SmartScriptMgr.h
+ * @brief SmartAI脚本系统管理器和数据结构定义
+ *
+ * 本模块定义了SmartAI系统所需的所有数据结构、枚举类型和管理器类。
+ * SmartAI是一个强大的、数据驱动的AI脚本系统，允许通过数据库配置
+ * 创建复杂的游戏逻辑，而无需编写C++代码。
+ *
+ * 主要组成部分：
+ * 1. 事件系统（SMART_EVENT）：定义触发AI行为的事件类型
+ * 2. 动作系统（SMART_ACTION）：定义AI可执行的动作类型
+ * 3. 目标系统（SMARTAI_TARGETS）：定义动作的目标选择方式
+ * 4. 相位系统（SMART_EVENT_PHASE）：支持多阶段AI行为
+ * 5. 管理器类（SmartAIMgr）：负责加载和管理SmartAI脚本
+ * 6. 路径管理器（SmartWaypointMgr）：管理移动路径数据
+ *
+ * 数据来源：
+ * - smart_scripts 表：存储所有SmartAI事件配置
+ * - waypoints 表：存储移动路径数据
+ *
+ * 使用场景：
+ * - NPC行为定制（战斗、巡逻、交互等）
+ * - 副本BOSS战机制
+ * - 任务NPC交互
+ * - 区域触发器逻辑
+ * - 游戏对象交互
+ *
+ * 设计优势：
+ * - 高度可配置：通过数据库配置，无需重新编译
+ * - 事件驱动：响应式架构，易于理解和维护
+ * - 模块化：事件、动作、目标分离，灵活组合
+ * - 复用性强：一套系统支持多种游戏对象类型
+ */
+
 #ifndef TRINITY_SMARTSCRIPTMGR_H
 #define TRINITY_SMARTSCRIPTMGR_H
 
@@ -30,18 +64,34 @@
 
 class WorldObject;
 enum SpellEffIndex : uint8;
-typedef uint32 SAIBool;
+typedef uint32 SAIBool;  ///< SmartAI布尔值类型（0=false, 非0=true）
 
+/**
+ * @enum eSmartAI
+ * @brief SmartAI系统常量定义
+ */
 enum eSmartAI
 {
-    SMART_EVENT_PARAM_COUNT = 4,
-    SMART_ACTION_PARAM_COUNT = 6,
-    SMART_SUMMON_COUNTER = 0xFFFFFF,
-    SMART_ESCORT_LAST_OOC_POINT = 0xFFFFFF,
-    SMART_RANDOM_POINT = 0xFFFFFE,
-    SMART_ESCORT_TARGETS = 0xFFFFFF
+    SMART_EVENT_PARAM_COUNT = 4,     ///< 事件参数数量
+    SMART_ACTION_PARAM_COUNT = 6,    ///< 动作参数数量
+    SMART_SUMMON_COUNTER = 0xFFFFFF, ///< 召唤计数器特殊值
+    SMART_ESCORT_LAST_OOC_POINT = 0xFFFFFF, ///< 护送最后脱战点
+    SMART_RANDOM_POINT = 0xFFFFFE,   ///< 随机路径点
+    SMART_ESCORT_TARGETS = 0xFFFFFF  ///< 护送目标数量
 };
 
+/**
+ * @enum SMART_EVENT_PHASE
+ * @brief SmartAI事件相位枚举
+ *
+ * 相位系统允许AI在不同阶段执行不同的行为。
+ * 例如：BOSS在血量不同时切换不同的技能阶段。
+ *
+ * 使用方式：
+ * - 事件可配置仅在特定相位触发
+ * - 动作可修改当前相位
+ * - 支持同时处于多个相位（使用位掩码）
+ */
 enum SMART_EVENT_PHASE
 {
     SMART_EVENT_PHASE_ALWAYS  = 0,
@@ -62,26 +112,34 @@ enum SMART_EVENT_PHASE
     SMART_EVENT_PHASE_COUNT   = 12
 };
 
+/**
+ * @enum SMART_EVENT_PHASE_BITS
+ * @brief SmartAI事件相位位掩码
+ *
+ * 使用位掩码表示相位，允许同时处于多个相位。
+ * 例如：SMART_EVENT_PHASE_1_BIT | SMART_EVENT_PHASE_2_BIT 表示同时处于相位1和2
+ */
 enum SMART_EVENT_PHASE_BITS
 {
-    SMART_EVENT_PHASE_ALWAYS_BIT   = 0,
-    SMART_EVENT_PHASE_1_BIT        = 1,
-    SMART_EVENT_PHASE_2_BIT        = 2,
-    SMART_EVENT_PHASE_3_BIT        = 4,
-    SMART_EVENT_PHASE_4_BIT        = 8,
-    SMART_EVENT_PHASE_5_BIT        = 16,
-    SMART_EVENT_PHASE_6_BIT        = 32,
-    SMART_EVENT_PHASE_7_BIT        = 64,
-    SMART_EVENT_PHASE_8_BIT        = 128,
-    SMART_EVENT_PHASE_9_BIT        = 256,
-    SMART_EVENT_PHASE_10_BIT       = 512,
-    SMART_EVENT_PHASE_11_BIT       = 1024,
-    SMART_EVENT_PHASE_12_BIT       = 2048,
+    SMART_EVENT_PHASE_ALWAYS_BIT   = 0,     ///< 总是触发（无视相位）
+    SMART_EVENT_PHASE_1_BIT        = 1,     ///< 相位1位掩码
+    SMART_EVENT_PHASE_2_BIT        = 2,     ///< 相位2位掩码
+    SMART_EVENT_PHASE_3_BIT        = 4,     ///< 相位3位掩码
+    SMART_EVENT_PHASE_4_BIT        = 8,     ///< 相位4位掩码
+    SMART_EVENT_PHASE_5_BIT        = 16,    ///< 相位5位掩码
+    SMART_EVENT_PHASE_6_BIT        = 32,    ///< 相位6位掩码
+    SMART_EVENT_PHASE_7_BIT        = 64,    ///< 相位7位掩码
+    SMART_EVENT_PHASE_8_BIT        = 128,   ///< 相位8位掩码
+    SMART_EVENT_PHASE_9_BIT        = 256,   ///< 相位9位掩码
+    SMART_EVENT_PHASE_10_BIT       = 512,   ///< 相位10位掩码
+    SMART_EVENT_PHASE_11_BIT       = 1024,  ///< 相位11位掩码
+    SMART_EVENT_PHASE_12_BIT       = 2048,  ///< 相位12位掩码
     SMART_EVENT_PHASE_ALL          = SMART_EVENT_PHASE_1_BIT + SMART_EVENT_PHASE_2_BIT + SMART_EVENT_PHASE_3_BIT + SMART_EVENT_PHASE_4_BIT + SMART_EVENT_PHASE_5_BIT +
                                      SMART_EVENT_PHASE_6_BIT + SMART_EVENT_PHASE_7_BIT + SMART_EVENT_PHASE_8_BIT + SMART_EVENT_PHASE_9_BIT + SMART_EVENT_PHASE_10_BIT +
-                                     SMART_EVENT_PHASE_11_BIT + SMART_EVENT_PHASE_12_BIT
+                                     SMART_EVENT_PHASE_11_BIT + SMART_EVENT_PHASE_12_BIT  ///< 所有相位
 };
 
+/// 相位掩码映射表（相位ID -> 相位位掩码）
 const uint32 SmartPhaseMask[SMART_EVENT_PHASE_COUNT][2] =
 {
     {SMART_EVENT_PHASE_1, SMART_EVENT_PHASE_1_BIT },
@@ -98,6 +156,16 @@ const uint32 SmartPhaseMask[SMART_EVENT_PHASE_COUNT][2] =
     {SMART_EVENT_PHASE_12, SMART_EVENT_PHASE_12_BIT }
 };
 
+/**
+ * @enum SMART_EVENT
+ * @brief SmartAI事件类型枚举
+ *
+ * 定义了所有可触发SmartAI动作的事件类型。
+ * 每种事件类型都有特定的参数含义。
+ *
+ * 注释格式：
+ * // 参数1说明, 参数2说明, 参数3说明, 参数4说明
+ */
 enum SMART_EVENT
 {
     SMART_EVENT_UPDATE_IC                = 0,       // InitialMin, InitialMax, RepeatMin, RepeatMax
@@ -1550,35 +1618,60 @@ enum SmartCastFlags
     SMARTCAST_COMBAT_MOVE            = 0x40                      // Prevents combat movement if cast successful. Allows movement on range, OOM, LOS
 };
 
-// one line in DB is one event
+/**
+ * @struct SmartScriptHolder
+ * @brief SmartAI脚本配置容器
+ *
+ * 对应数据库表 smart_scripts 中的一行记录，包含一个完整的事件定义。
+ * 每个事件包含：触发条件（event）、执行动作（action）、目标选择（target）
+ *
+ * 数据库字段映射：
+ * - entryorguid -> entryOrGuid
+ * - source_type -> source_type
+ * - id -> event_id
+ * - link -> link
+ * - event_type, event_phase_mask, event_chance, event_flags, event_param1-4 -> event
+ * - action_type, action_param1-6 -> action
+ * - target_type, target_param1-4, target_x, target_y, target_z, target_o -> target
+ */
 struct SmartScriptHolder
 {
     SmartScriptHolder() : entryOrGuid(0), source_type(SMART_SCRIPT_TYPE_CREATURE)
         , event_id(0), link(0), event(), action(), target(), timer(0), priority(DEFAULT_PRIORITY), active(false), runOnce(false)
         , enableTimed(false) { }
 
-    int32 entryOrGuid;
-    SmartScriptType source_type;
-    uint32 event_id;
-    uint32 link;
+    int32 entryOrGuid;          ///< 对象entry（正数）或GUID（负数）
+    SmartScriptType source_type;///< 脚本类型（生物/游戏对象/区域触发器等）
+    uint32 event_id;            ///< 事件ID（数据库主键的一部分）
+    uint32 link;                ///< 链接的事件ID（用于链式触发）
 
-    SmartEvent event;
-    SmartAction action;
-    SmartTarget target;
+    SmartEvent event;           ///< 事件配置（触发条件）
+    SmartAction action;         ///< 动作配置（执行内容）
+    SmartTarget target;         ///< 目标配置（目标选择）
 
+    /// 获取脚本类型
     uint32 GetScriptType() const { return (uint32)source_type; }
+    /// 获取事件类型
     uint32 GetEventType() const { return (uint32)event.type; }
+    /// 获取动作类型
     uint32 GetActionType() const { return (uint32)action.type; }
+    /// 获取目标类型
     uint32 GetTargetType() const { return (uint32)target.type; }
 
-    uint32 timer;
-    uint32 priority;
-    bool active;
-    bool runOnce;
-    bool enableTimed;
+    uint32 timer;     ///< 事件定时器（毫秒），用于定时事件
+    uint32 priority;  ///< 执行优先级（越小越优先执行）
+    bool active;      ///< 事件是否激活
+    bool runOnce;     ///< 是否只执行一次
+    bool enableTimed; ///< 是否启用定时器
 
+    /// 布尔转换操作符（检查事件是否有效）
     operator bool() const { return entryOrGuid != 0; }
-    // Default comparision operator using priority field as first ordering field
+
+    /**
+     * @brief 比较运算符（用于排序）
+     *
+     * 排序顺序：优先级 > entryOrGuid > source_type > event_id > link
+     */
     std::strong_ordering operator<=>(SmartScriptHolder const& right) const
     {
         if (std::strong_ordering cmp = priority <=> right.priority; advstd::is_neq(cmp))
@@ -1594,64 +1687,134 @@ struct SmartScriptHolder
         return std::strong_ordering::equal;
     }
 
-    static constexpr uint32 DEFAULT_PRIORITY = std::numeric_limits<uint32>::max();
+    static constexpr uint32 DEFAULT_PRIORITY = std::numeric_limits<uint32>::max(); ///< 默认优先级（最低）
 };
 
-typedef std::vector<WorldObject*> ObjectVector;
+typedef std::vector<WorldObject*> ObjectVector;  ///< 世界对象指针向量
 
+/**
+ * @class ObjectGuidVector
+ * @brief GUID对象向量容器
+ *
+ * 使用GUID存储对象引用，在需要时转换为实际对象指针。
+ * 用于存储目标列表，避免对象生命周期问题。
+ */
 class ObjectGuidVector
 {
     public:
+        /**
+         * @brief 构造函数
+         * @param objectVector 对象指针向量
+         */
         explicit ObjectGuidVector(ObjectVector const& objectVector);
 
+        /**
+         * @brief 获取对象向量
+         * @param ref 参考对象（用于查找）
+         * @return 对象向量指针
+         */
         ObjectVector const* GetObjectVector(WorldObject const& ref) const
         {
             UpdateObjects(ref);
             return &_objectVector;
         }
 
+        /**
+         * @brief 添加GUID
+         * @param guid 要添加的GUID
+         */
         void AddGuid(ObjectGuid const& guid) { _guidVector.push_back(guid); }
 
         ~ObjectGuidVector() { }
 
     private:
-        GuidVector _guidVector;
-        mutable ObjectVector _objectVector;
+        GuidVector _guidVector;         ///< GUID向量
+        mutable ObjectVector _objectVector; ///< 对象向量（缓存）
 
-        //sanitize vector using _guidVector
+        /**
+         * @brief 更新对象向量
+         *
+         * 根据GUID向量更新对象向量，移除无效对象
+         *
+         * @param ref 参考对象
+         */
         void UpdateObjects(WorldObject const& ref) const;
 };
-typedef std::unordered_map<uint32, ObjectGuidVector> ObjectVectorMap;
+typedef std::unordered_map<uint32, ObjectGuidVector> ObjectVectorMap; ///< 目标存储映射（ID -> 对象向量）
 
+/**
+ * @class SmartWaypointMgr
+ * @brief SmartAI路径管理器
+ *
+ * 单例管理器，负责加载和存储SmartAI使用的移动路径数据。
+ * 从数据库waypoints表加载路径配置。
+ *
+ * 使用方式：
+ * - 通过路径ID获取路径配置
+ * - 路径数据用于NPC移动动作
+ */
 class TC_GAME_API SmartWaypointMgr
 {
     public:
+        /**
+         * @brief 获取单例实例
+         * @return 管理器实例指针
+         */
         static SmartWaypointMgr* instance();
 
+        /**
+         * @brief 从数据库加载路径数据
+         *
+         * 从waypoints表加载所有路径配置到内存
+         *
+         * 调用时机：
+         * - 服务器启动时
+         */
         void LoadFromDB();
 
+        /**
+         * @brief 获取路径配置
+         *
+         * @param id 路径ID
+         * @return 路径配置指针，不存在返回nullptr
+         */
         WaypointPath const* GetPath(uint32 id);
 
     private:
         SmartWaypointMgr() { }
         ~SmartWaypointMgr() { }
 
-        std::unordered_map<uint32, WaypointPath> _waypointStore;
+        std::unordered_map<uint32, WaypointPath> _waypointStore; ///< 路径存储（ID -> 路径）
 };
 
-#define sSmartWaypointMgr SmartWaypointMgr::instance()
+#define sSmartWaypointMgr SmartWaypointMgr::instance() ///< 路径管理器单例访问宏
 
-// all events for a single entry
-typedef std::vector<SmartScriptHolder> SmartAIEventList;
-typedef std::vector<SmartScriptHolder> SmartAIEventStoredList;
+typedef std::vector<SmartScriptHolder> SmartAIEventList;       ///< 事件列表（单个entry的所有事件）
+typedef std::vector<SmartScriptHolder> SmartAIEventStoredList; ///< 存储的事件列表
 
-// all events for all entries / guids
-typedef std::unordered_map<int32, SmartAIEventList> SmartAIEventMap;
+typedef std::unordered_map<int32, SmartAIEventList> SmartAIEventMap; ///< 事件映射（entry/guid -> 事件列表）
 
-// Helper Stores
+/// 法术容器缓存类型（entry -> <spellId, effIndex>）
 typedef std::map<uint32 /*entry*/, std::pair<uint32 /*spellId*/, SpellEffIndex /*effIndex*/> > CacheSpellContainer;
 typedef std::pair<CacheSpellContainer::const_iterator, CacheSpellContainer::const_iterator> CacheSpellContainerBounds;
 
+/**
+ * @class SmartAIMgr
+ * @brief SmartAI脚本管理器
+ *
+ * 单例管理器，负责加载、验证和存储所有SmartAI脚本配置。
+ * 从数据库smart_scripts表加载脚本，并进行验证和索引。
+ *
+ * 主要职责：
+ * 1. 从数据库加载SmartAI脚本
+ * 2. 验证脚本配置的合法性
+ * 3. 提供脚本查询接口
+ * 4. 维护辅助缓存（法术召唤、击杀信用等）
+ *
+ * 线程安全性：
+ * - 服务器启动时加载，运行时只读
+ * - 无需额外同步
+ */
 class TC_GAME_API SmartAIMgr
 {
     private:
@@ -1659,58 +1822,151 @@ class TC_GAME_API SmartAIMgr
         ~SmartAIMgr() { }
 
     public:
+        /**
+         * @brief 获取单例实例
+         * @return 管理器实例指针
+         */
         static SmartAIMgr* instance();
 
+        /**
+         * @brief 从数据库加载SmartAI脚本
+         *
+         * 从smart_scripts表加载所有脚本配置，进行验证和索引
+         *
+         * 调用时机：
+         * - 服务器启动时
+         *
+         * 性能注意：
+         * - 加载时会验证所有脚本，可能耗时较长
+         * - 错误脚本会被跳过并记录日志
+         */
         void LoadSmartAIFromDB();
 
+        /**
+         * @brief 获取脚本事件列表
+         *
+         * @param entry 对象entry或GUID
+         * @param type 脚本类型
+         * @return 事件列表，不存在返回空列表
+         */
         SmartAIEventList GetScript(int32 entry, SmartScriptType type);
 
+        /**
+         * @brief 查找链接源事件
+         *
+         * 查找触发指定事件的链接事件
+         *
+         * @param list 事件列表
+         * @param eventId 目标事件ID
+         * @return 源事件引用
+         */
         static SmartScriptHolder& FindLinkedSourceEvent(SmartAIEventList& list, uint32 eventId);
 
+        /**
+         * @brief 查找链接目标事件
+         *
+         * 查找事件链接的目标事件
+         *
+         * @param list 事件列表
+         * @param link 链接ID
+         * @return 目标事件引用
+         */
         static SmartScriptHolder& FindLinkedEvent(SmartAIEventList& list, uint32 link);
 
     private:
-        //event stores
-        SmartAIEventMap mEventMap[SMART_SCRIPT_TYPE_MAX];
+        SmartAIEventMap mEventMap[SMART_SCRIPT_TYPE_MAX]; ///< 事件存储（按脚本类型索引）
 
+        /**
+         * @brief 检查事件是否有触发者
+         * @param event 事件类型
+         * @return true 如果事件有触发者
+         */
         static bool EventHasInvoker(SMART_EVENT event);
 
+        // ==================== 验证函数 ====================
+
+        /**
+         * @brief 验证事件配置是否有效
+         * @param e 事件配置
+         * @return true 如果有效
+         */
         bool IsEventValid(SmartScriptHolder& e);
+
+        /**
+         * @brief 验证目标配置是否有效
+         * @param e 事件配置
+         * @return true 如果有效
+         */
         bool IsTargetValid(SmartScriptHolder const& e);
 
+        /**
+         * @brief 验证最小最大值范围是否有效
+         * @param e 事件配置
+         * @param min 最小值
+         * @param max 最大值
+         * @return true 如果有效（min <= max）
+         */
         static bool IsMinMaxValid(SmartScriptHolder const& e, uint32 min, uint32 max);
 
+        /// 检查数据是否非零
         static bool NotNULL(SmartScriptHolder const& e, uint32 data);
+        /// 检查生物entry是否有效
         static bool IsCreatureValid(SmartScriptHolder const& e, uint32 entry);
+        /// 检查任务entry是否有效
         static bool IsQuestValid(SmartScriptHolder const& e, uint32 entry);
+        /// 检查游戏对象entry是否有效
         static bool IsGameObjectValid(SmartScriptHolder const& e, uint32 entry);
+        /// 检查法术ID是否有效
         static bool IsSpellValid(SmartScriptHolder const& e, uint32 entry);
+        /// 检查物品entry是否有效
         static bool IsItemValid(SmartScriptHolder const& e, uint32 entry);
+        /// 检查文本表情是否有效
         static bool IsTextEmoteValid(SmartScriptHolder const& e, uint32 entry);
+        /// 检查表情是否有效
         static bool IsEmoteValid(SmartScriptHolder const& e, uint32 entry);
+        /// 检查区域触发器ID是否有效
         static bool IsAreaTriggerValid(SmartScriptHolder const& e, uint32 entry);
+        /// 检查音效ID是否有效
         static bool IsSoundValid(SmartScriptHolder const& e, uint32 entry);
+        /// 检查文本ID是否有效
         static bool IsTextValid(SmartScriptHolder const& e, uint32 id);
 
+        /// 检查未使用的事件参数
         static bool CheckUnusedEventParams(SmartScriptHolder const& e);
+        /// 检查未使用的动作参数
         static bool CheckUnusedActionParams(SmartScriptHolder const& e);
+        /// 检查未使用的目标参数
         static bool CheckUnusedTargetParams(SmartScriptHolder const& e);
 
-        // Helpers
+        // ==================== 辅助缓存 ====================
+
+        /**
+         * @brief 加载辅助存储
+         *
+         * 构建法术效果缓存，用于快速查找特定效果的召唤法术
+         */
         void LoadHelperStores();
+
+        /**
+         * @brief 卸载辅助存储
+         */
         void UnLoadHelperStores();
 
+        /// 获取召唤生物法术的缓存范围
         CacheSpellContainerBounds GetSummonCreatureSpellContainerBounds(uint32 creatureEntry) const;
+        /// 获取召唤游戏对象法术的缓存范围
         CacheSpellContainerBounds GetSummonGameObjectSpellContainerBounds(uint32 gameObjectEntry) const;
+        /// 获取击杀信用法术的缓存范围
         CacheSpellContainerBounds GetKillCreditSpellContainerBounds(uint32 killCredit) const;
+        /// 获取创建物品法术的缓存范围
         CacheSpellContainerBounds GetCreateItemSpellContainerBounds(uint32 itemId) const;
 
-        CacheSpellContainer SummonCreatureSpellStore;
-        CacheSpellContainer SummonGameObjectSpellStore;
-        CacheSpellContainer KillCreditSpellStore;
-        CacheSpellContainer CreateItemSpellStore;
+        CacheSpellContainer SummonCreatureSpellStore;   ///< 召唤生物法术缓存
+        CacheSpellContainer SummonGameObjectSpellStore; ///< 召唤游戏对象法术缓存
+        CacheSpellContainer KillCreditSpellStore;      ///< 击杀信用法术缓存
+        CacheSpellContainer CreateItemSpellStore;      ///< 创建物品法术缓存
 };
 
-#define sSmartScriptMgr SmartAIMgr::instance()
+#define sSmartScriptMgr SmartAIMgr::instance() ///< SmartAI管理器单例访问宏
 
 #endif

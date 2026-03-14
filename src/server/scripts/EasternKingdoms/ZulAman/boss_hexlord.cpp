@@ -15,6 +15,26 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file boss_hexlord.cpp
+ * @brief 祖阿曼副本 - 妖术领主玛拉卡斯Boss脚本模块
+ *
+ * 本模块实现了妖术领主玛拉卡斯Boss的战斗逻辑，包括：
+ * - 灵魂之箭技能（核心技能，全团伤害）
+ * - 吸取力量技能（削弱玩家，增强Boss）
+ * - 虹吸灵魂技能（复制玩家职业能力）
+ * - 随机召唤4个小怪助战
+ *
+ * 妖术领主玛拉卡斯是祖阿曼的第五个Boss，是一个强大的妖术师。
+ * 战斗中Boss会召唤4个随机小怪，并使用虹吸灵魂复制玩家的职业能力。
+ *
+ * 特殊机制：
+ * - 小怪池：从8个小怪中随机选择4个，每次重置时重新选择
+ * - 灵魂之箭：每40秒施放一次，全团伤害持续10秒
+ * - 虹吸灵魂：复制目标玩家的职业，Boss会使用该职业的3个技能
+ * - 吸取力量：削弱所有玩家属性10%，增强Boss10%（可叠加）
+ */
+
 /* ScriptData
 SDName: Boss_Hex_Lord_Malacrass
 SD%Complete:
@@ -32,104 +52,117 @@ EndScriptData */
 #include "TemporarySummon.h"
 #include "zulaman.h"
 
+/**
+ * @brief 对话和喊话枚举
+ *
+ * 定义玛拉卡斯的各种对话ID
+ */
 enum Yells
 {
-    YELL_AGGRO                    = 0,
-    YELL_KILL_ONE                 = 1,
-    YELL_KILL_TWO                 = 2,
-    YELL_DRAIN_POWER              = 3,
-    YELL_SPIRIT_BOLTS             = 4,
-    YELL_DEATH                    = 5
+    YELL_AGGRO                    = 0,  ///< 开战喊话
+    YELL_KILL_ONE                 = 1,  ///< 击杀玩家喊话1
+    YELL_KILL_TWO                 = 2,  ///< 击杀玩家喊话2
+    YELL_DRAIN_POWER              = 3,  ///< 吸取力量喊话
+    YELL_SPIRIT_BOLTS             = 4,  ///< 灵魂之箭喊话
+    YELL_DEATH                    = 5   ///< 死亡喊话
 };
 
+/**
+ * @brief 生物ID枚举
+ */
 enum Creatures
 {
-    NPC_TEMP_TRIGGER              = 23920
+    NPC_TEMP_TRIGGER              = 23920   ///< 临时触发器NPC ID（用于虹吸灵魂）
 };
 
+/**
+ * @brief 技能枚举
+ *
+ * 定义玛拉卡斯使用的所有技能ID
+ */
 enum Spells
 {
-    SPELL_SPIRIT_BOLTS            = 43383,
-    SPELL_DRAIN_POWER             = 44131,
-    SPELL_SIPHON_SOUL             = 43501,
+    SPELL_SPIRIT_BOLTS            = 43383,  ///< 灵魂之箭 - 全团伤害
+    SPELL_DRAIN_POWER             = 44131,  ///< 吸取力量 - 削弱玩家，增强Boss
+    SPELL_SIPHON_SOUL             = 43501,  ///< 虹吸灵魂 - 复制玩家职业能力
 
-    // Druid
-    SPELL_DR_THORNS               = 43420,
-    SPELL_DR_LIFEBLOOM            = 43421,
-    SPELL_DR_MOONFIRE             = 43545,
+    // Druid - 德鲁伊技能
+    SPELL_DR_THORNS               = 43420,  ///< 荆棘术
+    SPELL_DR_LIFEBLOOM            = 43421,  ///< 生命绽放
+    SPELL_DR_MOONFIRE             = 43545,  ///< 月火术
 
-    // Hunter
-    SPELL_HU_EXPLOSIVE_TRAP       = 43444,
-    SPELL_HU_FREEZING_TRAP        = 43447,
-    SPELL_HU_SNAKE_TRAP           = 43449,
+    // Hunter - 猎人技能
+    SPELL_HU_EXPLOSIVE_TRAP       = 43444,  ///< 爆炸陷阱
+    SPELL_HU_FREEZING_TRAP        = 43447,  ///< 冰冻陷阱
+    SPELL_HU_SNAKE_TRAP           = 43449,  ///< 毒蛇陷阱
 
-    // Mage
-    SPELL_MG_FIREBALL             = 41383,
-    SPELL_MG_FROST_NOVA           = 43426,
-    SPELL_MG_ICE_LANCE            = 43427,
-    SPELL_MG_FROSTBOLT            = 43428,
+    // Mage - 法师技能
+    SPELL_MG_FIREBALL             = 41383,  ///< 火球术
+    SPELL_MG_FROST_NOVA           = 43426,  ///< 冰霜新星
+    SPELL_MG_ICE_LANCE            = 43427,  ///< 冰枪术
+    SPELL_MG_FROSTBOLT            = 43428,  ///< 寒冰箭
 
-    // Paladin
-    SPELL_PA_CONSECRATION         = 43429,
-    SPELL_PA_AVENGING_WRATH       = 43430,
-    SPELL_PA_HOLY_LIGHT           = 43451,
+    // Paladin - 圣骑士技能
+    SPELL_PA_CONSECRATION         = 43429,  ///< 奉献
+    SPELL_PA_AVENGING_WRATH       = 43430,  ///< 复仇之怒
+    SPELL_PA_HOLY_LIGHT           = 43451,  ///< 神圣之光
 
-    // Priest
-    SPELL_PR_HEAL                 = 41372,
-    SPELL_PR_MIND_BLAST           = 41374,
-    SPELL_PR_SW_DEATH             = 41375,
-    SPELL_PR_PSYCHIC_SCREAM       = 43432,
-    SPELL_PR_MIND_CONTROL         = 43550,
-    SPELL_PR_PAIN_SUPP            = 44416,
+    // Priest - 牧师技能
+    SPELL_PR_HEAL                 = 41372,  ///< 治疗
+    SPELL_PR_MIND_BLAST           = 41374,  ///< 心灵震爆
+    SPELL_PR_SW_DEATH             = 41375,  ///< 暗言术：死
+    SPELL_PR_PSYCHIC_SCREAM       = 43432,  ///< 心灵尖啸
+    SPELL_PR_MIND_CONTROL         = 43550,  ///< 精神控制
+    SPELL_PR_PAIN_SUPP            = 44416,  ///< 痛苦压制
 
-    // Rogue
-    SPELL_RO_BLIND                = 43433,
-    SPELL_RO_SLICE_DICE           = 43457,
-    SPELL_RO_WOUND_POISON         = 43461,
+    // Rogue - 盗贼技能
+    SPELL_RO_BLIND                = 43433,  ///< 致盲
+    SPELL_RO_SLICE_DICE           = 43457,  ///< 切割
+    SPELL_RO_WOUND_POISON         = 43461,  ///< 致伤毒药
 
-    // Shaman
-    SPELL_SH_CHAIN_LIGHT          = 43435,
-    SPELL_SH_FIRE_NOVA            = 43436,
-    SPELL_SH_HEALING_WAVE         = 43548,
+    // Shaman - 萨满技能
+    SPELL_SH_CHAIN_LIGHT          = 43435,  ///< 闪电链
+    SPELL_SH_FIRE_NOVA            = 43436,  ///< 火焰新星图腾
+    SPELL_SH_HEALING_WAVE         = 43548,  ///< 治疗波
 
-    // Warlock
-    SPELL_WL_CURSE_OF_DOOM        = 43439,
-    SPELL_WL_RAIN_OF_FIRE         = 43440,
-    SPELL_WL_UNSTABLE_AFFL        = 43522,
-    SPELL_WL_UNSTABLE_AFFL_DISPEL = 43523,
+    // Warlock - 术士技能
+    SPELL_WL_CURSE_OF_DOOM        = 43439,  ///< 厄运诅咒
+    SPELL_WL_RAIN_OF_FIRE         = 43440,  ///< 火焰之雨
+    SPELL_WL_UNSTABLE_AFFL        = 43522,  ///< 不稳定诅咒
+    SPELL_WL_UNSTABLE_AFFL_DISPEL = 43523,  ///< 不稳定诅咒驱散效果
 
-    // Warrior
-    SPELL_WR_MORTAL_STRIKE        = 43441,
-    SPELL_WR_WHIRLWIND            = 43442,
-    SPELL_WR_SPELL_REFLECT        = 43443,
+    // Warrior - 战士技能
+    SPELL_WR_MORTAL_STRIKE        = 43441,  ///< 致死打击
+    SPELL_WR_WHIRLWIND            = 43442,  ///< 旋风斩
+    SPELL_WR_SPELL_REFLECT        = 43443,  ///< 法术反射
 
-    // Thurg
-    SPELL_BLOODLUST               = 43578,
-    SPELL_CLEAVE                  = 15496,
+    // Thurg - 瑟格（食人魔小怪）
+    SPELL_BLOODLUST               = 43578,  ///< 嗜血
+    SPELL_CLEAVE                  = 15496,  ///< 顺劈斩
 
-    // Gazakroth
-    SPELL_FIREBOLT                = 43584,
+    // Gazakroth - 加扎克洛斯（小鬼小怪）
+    SPELL_FIREBOLT                = 43584,  ///< 火焰箭
 
-    // Alyson Antille
-    SPELL_FLASH_HEAL              = 43575,
-    SPELL_DISPEL_MAGIC            = 43577,
+    // Alyson Antille - 艾莉森·安蒂尔（血精灵牧师小怪）
+    SPELL_FLASH_HEAL              = 43575,  ///< 快速治疗
+    SPELL_DISPEL_MAGIC            = 43577,  ///< 驱散魔法
 
-    // Lord Raadan
-    SPELL_FLAME_BREATH            = 43582,
-    SPELL_THUNDERCLAP             = 43583,
+    // Lord Raadan - 拉阿丹领主（龙人小怪）
+    SPELL_FLAME_BREATH            = 43582,  ///< 火焰吐息
+    SPELL_THUNDERCLAP             = 43583,  ///< 雷霆一击
 
-    // Darkheart
-    SPELL_PSYCHIC_WAIL            = 43590,
+    // Darkheart - 黑心（亡灵小怪）
+    SPELL_PSYCHIC_WAIL            = 43590,  ///< 心灵尖啸
 
-    // Slither
-    SPELL_VENOM_SPIT              = 43579,
+    // Slither - 斯里瑟（蛇人小怪）
+    SPELL_VENOM_SPIT              = 43579,  ///< 毒液喷射
 
-    // Fenstalker
-    SPELL_VOLATILE_INFECTION      = 43586,
+    // Fenstalker - 芬斯塔克（沼泽行者小怪）
+    SPELL_VOLATILE_INFECTION      = 43586,  ///< 易变感染
 
-    // Koragg
-    SPELL_COLD_STARE              = 43593,
-    SPELL_MIGHTY_BLOW             = 43592
+    // Koragg - 科拉格（亡灵骑士小怪）
+    SPELL_COLD_STARE              = 43593,  ///< 寒冷凝视
+    SPELL_MIGHTY_BLOW             = 43592   ///< 重击
 };
 
 #define ORIENT                  1.5696f

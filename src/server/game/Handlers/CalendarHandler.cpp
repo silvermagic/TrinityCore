@@ -1,3 +1,22 @@
+/**
+ * @file CalendarHandler.cpp
+ * @brief 日历系统消息处理器
+ *
+ * 本文件实现了游戏内日历系统的所有客户端消息处理函数，包括：
+ * - 日历事件的创建、更新、删除和复制
+ * - 事件邀请的发送、回复和管理
+ * - 公会和竞技场队伍的批量邀请
+ * - 副本锁定信息的同步
+ * - 节日活动的数据下发
+ *
+ * 日历系统允许玩家创建和管理游戏内事件，支持个人事件、公会事件和公会公告。
+ * 玩家可以邀请其他玩家参加事件，被邀请者可以回复出席状态。
+ *
+ * @see CalendarMgr 日历管理器
+ * @see CalendarEvent 日历事件数据结构
+ * @see CalendarInvite 日历邀请数据结构
+ */
+
 /*
  * This file is part of the TrinityCore Project. See AUTHORS file for Copyright information
  *
@@ -54,6 +73,22 @@ Copied events should probably have a new owner
 #include "SocialMgr.h"
 #include "World.h"
 
+/**
+ * @brief 处理客户端请求获取完整日历数据
+ *
+ * 当玩家打开日历界面时触发，返回玩家所有相关的日历信息，包括：
+ * - 玩家收到的事件邀请列表
+ * - 玩家创建或参与的事件列表
+ * - 副本锁定信息（所有难度）
+ * - 副本重置时间表
+ * - 节日活动信息
+ *
+ * @param calendarGetCalendar 客户端请求数据包（无参数）
+ *
+ * @note 此消息处理会生成大量数据，包含玩家的完整日历状态
+ * @note 性能考虑：涉及多次数据库查询和集合遍历，但仅在打开日历时调用
+ * @note 时区处理：服务器时间需要根据时区偏移进行调整
+ */
 void WorldSession::HandleCalendarGetCalendar(WorldPackets::Calendar::CalendarGetCalendar& /*calendarGetCalendar*/)
 {
     ObjectGuid guid = _player->GetGUID();

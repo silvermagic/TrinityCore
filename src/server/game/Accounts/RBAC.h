@@ -16,26 +16,46 @@
  */
 
 /**
-* @file RBAC.h
-* @brief Role Based Access Control related classes definition
-*
-* This file contains all the classes and enums used to implement
-* Role Based Access Control
-*
-* RBAC Rules:
-* - Pemission: Defines an autorization to perform certain operation.
-* - Role: Set of permissions.
-* - Group: Set of roles.
-* - An Account can have multiple groups, roles and permissions.
-* - Account Groups can only be granted or revoked
-* - Account Roles and Permissions can be granted, denied or revoked
-* - Grant: Assignment of the object (role/permission) and allow it
-* - Deny: Assignment of the object (role/permission) and deny it
-* - Revoke: Removal of the object (role/permission) no matter if it was granted or denied
-* - Global Permissions are computed as:
-*       Group Grants + Role Grants + User Grans - Role Grants - User Grants
-* - Groups, Roles and Permissions can be assigned by realm
-*/
+ * @file RBAC.h
+ * @brief 基于角色的访问控制（Role Based Access Control）模块定义
+ *
+ * 本模块实现了完整的RBAC权限管理系统，包括：
+ * - 权限定义和权限关联
+ * - 权限的授予、拒绝和撤销
+ * - 权限的继承和计算
+ *
+ * RBAC核心概念：
+ * - 权限（Permission）：定义执行特定操作的授权
+ * - 角色（Role）：一组权限的集合（权限ID 196-199）
+ * - 组（Group）：一组角色的集合
+ * - 一个账户可以拥有多个组、角色和权限
+ *
+ * 权限操作规则：
+ * - 账户组只能被授予或撤销
+ * - 账户角色和权限可以被授予、拒绝或撤销
+ * - 授予（Grant）：分配对象（角色/权限）并允许它
+ * - 拒绝（Deny）：分配对象（角色/权限）并拒绝它
+ * - 撤销（Revoke）：移除对象（角色/权限），无论它是被授予还是被拒绝
+ *
+ * 权限计算公式：
+ * 全局权限 = 组授予 + 角色授予 + 用户授予 - 角色拒绝 - 用户拒绝
+ *
+ * 数据库表：
+ * - rbac_permissions：权限定义表
+ * - rbac_linked_permissions：权限关联表（定义权限继承关系）
+ * - rbac_default_permissions：默认权限表（按安全等级分配）
+ * - rbac_account_permissions：账户权限表
+ *
+ * 调用时机：
+ * - 服务器启动时加载权限定义
+ * - 玩家登录时加载账户权限
+ * - 权限变更时重新计算
+ *
+ * 性能注意事项：
+ * - 权限定义在启动时全部加载到内存
+ * - 权限检查为内存操作，速度快
+ * - 权限变更时需要重新计算全局权限
+ */
 
 #ifndef _RBAC_H
 #define _RBAC_H
@@ -49,88 +69,114 @@
 namespace rbac
 {
 
+/**
+ * @enum RBACPermissions
+ * @brief RBAC权限ID枚举
+ *
+ * 定义了游戏中所有的权限ID，包括：
+ * - 核心权限（1-53）：即时登出、跳过队列、加入战场等
+ * - 角色权限（196-199）：管理员、游戏管理员、版主、玩家
+ * - 命令权限（202+）：各种GM命令的权限控制
+ *
+ * 权限ID范围：
+ * - 1-149：核心权限
+ * - 196-199：角色权限（从大到小排列）
+ * - 202+：命令权限
+ * - 1000+：自定义权限
+ */
 enum RBACPermissions
 {
-    RBAC_PERM_INSTANT_LOGOUT                                 = 1,
-    RBAC_PERM_SKIP_QUEUE                                     = 2,
-    RBAC_PERM_JOIN_NORMAL_BG                                 = 3,
-    RBAC_PERM_JOIN_RANDOM_BG                                 = 4,
-    RBAC_PERM_JOIN_ARENAS                                    = 5,
-    RBAC_PERM_JOIN_DUNGEON_FINDER                            = 6,
-    RBAC_PERM_IGNORE_IDLE_CONNECTION                         = 7,
-    RBAC_PERM_CANNOT_EARN_ACHIEVEMENTS                       = 8,
-    RBAC_PERM_CANNOT_EARN_REALM_FIRST_ACHIEVEMENTS           = 9,
-    RBAC_PERM_USE_CHARACTER_TEMPLATES                        = 10, // not on 3.3.5a
-    RBAC_PERM_LOG_GM_TRADE                                   = 11,
-    RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_DEMON_HUNTER     = 12, // not on 3.3.5a
-    RBAC_PERM_SKIP_CHECK_INSTANCE_REQUIRED_BOSSES            = 13,
-    RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_TEAMMASK         = 14,
-    RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_CLASSMASK        = 15,
-    RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_RACEMASK         = 16,
-    RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_RESERVEDNAME     = 17,
-    RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_DEATH_KNIGHT     = 18,
-    RBAC_PERM_SKIP_CHECK_CHAT_CHANNEL_REQ                    = 19,
-    RBAC_PERM_SKIP_CHECK_DISABLE_MAP                         = 20,
-    RBAC_PERM_SKIP_CHECK_MORE_TALENTS_THAN_ALLOWED           = 21,
-    RBAC_PERM_SKIP_CHECK_CHAT_SPAM                           = 22,
-    RBAC_PERM_SKIP_CHECK_OVERSPEED_PING                      = 23,
-    RBAC_PERM_TWO_SIDE_CHARACTER_CREATION                    = 24,
-    RBAC_PERM_TWO_SIDE_INTERACTION_CHAT                      = 25,
-    RBAC_PERM_TWO_SIDE_INTERACTION_CHANNEL                   = 26,
-    RBAC_PERM_TWO_SIDE_INTERACTION_MAIL                      = 27,
-    RBAC_PERM_TWO_SIDE_WHO_LIST                              = 28,
-    RBAC_PERM_TWO_SIDE_ADD_FRIEND                            = 29,
-    RBAC_PERM_COMMANDS_SAVE_WITHOUT_DELAY                    = 30,
-    RBAC_PERM_COMMANDS_USE_UNSTUCK_WITH_ARGS                 = 31,
-    RBAC_PERM_COMMANDS_BE_ASSIGNED_TICKET                    = 32,
-    RBAC_PERM_COMMANDS_NOTIFY_COMMAND_NOT_FOUND_ERROR        = 33,
-    RBAC_PERM_COMMANDS_APPEAR_IN_GM_LIST                     = 34,
-    RBAC_PERM_WHO_SEE_ALL_SEC_LEVELS                         = 35,
-    RBAC_PERM_CAN_FILTER_WHISPERS                            = 36,
-    RBAC_PERM_CHAT_USE_STAFF_BADGE                           = 37,
-    RBAC_PERM_RESURRECT_WITH_FULL_HPS                        = 38,
-    RBAC_PERM_RESTORE_SAVED_GM_STATE                         = 39,
-    RBAC_PERM_ALLOW_GM_FRIEND                                = 40,
-    RBAC_PERM_USE_START_GM_LEVEL                             = 41,
-    RBAC_PERM_OPCODE_WORLD_TELEPORT                          = 42,
-    RBAC_PERM_OPCODE_WHOIS                                   = 43,
-    RBAC_PERM_RECEIVE_GLOBAL_GM_TEXTMESSAGE                  = 44,
-    RBAC_PERM_SILENTLY_JOIN_CHANNEL                          = 45,
-    RBAC_PERM_CHANGE_CHANNEL_NOT_MODERATOR                   = 46,
-    RBAC_PERM_CHECK_FOR_LOWER_SECURITY                       = 47,
-    RBAC_PERM_COMMANDS_PINFO_CHECK_PERSONAL_DATA             = 48,
-    RBAC_PERM_EMAIL_CONFIRM_FOR_PASS_CHANGE                  = 49,
-    RBAC_PERM_MAY_CHECK_OWN_EMAIL                            = 50,
-    RBAC_PERM_ALLOW_TWO_SIDE_TRADE                           = 51,
-    RBAC_PERM_NO_BATTLEGROUND_DESERTER_DEBUFF                = 52,
-    RBAC_PERM_CAN_AFK_ON_BATTLEGROUND                        = 53,
+    // ==================== 核心权限 ====================
+    RBAC_PERM_INSTANT_LOGOUT                                 = 1,  ///< 即时登出权限
+    RBAC_PERM_SKIP_QUEUE                                     = 2,  ///< 跳过登录队列权限
+    RBAC_PERM_JOIN_NORMAL_BG                                 = 3,  ///< 加入普通战场权限
+    RBAC_PERM_JOIN_RANDOM_BG                                 = 4,  ///< 加入随机战场权限
+    RBAC_PERM_JOIN_ARENAS                                    = 5,  ///< 加入竞技场权限
+    RBAC_PERM_JOIN_DUNGEON_FINDER                            = 6,  ///< 加入随机副本权限
+    RBAC_PERM_IGNORE_IDLE_CONNECTION                         = 7,  ///< 忽略空闲连接检测权限
+    RBAC_PERM_CANNOT_EARN_ACHIEVEMENTS                       = 8,  ///< 无法获得成就（GM标志）
+    RBAC_PERM_CANNOT_EARN_REALM_FIRST_ACHIEVEMENTS           = 9,  ///< 无法获得服务器首杀成就
+    RBAC_PERM_USE_CHARACTER_TEMPLATES                        = 10, ///< 使用角色模板（非3.3.5a）
+    RBAC_PERM_LOG_GM_TRADE                                   = 11, ///< 记录GM交易日志
+    RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_DEMON_HUNTER     = 12, ///< 跳过恶魔猎人创建检查（非3.3.5a）
+    RBAC_PERM_SKIP_CHECK_INSTANCE_REQUIRED_BOSSES            = 13, ///< 跳过副本必需BOSS检查
+    RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_TEAMMASK         = 14, ///< 跳过角色创建阵营检查
+    RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_CLASSMASK        = 15, ///< 跳过角色创建职业检查
+    RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_RACEMASK         = 16, ///< 跳过角色创建种族检查
+    RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_RESERVEDNAME     = 17, ///< 跳过保留名称检查
+    RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_DEATH_KNIGHT     = 18, ///< 跳过死亡骑士创建检查
+    RBAC_PERM_SKIP_CHECK_CHAT_CHANNEL_REQ                    = 19, ///< 跳过聊天频道要求检查
+    RBAC_PERM_SKIP_CHECK_DISABLE_MAP                         = 20, ///< 跳过地图禁用检查
+    RBAC_PERM_SKIP_CHECK_MORE_TALENTS_THAN_ALLOWED           = 21, ///< 跳过天赋点数超限检查
+    RBAC_PERM_SKIP_CHECK_CHAT_SPAM                           = 22, ///< 跳过聊天刷屏检查
+    RBAC_PERM_SKIP_CHECK_OVERSPEED_PING                      = 23, ///< 跳过超速Ping检查
+    RBAC_PERM_TWO_SIDE_CHARACTER_CREATION                    = 24, ///< 允许跨阵营创建角色
+    RBAC_PERM_TWO_SIDE_INTERACTION_CHAT                      = 25, ///< 允许跨阵营聊天
+    RBAC_PERM_TWO_SIDE_INTERACTION_CHANNEL                   = 26, ///< 允许跨阵营频道交互
+    RBAC_PERM_TWO_SIDE_INTERACTION_MAIL                      = 27, ///< 允许跨阵营邮件
+    RBAC_PERM_TWO_SIDE_WHO_LIST                              = 28, ///< 查看敌对阵营玩家列表
+    RBAC_PERM_TWO_SIDE_ADD_FRIEND                            = 29, ///< 允许跨阵营添加好友
+    RBAC_PERM_COMMANDS_SAVE_WITHOUT_DELAY                    = 30, ///< 命令保存无延迟
+    RBAC_PERM_COMMANDS_USE_UNSTUCK_WITH_ARGS                 = 31, ///< 使用带参数的unstuck命令
+    RBAC_PERM_COMMANDS_BE_ASSIGNED_TICKET                    = 32, ///< 可被分配工单
+    RBAC_PERM_COMMANDS_NOTIFY_COMMAND_NOT_FOUND_ERROR        = 33, ///< 命令未找到时通知
+    RBAC_PERM_COMMANDS_APPEAR_IN_GM_LIST                     = 34, ///< 出现在GM列表中
+    RBAC_PERM_WHO_SEE_ALL_SEC_LEVELS                         = 35, ///< 查看所有安全等级
+    RBAC_PERM_CAN_FILTER_WHISPERS                            = 36, ///< 可过滤密语
+    RBAC_PERM_CHAT_USE_STAFF_BADGE                           = 37, ///< 聊天使用员工徽章
+    RBAC_PERM_RESURRECT_WITH_FULL_HPS                        = 38, ///< 满血复活
+    RBAC_PERM_RESTORE_SAVED_GM_STATE                         = 39, ///< 恢复保存的GM状态
+    RBAC_PERM_ALLOW_GM_FRIEND                                = 40, ///< 允许GM好友
+    RBAC_PERM_USE_START_GM_LEVEL                             = 41, ///< 使用起始GM等级
+    RBAC_PERM_OPCODE_WORLD_TELEPORT                          = 42, ///< 世界传送操作码权限
+    RBAC_PERM_OPCODE_WHOIS                                   = 43, ///< Whois操作码权限
+    RBAC_PERM_RECEIVE_GLOBAL_GM_TEXTMESSAGE                  = 44, ///< 接收全局GM文本消息
+    RBAC_PERM_SILENTLY_JOIN_CHANNEL                          = 45, ///< 静默加入频道
+    RBAC_PERM_CHANGE_CHANNEL_NOT_MODERATOR                   = 46, ///< 非管理员也能更改频道
+    RBAC_PERM_CHECK_FOR_LOWER_SECURITY                       = 47, ///< 检查更低安全等级
+    RBAC_PERM_COMMANDS_PINFO_CHECK_PERSONAL_DATA             = 48, ///< Pinfo命令检查个人数据
+    RBAC_PERM_EMAIL_CONFIRM_FOR_PASS_CHANGE                  = 49, ///< 修改密码需要邮箱确认
+    RBAC_PERM_MAY_CHECK_OWN_EMAIL                            = 50, ///< 可检查自己的邮箱
+    RBAC_PERM_ALLOW_TWO_SIDE_TRADE                           = 51, ///< 允许跨阵营交易
+    RBAC_PERM_NO_BATTLEGROUND_DESERTER_DEBUFF                = 52, ///< 无战场逃兵Debuff
+    RBAC_PERM_CAN_AFK_ON_BATTLEGROUND                        = 53, ///< 战场中可AFK
 
-    // Free space for core permissions (till 149)
-    // Roles (Permissions with delegated permissions) use 199 and descending
+    // 核心权限保留空间（至149）
+    // 角色（带委托权限的权限）使用199及以下的数字
 
-    RBAC_ROLE_ADMINISTRATOR                                  = 196,
-    RBAC_ROLE_GAMEMASTER                                     = 197,
-    RBAC_ROLE_MODERATOR                                      = 198,
-    RBAC_ROLE_PLAYER                                         = 199,
+    // ==================== 角色权限 ====================
+    RBAC_ROLE_ADMINISTRATOR                                  = 196, ///< 管理员角色（最高权限）
+    RBAC_ROLE_GAMEMASTER                                     = 197, ///< 游戏管理员角色
+    RBAC_ROLE_MODERATOR                                      = 198, ///< 版主角色
+    RBAC_ROLE_PLAYER                                         = 199, ///< 普通玩家角色
 
-    // 200 previously used, do not reuse
-    // 201 previously used, do not reuse
-    RBAC_PERM_COMMAND_RBAC_ACC_PERM_LIST                     = 202,
-    RBAC_PERM_COMMAND_RBAC_ACC_PERM_GRANT                    = 203,
-    RBAC_PERM_COMMAND_RBAC_ACC_PERM_DENY                     = 204,
-    RBAC_PERM_COMMAND_RBAC_ACC_PERM_REVOKE                   = 205,
-    RBAC_PERM_COMMAND_RBAC_LIST                              = 206,
-    RBAC_PERM_COMMAND_BNET_ACCOUNT                           = 207, // not on 3.3.5a
-    RBAC_PERM_COMMAND_BNET_ACCOUNT_CREATE                    = 208, // not on 3.3.5a
-    RBAC_PERM_COMMAND_BNET_ACCOUNT_LOCK_COUNTRY              = 209, // not on 3.3.5a
-    RBAC_PERM_COMMAND_BNET_ACCOUNT_LOCK_IP                   = 210, // not on 3.3.5a
-    RBAC_PERM_COMMAND_BNET_ACCOUNT_PASSWORD                  = 211, // not on 3.3.5a
-    RBAC_PERM_COMMAND_BNET_ACCOUNT_SET                       = 212, // not on 3.3.5a
-    RBAC_PERM_COMMAND_BNET_ACCOUNT_SET_PASSWORD              = 213, // not on 3.3.5a
-    RBAC_PERM_COMMAND_BNET_ACCOUNT_LINK                      = 214, // not on 3.3.5a
-    RBAC_PERM_COMMAND_BNET_ACCOUNT_UNLINK                    = 215, // not on 3.3.5a
-    RBAC_PERM_COMMAND_BNET_ACCOUNT_CREATE_GAME               = 216, // not on 3.3.5a
-    RBAC_PERM_COMMAND_ACCOUNT                                = 217,
+    // 200和201已停用，不要重新使用
+    // ==================== 命令权限 ====================
+
+    // 200和201已停用，不要重新使用
+    // ==================== 命令权限 ====================
+
+    // RBAC命令权限
+    RBAC_PERM_COMMAND_RBAC_ACC_PERM_LIST                     = 202, ///< 列出账户权限命令
+    RBAC_PERM_COMMAND_RBAC_ACC_PERM_GRANT                    = 203, ///< 授予账户权限命令
+    RBAC_PERM_COMMAND_RBAC_ACC_PERM_DENY                     = 204, ///< 拒绝账户权限命令
+    RBAC_PERM_COMMAND_RBAC_ACC_PERM_REVOKE                   = 205, ///< 撤销账户权限命令
+    RBAC_PERM_COMMAND_RBAC_LIST                              = 206, ///< 列出RBAC权限命令
+
+    // Battle.net账户命令权限（非3.3.5a版本）
+    RBAC_PERM_COMMAND_BNET_ACCOUNT                           = 207, ///< Battle.net账户命令（非3.3.5a）
+    RBAC_PERM_COMMAND_BNET_ACCOUNT_CREATE                    = 208, ///< 创建Battle.net账户命令（非3.3.5a）
+    RBAC_PERM_COMMAND_BNET_ACCOUNT_LOCK_COUNTRY              = 209, ///< Battle.net账户国家锁定命令（非3.3.5a）
+    RBAC_PERM_COMMAND_BNET_ACCOUNT_LOCK_IP                   = 210, ///< Battle.net账户IP锁定命令（非3.3.5a）
+    RBAC_PERM_COMMAND_BNET_ACCOUNT_PASSWORD                  = 211, ///< Battle.net账户密码命令（非3.3.5a）
+    RBAC_PERM_COMMAND_BNET_ACCOUNT_SET                       = 212, ///< 设置Battle.net账户命令（非3.3.5a）
+    RBAC_PERM_COMMAND_BNET_ACCOUNT_SET_PASSWORD              = 213, ///< 设置Battle.net账户密码命令（非3.3.5a）
+    RBAC_PERM_COMMAND_BNET_ACCOUNT_LINK                      = 214, ///< 关联Battle.net账户命令（非3.3.5a）
+    RBAC_PERM_COMMAND_BNET_ACCOUNT_UNLINK                    = 215, ///< 解除关联Battle.net账户命令（非3.3.5a）
+    RBAC_PERM_COMMAND_BNET_ACCOUNT_CREATE_GAME               = 216, ///< 创建游戏账户命令（非3.3.5a）
+
+    // 账户管理命令权限
+    RBAC_PERM_COMMAND_ACCOUNT                                = 217, ///< 账户管理命令
     RBAC_PERM_COMMAND_ACCOUNT_ADDON                          = 218,
     RBAC_PERM_COMMAND_ACCOUNT_CREATE                         = 219,
     RBAC_PERM_COMMAND_ACCOUNT_DELETE                         = 220,
@@ -749,80 +795,157 @@ enum RBACPermissions
     RBAC_PERM_COMMAND_BG_START                               = 884,
     RBAC_PERM_COMMAND_BG_STOP                                = 885,
     //
-    // IF YOU ADD NEW PERMISSIONS, ADD THEM IN MASTER BRANCH AS WELL!
+    // 如果添加新权限，请同时添加到MASTER分支！
     //
-    // custom permissions 1000+
-    RBAC_PERM_MAX
-};
-
-enum RBACCommandResult
-{
-    RBAC_OK,
-    RBAC_CANT_ADD_ALREADY_ADDED,
-    RBAC_CANT_REVOKE_NOT_IN_LIST,
-    RBAC_IN_GRANTED_LIST,
-    RBAC_IN_DENIED_LIST,
-    RBAC_ID_DOES_NOT_EXISTS
-};
-
-typedef std::set<uint32> RBACPermissionContainer;
-
-class TC_GAME_API RBACPermission
-{
-    public:
-        RBACPermission(uint32 id = 0, std::string const& name = ""):
-            _id(id), _name(name), _perms() { }
-
-        /// Gets the Name of the Object
-        std::string const& GetName() const { return _name; }
-        /// Gets the Id of the Object
-        uint32 GetId() const { return _id; }
-
-        /// Gets the Permissions linked to this permission
-        RBACPermissionContainer const& GetLinkedPermissions() const { return _perms; }
-        /// Adds a new linked Permission
-        void AddLinkedPermission(uint32 id) { _perms.insert(id); }
-        /// Removes a linked Permission
-        void RemoveLinkedPermission(uint32 id) { _perms.erase(id); }
-
-    private:
-        uint32 _id;                                        ///> id of the object
-        std::string _name;                                 ///> name of the object
-        RBACPermissionContainer _perms;                    ///> Set of permissions
+    // 自定义权限 1000+
+    RBAC_PERM_MAX  ///< 最大权限ID（用于边界检查）
 };
 
 /**
- * @name RBACData
- * @brief Contains all needed information about the acccount
+ * @enum RBACCommandResult
+ * @brief RBAC命令执行结果枚举
  *
- * This class contains all the data needed to calculate the account permissions.
- * RBACDAta is formed by granted and denied permissions and all the inherited permissions
+ * 定义了权限操作（授予、拒绝、撤销）可能返回的结果状态
+ */
+enum RBACCommandResult
+{
+    RBAC_OK,                      ///< 操作成功
+    RBAC_CANT_ADD_ALREADY_ADDED,  ///< 无法添加：已存在
+    RBAC_CANT_REVOKE_NOT_IN_LIST, ///< 无法撤销：不在列表中
+    RBAC_IN_GRANTED_LIST,         ///< 已在授予列表中
+    RBAC_IN_DENIED_LIST,          ///< 已在拒绝列表中
+    RBAC_ID_DOES_NOT_EXISTS       ///< 权限ID不存在
+};
+
+/// 权限容器类型：权限ID的集合
+typedef std::set<uint32> RBACPermissionContainer;
+
+/**
+ * @class RBACPermission
+ * @brief RBAC权限对象类
  *
- * Calculation of current Permissions: Granted permissions - Denied permissions
- * - Granted permissions: through linked permissions and directly assigned
- * - Denied permissions: through linked permissions and directly assigned
+ * 表示一个权限定义，包含：
+ * - 权限ID
+ * - 权限名称
+ * - 关联权限列表（权限继承关系）
+ *
+ * 权限继承：
+ * - 一个权限可以关联多个其他权限
+ * - 当账户获得某权限时，自动获得其关联的所有权限
+ * - 例如：管理员角色关联了所有GM命令权限
+ */
+class TC_GAME_API RBACPermission
+{
+    public:
+        /**
+         * @brief 构造函数
+         * @param id 权限ID
+         * @param name 权限名称
+         */
+        RBACPermission(uint32 id = 0, std::string const& name = ""):
+            _id(id), _name(name), _perms() { }
+
+        /**
+         * @brief 获取权限名称
+         * @return 权限名称的常引用
+         */
+        std::string const& GetName() const { return _name; }
+
+        /**
+         * @brief 获取权限ID
+         * @return 权限ID
+         */
+        uint32 GetId() const { return _id; }
+
+        /**
+         * @brief 获取关联权限列表
+         * @return 关联权限ID集合的常引用
+         *
+         * 返回所有与此权限关联的其他权限ID
+         */
+        RBACPermissionContainer const& GetLinkedPermissions() const { return _perms; }
+
+        /**
+         * @brief 添加关联权限
+         * @param id 要关联的权限ID
+         *
+         * 建立权限继承关系，获得此权限时自动获得关联权限
+         */
+        void AddLinkedPermission(uint32 id) { _perms.insert(id); }
+
+        /**
+         * @brief 移除关联权限
+         * @param id 要移除的权限ID
+         *
+         * 移除权限继承关系
+         */
+        void RemoveLinkedPermission(uint32 id) { _perms.erase(id); }
+
+    private:
+        uint32 _id;                         ///< 权限ID
+        std::string _name;                  ///< 权限名称
+        RBACPermissionContainer _perms;     ///< 关联权限集合
+};
+
+/**
+ * @class RBACData
+ * @brief 账户RBAC数据类
+ *
+ * 包含账户权限计算所需的所有信息：
+ * - 授予的权限列表
+ * - 拒绝的权限列表
+ * - 计算后的全局权限列表
+ * - 关联的账户信息和安全等级
+ *
+ * 权限计算公式：
+ * 全局权限 = 授予权限 - 拒绝权限
+ * - 授予权限：通过关联权限和直接分配获得
+ * - 拒绝权限：通过关联权限和直接分配获得
+ *
+ * 使用方式：
+ * 1. 创建RBACData对象，设置账户ID、名称、领域ID和安全等级
+ * 2. 调用LoadFromDB()加载权限数据
+ * 3. 使用HasPermission()检查权限
+ *
+ * 性能注意事项：
+ * - LoadFromDB()会执行数据库查询
+ * - 权限检查为内存操作，速度快
+ * - 权限变更后需调用CalculateNewPermissions()重新计算
  */
 class TC_GAME_API RBACData
 {
     public:
+        /**
+         * @brief 构造函数
+         * @param id 账户ID
+         * @param name 账户名称
+         * @param realmId 领域ID
+         * @param secLevel 安全等级（默认255）
+         */
         RBACData(uint32 id, std::string const& name, int32 realmId, uint8 secLevel = 255):
             _id(id), _name(name), _realmId(realmId), _secLevel(secLevel),
             _grantedPerms(), _deniedPerms(), _globalPerms() { }
 
-        /// Gets the Name of the Object
+        /**
+         * @brief 获取账户名称
+         * @return 账户名称的常引用
+         */
         std::string const& GetName() const { return _name; }
-        /// Gets the Id of the Object
+
+        /**
+         * @brief 获取账户ID
+         * @return 账户ID
+         */
         uint32 GetId() const { return _id; }
 
         /**
-         * @name HasPermission
-         * @brief Checks if certain action is allowed
+         * @brief 检查是否拥有指定权限
+         * @param permission 权限ID
+         * @return 是否拥有该权限
          *
-         * Checks if certain action can be performed.
+         * 检查账户是否有执行某操作的权限
          *
-         * @return grant or deny action
-         *
-         * Example Usage:
+         * 使用示例：
          * @code
          * bool Player::CanJoinArena(Battleground* bg)
          * {
@@ -835,181 +958,261 @@ class TC_GAME_API RBACData
             return _globalPerms.find(permission) != _globalPerms.end();
         }
 
-        // Functions enabled to be used by command system
-        /// Returns all the granted permissions (after computation)
+        // 命令系统可用的函数
+
+        /**
+         * @brief 获取所有权限（计算后）
+         * @return 全局权限集合的常引用
+         */
         RBACPermissionContainer const& GetPermissions() const { return _globalPerms; }
-        /// Returns all the granted permissions
+
+        /**
+         * @brief 获取授予权限列表
+         * @return 授予权限集合的常引用
+         */
         RBACPermissionContainer const& GetGrantedPermissions() const { return _grantedPerms; }
-        /// Returns all the denied permissions
+
+        /**
+         * @brief 获取拒绝权限列表
+         * @return 拒绝权限集合的常引用
+         */
         RBACPermissionContainer const& GetDeniedPermissions() const { return _deniedPerms; }
 
         /**
-         * @name GrantRole
-         * @brief Grants a permission
+         * @brief 授予权限
+         * @param permissionId 要授予的权限ID
+         * @param realmId 领域ID（0表示从数据库加载时不保存）
+         * @return 操作结果
          *
-         * Grants a permission to the account. If realm is 0 or the permission can not be added
-         * No save to db action will be performed.
+         * 向账户授予权限。如果领域ID为0或权限无法添加，不会保存到数据库
          *
-         * Fails if permission Id does not exists or permission already granted or denied
+         * 失败条件：
+         * - 权限ID不存在
+         * - 权限已被授予
+         * - 权限已被拒绝
          *
-         * @param permissionId permission to be granted
-         * @param realmId realm affected
-         *
-         * @return Success or failure (with reason) to grant the permission
-         *
-         * Example Usage:
+         * 使用示例：
          * @code
-         * // previously defined "RBACData* rbac" with proper initialization
+         * // 假设已定义并初始化了 "RBACData* rbac"
          * uint32 permissionId = 2;
-         * if (rbac->GrantRole(permissionId) == RBAC_IN_DENIED_LIST)
+         * if (rbac->GrantPermission(permissionId) == RBAC_IN_DENIED_LIST)
          *     TC_LOG_DEBUG("entities.player", "Failed to grant permission {}, already denied", permissionId);
          * @endcode
          */
         RBACCommandResult GrantPermission(uint32 permissionId, int32 realmId = 0);
 
         /**
-         * @name DenyPermission
-         * @brief Denies a permission
+         * @brief 拒绝权限
+         * @param permissionId 要拒绝的权限ID
+         * @param realmId 领域ID（0表示从数据库加载时不保存）
+         * @return 操作结果
          *
-         * Denied a permission to the account. If realm is 0 or the permission can not be added
-         * No save to db action will be performed.
+         * 拒绝账户的某权限。如果领域ID为0或权限无法添加，不会保存到数据库
          *
-         * Fails if permission Id does not exists or permission already granted or denied
+         * 失败条件：
+         * - 权限ID不存在
+         * - 权限已被授予
+         * - 权限已被拒绝
          *
-         * @param permissionId permission to be denied
-         * @param realmId realm affected
-         *
-         * @return Success or failure (with reason) to deny the permission
-         *
-         * Example Usage:
+         * 使用示例：
          * @code
-         * // previously defined "RBACData* rbac" with proper initialization
+         * // 假设已定义并初始化了 "RBACData* rbac"
          * uint32 permissionId = 2;
-         * if (rbac->DenyRole(permissionId) == RBAC_ID_DOES_NOT_EXISTS)
-         *     TC_LOG_DEBUG("entities.player", "Role Id {} does not exists", permissionId);
+         * if (rbac->DenyPermission(permissionId) == RBAC_ID_DOES_NOT_EXISTS)
+         *     TC_LOG_DEBUG("entities.player", "Permission Id {} does not exists", permissionId);
          * @endcode
          */
         RBACCommandResult DenyPermission(uint32 permissionId, int32 realmId = 0);
 
         /**
-         * @name RevokePermission
-         * @brief Removes a permission
+         * @brief 撤销权限
+         * @param permissionId 要撤销的权限ID
+         * @param realmId 领域ID（0表示从数据库加载时不保存）
+         * @return 操作结果
          *
-         * Removes a permission from the account. If realm is 0 or the permission can not be removed
-         * No save to db action will be performed. Any delete operation will always affect
-         * "all realms (-1)" in addition to the realm specified
+         * 从账户移除权限。如果领域ID为0或权限无法移除，不会保存到数据库
+         * 删除操作总是会影响指定领域和"所有领域(-1)"
          *
-         * Fails if permission not present
+         * 失败条件：
+         * - 权限不在授予或拒绝列表中
          *
-         * @param permissionId permission to be removed
-         * @param realmId realm affected
-         *
-         * @return Success or failure (with reason) to remove the permission
-         *
-         * Example Usage:
+         * 使用示例：
          * @code
-         * // previously defined "RBACData* rbac" with proper initialization
+         * // 假设已定义并初始化了 "RBACData* rbac"
          * uint32 permissionId = 2;
-         * if (rbac->RevokeRole(permissionId) == RBAC_OK)
-         *     TC_LOG_DEBUG("entities.player", "Permission {} succesfully removed", permissionId);
+         * if (rbac->RevokePermission(permissionId) == RBAC_OK)
+         *     TC_LOG_DEBUG("entities.player", "Permission {} successfully removed", permissionId);
          * @endcode
          */
         RBACCommandResult RevokePermission(uint32 permissionId, int32 realmId = 0);
 
-        /// Loads all permissions assigned to current account
+        /**
+         * @brief 从数据库加载权限（同步）
+         *
+         * 加载账户的所有权限数据，包括：
+         * - 授予的权限
+         * - 拒绝的权限
+         * - 默认权限（基于安全等级）
+         *
+         * 性能注意事项：执行同步数据库查询
+         */
         void LoadFromDB();
+
+        /**
+         * @brief 从数据库加载权限（异步）
+         * @return 查询回调对象
+         *
+         * 异步加载权限数据，适合在主线程调用避免阻塞
+         */
         QueryCallback LoadFromDBAsync();
+
+        /**
+         * @brief 处理异步加载结果
+         * @param result 数据库查询结果
+         *
+         * 处理异步查询返回的权限数据
+         */
         void LoadFromDBCallback(PreparedQueryResult result);
 
-        /// Sets security level
+        /**
+         * @brief 设置安全等级
+         * @param id 新的安全等级
+         *
+         * 更新安全等级并重新加载权限
+         */
         void SetSecurityLevel(uint8 id)
         {
             _secLevel = id;
             LoadFromDB();
         }
 
-        /// Returns the security level assigned
+        /**
+         * @brief 获取安全等级
+         * @return 当前安全等级
+         */
         uint8 GetSecurityLevel() const { return _secLevel; }
+
     private:
-        /// Saves a permission to DB, Granted or Denied
-        void SavePermission(uint32 role, bool granted, int32 realm);
-        /// Clears roles, groups and permissions - Used for reload
+        /**
+         * @brief 保存权限到数据库
+         * @param permission 权限ID
+         * @param granted true表示授予，false表示拒绝
+         * @param realmId 领域ID
+         */
+        void SavePermission(uint32 permission, bool granted, int32 realmId);
+
+        /**
+         * @brief 清理权限数据
+         *
+         * 清空授予、拒绝和全局权限列表，用于重新加载
+         */
         void ClearData();
 
         /**
-         * @name CalculateNewPermissions
-         * @brief Calculates new permissions
+         * @brief 计算新的全局权限
          *
-         * Calculates new permissions after some change
-         * The calculation is done Granted - Denied:
-         * - Granted permissions: through linked permissions and directly assigned
-         * - Denied permissions: through linked permissions and directly assigned
+         * 在权限变更后重新计算全局权限
+         * 计算公式：授予权限 - 拒绝权限
+         * - 授予权限：通过关联权限和直接分配获得
+         * - 拒绝权限：通过关联权限和直接分配获得
          */
         void CalculateNewPermissions();
 
+        /**
+         * @brief 获取领域ID
+         * @return 领域ID
+         */
         int32 GetRealmId() const { return _realmId; }
 
-        // Auxiliar private functions - defined to allow to maintain same code even
-        // if internal structure changes.
+        // ==================== 辅助私有函数 ====================
+        // 定义这些函数以便在内部结构变化时保持代码一致性
 
-        /// Checks if a permission is granted
+        /**
+         * @brief 检查权限是否已授予
+         * @param permissionId 权限ID
+         * @return 是否已授予
+         */
         bool HasGrantedPermission(uint32 permissionId) const
         {
             return _grantedPerms.find(permissionId) != _grantedPerms.end();
         }
 
-        /// Checks if a permission is denied
+        /**
+         * @brief 检查权限是否已拒绝
+         * @param permissionId 权限ID
+         * @return 是否已拒绝
+         */
         bool HasDeniedPermission(uint32 permissionId) const
         {
             return _deniedPerms.find(permissionId) != _deniedPerms.end();
         }
 
-        /// Adds a new granted permission
+        /**
+         * @brief 添加授予权限
+         * @param permissionId 权限ID
+         */
         void AddGrantedPermission(uint32 permissionId)
         {
             _grantedPerms.insert(permissionId);
         }
 
-        /// Removes a granted permission
+        /**
+         * @brief 移除授予权限
+         * @param permissionId 权限ID
+         */
         void RemoveGrantedPermission(uint32 permissionId)
         {
             _grantedPerms.erase(permissionId);
         }
 
-        /// Adds a new denied permission
+        /**
+         * @brief 添加拒绝权限
+         * @param permissionId 权限ID
+         */
         void AddDeniedPermission(uint32 permissionId)
         {
             _deniedPerms.insert(permissionId);
         }
 
-        /// Removes a denied permission
+        /**
+         * @brief 移除拒绝权限
+         * @param permissionId 权限ID
+         */
         void RemoveDeniedPermission(uint32 permissionId)
         {
             _deniedPerms.erase(permissionId);
         }
 
-        /// Adds a list of permissions to another list
+        /**
+         * @brief 将权限列表添加到另一个列表
+         * @param permsFrom 源权限列表
+         * @param permsTo 目标权限列表
+         */
         void AddPermissions(RBACPermissionContainer const& permsFrom, RBACPermissionContainer& permsTo);
 
-        /// Removes a list of permissions from another list
+        /**
+         * @brief 从权限列表中移除另一个列表的权限
+         * @param permsFrom 源权限列表（会被修改）
+         * @param permsToRemove 要移除的权限列表
+         */
         void RemovePermissions(RBACPermissionContainer& permsFrom, RBACPermissionContainer const& permsToRemove);
 
         /**
-         * @name ExpandPermissions
-         * @brief Adds the list of linked permissions to the original list
+         * @brief 展开权限列表（包含所有关联权限）
+         * @param permissions 权限列表（输入输出参数）
          *
-         * Given a list of permissions, gets all the inherited permissions
-         * @param permissions The list of permissions to expand
+         * 给定一个权限列表，获取所有继承的权限
+         * 例如：如果权限A关联了权限B和C，展开后将包含A、B、C
          */
         void ExpandPermissions(RBACPermissionContainer& permissions);
 
-        uint32 _id;                                        ///> Account id
-        std::string _name;                                 ///> Account name
-        int32 _realmId;                                    ///> RealmId Affected
-        uint8 _secLevel;                                   ///> Account SecurityLevel
-        RBACPermissionContainer _grantedPerms;             ///> Granted permissions
-        RBACPermissionContainer _deniedPerms;              ///> Denied permissions
-        RBACPermissionContainer _globalPerms;              ///> Calculated permissions
+        uint32 _id;                         ///< 账户ID
+        std::string _name;                  ///< 账户名称
+        int32 _realmId;                     ///< 领域ID
+        uint8 _secLevel;                    ///< 安全等级
+        RBACPermissionContainer _grantedPerms;  ///< 授予权限集合
+        RBACPermissionContainer _deniedPerms;   ///< 拒绝权限集合
+        RBACPermissionContainer _globalPerms;   ///< 计算后的全局权限集合
 };
 
 }

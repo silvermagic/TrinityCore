@@ -15,6 +15,29 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file ScriptMgr.cpp
+ * @brief 脚本管理器实现文件
+ *
+ * 本文件实现了TrinityCore脚本系统的核心功能，包括：
+ * - ScriptMgr单例的实现
+ * - ScriptRegistry模板类的特化
+ * - 各种脚本类型的注册和管理
+ * - 脚本上下文管理（动态脚本库支持）
+ * - 脚本热重载（Hotswap）支持
+ *
+ * 核心架构：
+ * 1. ScriptRegistryCompositum: 组合模式管理所有ScriptRegistry实例
+ * 2. ScriptRegistry<T>: 模板类，管理特定类型的脚本
+ * 3. SpecializedScriptRegistry: 特化版本，区分数据库绑定和非绑定脚本
+ * 4. ScriptRegistrySwapHooks: 钩子系统，支持脚本热重载
+ *
+ * 主要流程：
+ * - 脚本注册：ScriptObject构造时自动调用AddScript
+ * - 脚本调用：通过FOREACH_SCRIPT宏遍历所有注册脚本
+ * - 脚本热重载：支持运行时重新加载动态脚本库
+ */
+
 #include "ScriptMgr.h"
 #include "ChatCommand.h"
 #include "Config.h"
@@ -43,73 +66,114 @@
 #include "WorldPacket.h"
 #include "WorldSession.h"
 
-// Trait which indicates whether this script type
-// must be assigned in the database.
+// ==================== 脚本数据库绑定特征 ====================
+
+/**
+ * @brief 判断脚本类型是否需要在数据库中关联
+ *
+ * 某些脚本类型需要在数据库中关联实体（如生物、物品），
+ * 这个特征用于区分这些类型。
+ *
+ * 数据库绑定脚本：
+ * - SpellScriptLoader: 法术脚本，需要在spell_dbc表关联
+ * - CreatureScript: 生物脚本，需要在creature_template表关联
+ * - GameObjectScript: 游戏对象脚本，需要在gameobject_template表关联
+ * - ItemScript: 物品脚本，需要在item_template表关联
+ * - 等等...
+ *
+ * 非数据库绑定脚本：
+ * - PlayerScript: 玩家脚本，全局事件钩子
+ * - WorldScript: 世界脚本，全局事件钩子
+ * - ServerScript: 服务器脚本，网络事件钩子
+ * - 等等...
+ */
 template<typename>
 struct is_script_database_bound
     : std::false_type { };
 
+// 法术脚本需要在数据库关联
 template<>
 struct is_script_database_bound<SpellScriptLoader>
     : std::true_type { };
 
+// 副本脚本需要在数据库关联
 template<>
 struct is_script_database_bound<InstanceMapScript>
     : std::true_type { };
 
+// 物品脚本需要在数据库关联
 template<>
 struct is_script_database_bound<ItemScript>
     : std::true_type { };
 
+// 生物脚本需要在数据库关联
 template<>
 struct is_script_database_bound<CreatureScript>
     : std::true_type { };
 
+// 游戏对象脚本需要在数据库关联
 template<>
 struct is_script_database_bound<GameObjectScript>
     : std::true_type { };
 
+// 载具脚本需要在数据库关联
 template<>
 struct is_script_database_bound<VehicleScript>
     : std::true_type { };
 
+// 区域触发器脚本需要在数据库关联
 template<>
 struct is_script_database_bound<AreaTriggerScript>
     : std::true_type { };
 
+// 战场脚本需要在数据库关联
 template<>
 struct is_script_database_bound<BattlefieldScript>
         : std::true_type { };
 
+// 战场脚本需要在数据库关联
 template<>
 struct is_script_database_bound<BattlegroundScript>
     : std::true_type { };
 
+// 世界PvP脚本需要在数据库关联
 template<>
 struct is_script_database_bound<OutdoorPvPScript>
     : std::true_type { };
 
+// 天气脚本需要在数据库关联
 template<>
 struct is_script_database_bound<WeatherScript>
     : std::true_type { };
 
+// 条件脚本需要在数据库关联
 template<>
 struct is_script_database_bound<ConditionScript>
     : std::true_type { };
 
+// 交通运输工具脚本需要在数据库关联
 template<>
 struct is_script_database_bound<TransportScript>
     : std::true_type { };
 
+// 成就条件脚本需要在数据库关联
 template<>
 struct is_script_database_bound<AchievementCriteriaScript>
     : std::true_type { };
 
+/** @brief 热重载视觉特效法术ID */
 enum Spells
 {
-    SPELL_HOTSWAP_VISUAL_SPELL_EFFECT = 40162 // 59084
+    SPELL_HOTSWAP_VISUAL_SPELL_EFFECT = 40162 // 当AI热重载时施放的视觉特效
 };
 
+/**
+ * @class ScriptRegistryInterface
+ * @brief 脚本注册表接口
+ *
+ * 定义了脚本注册表必须实现的接口。
+ * 用于实现类型擦除（type erasure），允许统一管理不同类型的脚本注册表。
+ */
 class ScriptRegistryInterface
 {
 public:
@@ -122,24 +186,54 @@ public:
     ScriptRegistryInterface& operator= (ScriptRegistryInterface const&) = delete;
     ScriptRegistryInterface& operator= (ScriptRegistryInterface&&) = delete;
 
-    /// Removes all scripts associated with the given script context.
-    /// Requires ScriptRegistryBase::SwapContext to be called after all transfers have finished.
+    /**
+     * @brief 释放指定上下文的所有脚本
+     * @param context 上下文名称
+     *
+     * 移除与给定脚本上下文关联的所有脚本。
+     * 需要在所有转移完成后调用ScriptRegistryBase::SwapContext。
+     */
     virtual void ReleaseContext(std::string const& context) = 0;
 
-    /// Injects and updates the changed script objects.
+    /**
+     * @brief 交换上下文
+     * @param initialize 是否为初始化模式
+     *
+     * 注入并更新已更改的脚本对象
+     */
     virtual void SwapContext(bool initialize) = 0;
 
-    /// Removes the scripts used by this registry from the given container.
-    /// Used to find unused script names.
+    /**
+     * @brief 从容器中移除已使用的脚本
+     * @param scripts 脚本名称集合
+     *
+     * 从给定容器中移除此注册表使用的脚本名称。
+     * 用于查找未使用的脚本名称。
+     */
     virtual void RemoveUsedScriptsFromContainer(std::unordered_set<std::string>& scripts) = 0;
 
-    /// Unloads the script registry.
+    /**
+     * @brief 卸载脚本注册表
+     */
     virtual void Unload() = 0;
 };
 
 template<class>
 class ScriptRegistry;
 
+/**
+ * @class ScriptRegistryCompositum
+ * @brief 脚本注册表组合类
+ *
+ * 使用组合模式管理所有ScriptRegistry实例。
+ * 提供统一的接口来操作所有类型的脚本注册表。
+ *
+ * 职责：
+ * - 管理所有ScriptRegistry实例
+ * - 维护脚本名称到上下文的映射
+ * - 提供延迟删除机制
+ * - 协调所有注册表的上下文交换
+ */
 class ScriptRegistryCompositum
     : public ScriptRegistryInterface
 {
@@ -148,7 +242,12 @@ class ScriptRegistryCompositum
     template<class>
     friend class ScriptRegistry;
 
-    /// Type erasure wrapper for objects
+    /**
+     * @class DeleteableObjectBase
+     * @brief 可删除对象基类（类型擦除）
+     *
+     * 用于实现延迟删除的对象包装器基类
+     */
     class DeleteableObjectBase
     {
     public:
@@ -159,6 +258,12 @@ class ScriptRegistryCompositum
         DeleteableObjectBase& operator= (DeleteableObjectBase const&) = delete;
     };
 
+    /**
+     * @class DeleteableObject
+     * @brief 可删除对象模板类
+     *
+     * 具体类型的对象包装器，用于延迟删除任意类型的对象
+     */
     template<typename T>
     class DeleteableObject
         : public DeleteableObjectBase
@@ -172,6 +277,11 @@ class ScriptRegistryCompositum
     };
 
 public:
+    /**
+     * @brief 设置脚本名称所属的上下文
+     * @param scriptname 脚本名称
+     * @param context 上下文名称
+     */
     void SetScriptNameInContext(std::string const& scriptname, std::string const& context)
     {
         ASSERT(_scriptnames_to_context.find(scriptname) == _scriptnames_to_context.end(),
@@ -179,6 +289,11 @@ public:
         _scriptnames_to_context.insert(std::make_pair(scriptname, context));
     }
 
+    /**
+     * @brief 获取脚本名称所属的上下文
+     * @param scriptname 脚本名称
+     * @return 上下文名称
+     */
     std::string const& GetScriptContextOfScriptName(std::string const& scriptname) const
     {
         auto itr = _scriptnames_to_context.find(scriptname);
@@ -187,14 +302,19 @@ public:
         return itr->second;
     }
 
+    /**
+     * @brief 释放指定上下文的所有脚本
+     * @param context 上下文名称
+     *
+     * 遍历所有注册表，释放指定上下文的脚本
+     */
     void ReleaseContext(std::string const& context) final override
     {
         for (auto const registry : _registries)
             registry->ReleaseContext(context);
 
-        // Clear the script names in context after calling the release hooks
-        // since it's possible that new references to a shared library
-        // are acquired when releasing.
+        // 在调用释放钩子后清除上下文中的脚本名称
+        // 因为在释放时可能会获取对共享库的新引用
         for (auto itr = _scriptnames_to_context.begin();
                         itr != _scriptnames_to_context.end();)
             if (itr->second == context)
@@ -203,6 +323,10 @@ public:
                 ++itr;
     }
 
+    /**
+     * @brief 交换上下文
+     * @param initialize 是否为初始化模式
+     */
     void SwapContext(bool initialize) final override
     {
         for (auto const registry : _registries)
@@ -211,18 +335,31 @@ public:
         DoDelayedDelete();
     }
 
+    /**
+     * @brief 从容器中移除已使用的脚本
+     * @param scripts 脚本名称集合
+     */
     void RemoveUsedScriptsFromContainer(std::unordered_set<std::string>& scripts) final override
     {
         for (auto const registry : _registries)
             registry->RemoveUsedScriptsFromContainer(scripts);
     }
 
+    /**
+     * @brief 卸载所有注册表
+     */
     void Unload() final override
     {
         for (auto const registry : _registries)
             registry->Unload();
     }
 
+    /**
+     * @brief 将对象加入延迟删除队列
+     * @param any 要删除的对象
+     *
+     * 用于延迟删除脚本对象，避免在脚本代码执行时删除
+     */
     template<typename T>
     void QueueForDelayedDelete(T&& any)
     {
@@ -233,6 +370,10 @@ public:
         );
     }
 
+    /**
+     * @brief 获取单例实例
+     * @return ScriptRegistryCompositum单例指针
+     */
     static ScriptRegistryCompositum* Instance()
     {
         static ScriptRegistryCompositum instance;
@@ -240,26 +381,39 @@ public:
     }
 
 private:
+    /**
+     * @brief 注册脚本注册表
+     * @param registry 注册表指针
+     */
     void Register(ScriptRegistryInterface* registry)
     {
         _registries.insert(registry);
     }
 
+    /**
+     * @brief 执行延迟删除
+     *
+     * 清空延迟删除队列
+     */
     void DoDelayedDelete()
     {
         _delayed_delete_queue.clear();
     }
 
+    /** @brief 所有注册的脚本注册表 */
     std::unordered_set<ScriptRegistryInterface*> _registries;
 
+    /** @brief 延迟删除队列 */
     std::vector<std::unique_ptr<DeleteableObjectBase>> _delayed_delete_queue;
 
+    /** @brief 脚本名称到上下文的映射 */
     std::unordered_map<
         std::string /*script name*/,
         std::string /*context*/
     > _scriptnames_to_context;
 };
 
+/** @brief ScriptRegistryCompositum单例访问宏 */
 #define sScriptRegistryCompositum ScriptRegistryCompositum::Instance()
 
 template<typename /*ScriptType*/, bool /*IsDatabaseBound*/>

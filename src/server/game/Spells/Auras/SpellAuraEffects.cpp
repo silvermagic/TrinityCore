@@ -15,6 +15,58 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file SpellAuraEffects.cpp
+ * @brief 光环效果系统实现文件 - 实现光环效果(AuraEffect)类的所有功能
+ *
+ * 本文件实现了光环效果系统的核心功能，包括：
+ *
+ * - AuraEffect类的构造、析构和基础方法
+ * - 效果处理器数组AuraEffectHandler的定义
+ * - 各种光环效果类型的应用/移除处理器实现
+ * - 周期性效果(DoT/HoT)的tick处理
+ * - Proc触发效果的处理
+ * - 效果数值计算和重算逻辑
+ *
+ * 效果处理器说明：
+ *
+ * 效果处理器是针对每种光环类型的专门处理函数。当光环应用或移除时，
+ * 根据光环类型查找对应的处理器函数并调用。
+ *
+ * 处理模式(mode参数)说明：
+ * - AURA_EFFECT_HANDLE_REAL: 实际效果处理
+ * - AURA_EFFECT_HANDLE_SEND_FOR_CLIENT_MASK: 需要发送给客户端
+ * - AURA_EFFECT_HANDLE_CHANGE_AMOUNT_MASK: 数值变化时
+ * - AURA_EFFECT_HANDLE_STAT: 属性相关效果
+ *
+ * 数值计算流程：
+ * 1. CalculateAmount(): 计算效果基础数值
+ *    - 考虑基础数值、施法者属性
+ *    - 特殊处理控制效果（基于生命值）
+ *    - 特殊处理吸收效果
+ *
+ * 2. CalculatePeriodic(): 计算周期性属性
+ *    - 确定是否为周期性效果
+ *    - 计算周期间隔(amplitude)
+ *    - 处理急速对周期的影响
+ *
+ * 3. CalculateSpellMod(): 计算法术修改器
+ *    - 创建SpellModifier对象
+ *    - 设置修改类型和数值
+ *
+ * 周期性效果处理：
+ * Update()方法中处理周期性效果的tick：
+ * - 减少周期计时器
+ * - 计时器归零时触发PeriodicTick()
+ * - 根据光环类型调用对应的tick处理器
+ *
+ * Proc触发处理：
+ * HandleProc()方法处理事件触发的效果：
+ * - 检查触发条件
+ * - 计算触发几率
+ * - 执行触发效果（施放法术、造成伤害等）
+ */
+
 #include "SpellAuraEffects.h"
 #include "Battlefield.h"
 #include "BattlefieldMgr.h"

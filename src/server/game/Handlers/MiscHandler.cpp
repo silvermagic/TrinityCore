@@ -15,6 +15,30 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file MiscHandler.cpp
+ * @brief 杂项游戏功能网络消息处理器
+ *
+ * 本模块负责处理各种游戏功能的网络消息，包括但不限于：
+ * - 玩家复活和尸体回收
+ * - NPC对话选择
+ * - 玩家查询（/who命令）
+ * - 登出流程
+ * - PvP状态切换
+ * - 区域触发器
+ * - 账户数据同步
+ * - 动作按钮设置
+ * - 电影和过场动画
+ * - 角色观察
+ * - 实例难度设置
+ * - 区域灵魂医者交互
+ *
+ * 该处理器是游戏中最杂乱的网络消息处理模块，
+ * 包含大量不相关但都归类为"杂项"的功能处理。
+ *
+ * @note 本文件函数较多且功能分散，建议按功能模块阅读
+ */
+
 #include "WorldSession.h"
 #include "AccountMgr.h"
 #include "Battlefield.h"
@@ -55,6 +79,33 @@
 #include <cstdarg>
 #include <zlib.h>
 
+/**
+ * @brief 处理释放灵魂请求
+ *
+ * 当玩家死亡后点击"释放灵魂"按钮时，客户端发送此消息。
+ * 玩家的灵魂会出现在最近的墓地，可以跑回尸体复活。
+ *
+ * @param packet 释放灵魂请求数据包（空数据包）
+ *
+ * 调用时机：
+ * - 玩家死亡后点击"释放灵魂"按钮时
+ * - 客户端发送 CMSG_REPOP_REQUEST 消息
+ *
+ * 处理流程：
+ * 1. 验证玩家已死亡且尚未释放灵魂
+ * 2. 检查是否有阻止复活的光环效果
+ * 3. 处理服务器延迟导致的边界情况（玩家刚被杀死但尚未更新）
+ * 4. 移除玩家的食尸鬼和宠物
+ * 5. 创建玩家尸体并生成灵魂状态
+ * 6. 将玩家传送至最近的墓地
+ *
+ * 特殊处理：
+ * - 如果玩家刚死亡（JUST_DIED），先执行击杀逻辑
+ * - 某些光环（如灵魂石）可能阻止释放
+ *
+ * @see Player::BuildPlayerRepop()
+ * @see Player::RepopAtGraveyard()
+ */
 void WorldSession::HandleRepopRequest(WorldPackets::Misc::RepopRequest& /*packet*/)
 {
     TC_LOG_DEBUG("network", "WORLD: Recvd CMSG_REPOP_REQUEST Message");
@@ -84,6 +135,44 @@ void WorldSession::HandleRepopRequest(WorldPackets::Misc::RepopRequest& /*packet
     GetPlayer()->RepopAtGraveyard();
 }
 
+/**
+ * @brief 处理NPC对话选项选择
+ *
+ * 当玩家在NPC对话菜单中选择一个选项时，客户端发送此消息。
+ * 服务器会调用相应的脚本处理玩家的选择。
+ *
+ * @param recvData 接收的网络数据包，包含：
+ *                 - guid: NPC或游戏对象的GUID
+ *                 - menuId: 菜单ID
+ *                 - gossipListId: 选项列表ID
+ *                 - code: 可选的输入代码（用于需要输入的选项）
+ *
+ * 调用时机：
+ * - 玩家在NPC对话窗口中选择选项时
+ * - 客户端发送 CMSG_GOSSIP_SELECT_OPTION 消息
+ *
+ * 处理流程：
+ * 1. 验证对话菜单存在
+ * 2. 如果选项需要输入代码，读取代码数据
+ * 3. 验证对话菜单的发送者GUID匹配（防止作弊）
+ * 4. 获取NPC或游戏对象实体
+ * 5. 验证实体存在且可交互
+ * 6. 移除假死状态
+ * 7. 检查脚本是否被重新加载
+ * 8. 调用AI脚本处理选项选择
+ *
+ * 脚本处理：
+ * - 优先调用AI脚本的OnGossipSelect/OnGossipSelectCode
+ * - 如果脚本返回false，调用默认处理
+ *
+ * 安全措施：
+ * - 验证对话菜单的发送者GUID
+ * - 验证NPC或游戏对象可交互
+ * - 检测脚本重新加载并关闭菜单
+ *
+ * @see Player::OnGossipSelect()
+ * @see CreatureAI::OnGossipSelect()
+ */
 void WorldSession::HandleGossipSelectOptionOpcode(WorldPacket& recvData)
 {
     TC_LOG_DEBUG("network", "WORLD: CMSG_GOSSIP_SELECT_OPTION");
@@ -176,6 +265,56 @@ void WorldSession::HandleGossipSelectOptionOpcode(WorldPacket& recvData)
     }
 }
 
+/**
+ * @brief 处理/who命令查询在线玩家
+ *
+ * 当玩家使用/who命令查询在线玩家时，服务器根据筛选条件返回符合条件的玩家列表。
+ * 支持多种筛选条件：等级范围、名称、公会、种族、职业、区域等。
+ *
+ * @param recvData 接收的网络数据包，包含：
+ *                 - levelMin: 最小等级
+ *                 - levelMax: 最大等级
+ *                 - packetPlayerName: 玩家名称过滤
+ *                 - packetGuildName: 公会名称过滤
+ *                 - racemask: 种族掩码
+ *                 - classmask: 职业掩码
+ *                 - zonesCount: 区域数量
+ *                 - zoneids: 区域ID数组
+ *                 - strCount: 搜索字符串数量
+ *                 - str: 搜索字符串数组
+ *
+ * 调用时机：
+ * - 玩家使用/who命令时
+ * - 玩家打开社交窗口的"谁"标签时
+ * - 客户端发送 CMSG_WHO 消息
+ *
+ * 处理流程：
+ * 1. 读取并验证所有筛选条件
+ * 2. 验证区域和字符串数量不超过客户端限制
+ * 3. 将名称转换为小写用于模糊匹配
+ * 4. 如果等级上限为100，更新为服务器最大等级（用于显示GM）
+ * 5. 遍历在线玩家列表：
+ *    - 检查阵营限制
+ *    - 检查GM等级可见性
+ *    - 检查等级范围
+ *    - 检查职业和种族匹配
+ *    - 检查区域匹配
+ *    - 检查名称和公会名称匹配
+ *    - 检查搜索字符串匹配
+ * 6. 构建并发送匹配玩家列表
+ *
+ * 筛选规则：
+ * - 默认显示同阵营玩家（除非有跨阵营权限）
+ * - GM默认对普通玩家隐藏
+ * - 支持模糊名称匹配
+ * - 最多返回配置的最大数量（默认49）
+ *
+ * 性能注意事项：
+ * - 使用预生成的在线玩家列表避免遍历所有玩家
+ * - 字符串匹配使用宽字符小写比较
+ *
+ * @see WhoListStorageMgr::GetWhoList()
+ */
 void WorldSession::HandleWhoOpcode(WorldPacket& recvData)
 {
     TC_LOG_DEBUG("network", "WORLD: Recvd CMSG_WHO Message");
@@ -351,6 +490,51 @@ void WorldSession::HandleWhoOpcode(WorldPacket& recvData)
     TC_LOG_DEBUG("network", "WORLD: Send SMSG_WHO Message");
 }
 
+/**
+ * @brief 处理登出请求
+ *
+ * 当玩家点击"退出游戏"或按下ESC键时，客户端发送登出请求。
+ * 根据玩家状态，可能是即时登出或需要等待20秒倒计时。
+ *
+ * @param logoutRequest 登出请求数据包
+ *
+ * 调用时机：
+ * - 玩家点击"退出游戏"按钮时
+ * - 玩家按下ESC键时
+ * - 客户端发送 CMSG_LOGOUT_REQUEST 消息
+ *
+ * 处理流程：
+ * 1. 如果玩家正在拾取战利品，先释放战利品
+ * 2. 判断是否可以即时登出：
+ *    - 在休息区域（旅店/城市）且不在战斗中
+ *    - 正在飞行中
+ *    - 有GM即时登出权限
+ * 3. 检查登出限制条件：
+ *    - 是否在战斗中
+ *    - 是否正在下落
+ *    - 是否在决斗中
+ *    - 是否被GM冻结
+ * 4. 如果有登出限制，发送错误原因并拒绝登出
+ * 5. 如果可以即时登出，立即执行登出
+ * 6. 否则：
+ *    - 设置玩家坐下状态
+ *    - 定住玩家
+ *    - 开始20秒登出倒计时
+ *
+ * 登出限制：
+ * - 战斗中不能登出（除非在休息区域）
+ * - 下落中不能登出
+ * - 决斗中不能登出
+ * - 被冻结不能登出
+ *
+ * 即时登出条件：
+ * - 在旅店/城市休息区域
+ * - 正在飞行（乘坐飞行路线）
+ * - GM权限
+ *
+ * @see LogoutPlayer()
+ * @see SetLogoutStartTime()
+ */
 void WorldSession::HandleLogoutRequestOpcode(WorldPackets::Character::LogoutRequest& /*logoutRequest*/)
 {
     if (ObjectGuid lguid = GetPlayer()->GetLootGUID())
@@ -400,10 +584,44 @@ void WorldSession::HandleLogoutRequestOpcode(WorldPackets::Character::LogoutRequ
     SetLogoutStartTime(GameTime::GetGameTime());
 }
 
+/**
+ * @brief 处理玩家登出消息
+ *
+ * 这是一个空消息处理器，在登出流程中客户端会发送此消息，
+ * 但服务器不需要执行任何特殊处理。
+ *
+ * @param playerLogout 玩家登出数据包（空数据包）
+ *
+ * @note 该消息是登出流程的一部分，实际登出逻辑在其他地方处理
+ */
 void WorldSession::HandlePlayerLogoutOpcode(WorldPackets::Character::PlayerLogout& /*playerLogout*/)
 {
 }
 
+/**
+ * @brief 处理取消登出请求
+ *
+ * 当玩家在登出倒计时期间移动或点击取消按钮时，取消登出流程。
+ * 恢复玩家的正常状态，取消坐下和定身效果。
+ *
+ * @param logoutCancel 取消登出数据包（空数据包）
+ *
+ * 调用时机：
+ * - 玩家在登出倒计时期间移动时
+ * - 玩家点击取消按钮时
+ * - 客户端发送 CMSG_LOGOUT_CANCEL 消息
+ *
+ * 处理流程：
+ * 1. 检查玩家是否仍在线（防止重复取消）
+ * 2. 清除登出开始时间
+ * 3. 发送取消确认给客户端
+ * 4. 如果玩家可以自由移动：
+ *    - 解除定身状态
+ *    - 设置玩家站立
+ *    - 移除眩晕标志
+ *
+ * @note 只有在登出请求中设置了限制标志，才会在此移除
+ */
 void WorldSession::HandleLogoutCancelOpcode(WorldPackets::Character::LogoutCancel& /*logoutCancel*/)
 {
     // Player have already logged out serverside, too late to cancel
@@ -428,6 +646,38 @@ void WorldSession::HandleLogoutCancelOpcode(WorldPackets::Character::LogoutCance
     }
 }
 
+/**
+ * @brief 处理切换PvP状态的请求
+ *
+ * 当玩家切换PvP标志时，更新玩家的PvP状态和计时器。
+ * PvP状态影响玩家是否可以被敌对阵营攻击。
+ *
+ * @param togglePvP 切换PvP数据包，可选包含启用/禁用标志
+ *
+ * 调用时机：
+ * - 玩家点击自己的头像框切换PvP标志时
+ * - 玩家输入/pvp命令时
+ * - 客户端发送 CMSG_TOGGLE_PVP 消息
+ *
+ * 处理流程：
+ * 1. 如果数据包包含明确的启用标志：
+ *    - 设置或清除PvP标志
+ *    - 设置或清除PvP计时器标志
+ * 2. 如果数据包没有启用标志（切换模式）：
+ *    - 切换PvP标志状态
+ *    - 切换PvP计时器标志状态
+ * 3. 如果启用了PvP标志：
+ *    - 立即更新PvP状态
+ * 4. 如果禁用了PvP标志且玩家不处于敌对状态：
+ *    - 开始PvP关闭倒计时（5分钟）
+ *
+ * PvP规则：
+ * - 启用PvP后，敌对阵营玩家可以攻击你
+ * - 禁用PvP后，需要5分钟无战斗才会真正关闭PvP
+ * - 在战斗中或敌对状态下不能关闭PvP
+ *
+ * @see Player::UpdatePvP()
+ */
 void WorldSession::HandleTogglePvP(WorldPackets::Misc::TogglePvP& togglePvP)
 {
     // this opcode can be used in two ways: Either set explicit new status or toggle old status
@@ -454,6 +704,28 @@ void WorldSession::HandleTogglePvP(WorldPackets::Misc::TogglePvP& togglePvP)
     }
 }
 
+/**
+ * @brief 处理区域更新消息
+ *
+ * 当客户端检测到玩家进入新区域时发送此消息。
+ * 服务器会标记需要更新区域数据，实际更新在玩家位置更新时执行。
+ *
+ * @param recvData 接收的网络数据包，包含新区域ID
+ *
+ * 调用时机：
+ * - 客户端检测到玩家进入新区域时
+ * - 客户端发送 MSG_ZONE_UPDATE 消息
+ *
+ * 处理流程：
+ * 1. 读取客户端发送的新区域ID
+ * 2. 标记玩家需要区域更新
+ * 3. 实际的区域更新在 Player::UpdatePosition() 中执行
+ *
+ * @note 服务器使用自己的位置数据来确定区域，客户端数据仅用于参考
+ *
+ * @see Player::SetNeedsZoneUpdate()
+ * @see Player::UpdatePosition()
+ */
 void WorldSession::HandleZoneUpdateOpcode(WorldPacket& recvData)
 {
     uint32 newZone;
@@ -467,6 +739,22 @@ void WorldSession::HandleZoneUpdateOpcode(WorldPacket& recvData)
     //GetPlayer()->SendInitWorldStates(true, newZone);
 }
 
+/**
+ * @brief 处理设置选中目标的请求
+ *
+ * 当玩家选择一个目标时（点击或使用快捷键），客户端发送此消息。
+ * 服务端更新玩家的选中目标GUID。
+ *
+ * @param recvData 接收的网络数据包，包含目标的GUID
+ *
+ * 调用时机：
+ * - 玩家点击一个单位时
+ * - 玩家使用Tab键选择目标时
+ * - 玩家使用宏选择目标时
+ * - 客户端发送 CMSG_SET_SELECTION 消息
+ *
+ * @see Player::SetSelection()
+ */
 void WorldSession::HandleSetSelectionOpcode(WorldPacket& recvData)
 {
     ObjectGuid guid;
@@ -475,6 +763,27 @@ void WorldSession::HandleSetSelectionOpcode(WorldPacket& recvData)
     _player->SetSelection(guid);
 }
 
+/**
+ * @brief 处理站立状态改变的请求
+ *
+ * 当玩家切换站立/坐下/睡觉/跪下状态时，客户端发送此消息。
+ * 服务端验证状态的有效性并更新玩家的动画状态。
+ *
+ * @param recvData 接收的网络数据包，包含动画状态ID
+ *
+ * 调用时机：
+ * - 玩家使用/emote命令时
+ * - 玩家点击坐下按钮时
+ * - 客户端发送 CMSG_STANDSTATE_CHANGE 消息
+ *
+ * 有效状态：
+ * - UNIT_STAND_STATE_STAND: 站立
+ * - UNIT_STAND_STATE_SIT: 坐下
+ * - UNIT_STAND_STATE_SLEEP: 睡觉
+ * - UNIT_STAND_STATE_KNEEL: 跪下
+ *
+ * @see Player::SetStandState()
+ */
 void WorldSession::HandleStandStateChangeOpcode(WorldPacket& recvData)
 {
     uint32 animstate;
@@ -494,6 +803,25 @@ void WorldSession::HandleStandStateChangeOpcode(WorldPacket& recvData)
     _player->SetStandState(UnitStandStateType(animstate));
 }
 
+/**
+ * @brief 处理Bug报告提交
+ *
+ * 当玩家使用Bug报告功能提交问题时，系统将报告内容保存到数据库。
+ * 支持Bug报告和建议两种类型。
+ *
+ * @param recvData 接收的网络数据包，包含：
+ *                 - suggestion: 是否为建议（0=Bug，1=建议）
+ *                 - contentlen: 内容长度
+ *                 - content: 报告内容
+ *                 - typelen: 类型长度
+ *                 - type: 报告类型
+ *
+ * 调用时机：
+ * - 玩家通过帮助菜单提交Bug报告时
+ * - 客户端发送 CMSG_BUG 消息
+ *
+ * @note 报告内容保存在 character_bug_report 表中
+ */
 void WorldSession::HandleBugOpcode(WorldPacket& recvData)
 {
     uint32 suggestion, contentlen, typelen;
@@ -519,6 +847,37 @@ void WorldSession::HandleBugOpcode(WorldPacket& recvData)
     CharacterDatabase.Execute(stmt);
 }
 
+/**
+ * @brief 处理回收尸体的请求
+ *
+ * 当玩家灵魂状态跑回尸体并点击复活时，客户端发送此消息。
+ * 服务端验证尸体位置和时间限制，然后复活玩家。
+ *
+ * @param packet 回收尸体请求数据包（空数据包）
+ *
+ * 调用时机：
+ * - 玩家灵魂状态下接近尸体并点击"复活"按钮时
+ * - 客户端发送 CMSG_RECLAIM_CORPSE 消息
+ *
+ * 处理流程：
+ * 1. 验证玩家已死亡且处于灵魂状态
+ * 2. 检查是否在竞技场中（不允许回收尸体）
+ * 3. 获取玩家尸体对象
+ * 4. 检查尸体回收延迟（最少30秒）
+ * 5. 检查玩家与尸体的距离
+ * 6. 复活玩家（战场满血，其他50%血）
+ * 7. 生成骨骼（移除尸体）
+ *
+ * 复活规则：
+ * - 必须等待至少30秒才能回收尸体
+ * - 必须在尸体附近（CORPSE_RECLAIM_RADIUS）
+ * - 竞技场中不能回收尸体
+ * - 战场复活恢复100%生命值
+ * - 普通复活恢复50%生命值
+ *
+ * @see Player::ResurrectPlayer()
+ * @see Player::SpawnCorpseBones()
+ */
 void WorldSession::HandleReclaimCorpse(WorldPackets::Misc::ReclaimCorpse& /*packet*/)
 {
     TC_LOG_DEBUG("network", "WORLD: Received CMSG_RECLAIM_CORPSE");
@@ -552,6 +911,28 @@ void WorldSession::HandleReclaimCorpse(WorldPackets::Misc::ReclaimCorpse& /*pack
     _player->SpawnCorpseBones();
 }
 
+/**
+ * @brief 处理复活响应
+ *
+ * 当玩家接受或拒绝其他玩家的复活请求时，客户端发送此消息。
+ * 如果接受，玩家在安全位置复活；如果拒绝，清除复活请求。
+ *
+ * @param packet 复活响应数据包，包含响应值（0=拒绝，1=接受）和复活者GUID
+ *
+ * 调用时机：
+ * - 玩家收到复活请求弹窗并点击接受或拒绝时
+ * - 客户端发送 CMSG_RESURRECT_RESPONSE 消息
+ *
+ * 处理流程：
+ * 1. 验证玩家已死亡
+ * 2. 如果响应为拒绝，清除复活请求数据
+ * 3. 如果响应为接受：
+ *    - 验证复活请求来自指定的复活者
+ *    - 使用请求数据复活玩家
+ *
+ * @see Player::ResurrectUsingRequestData()
+ * @see Player::ClearResurrectRequestData()
+ */
 void WorldSession::HandleResurrectResponse(WorldPackets::Misc::ResurrectResponse& packet)
 {
     TC_LOG_DEBUG("network", "WORLD: Received CMSG_RESURRECT_RESPONSE");
@@ -571,6 +952,22 @@ void WorldSession::HandleResurrectResponse(WorldPackets::Misc::ResurrectResponse
     GetPlayer()->ResurrectUsingRequestData();
 }
 
+/**
+ * @brief 发送区域触发消息给客户端
+ *
+ * 向玩家客户端发送一条区域触发消息，显示在屏幕中央。
+ * 这是一个辅助函数，支持格式化字符串。
+ *
+ * @param Text 格式化文本字符串
+ * @param ... 可变参数列表
+ *
+ * 使用场景：
+ * - 玩家进入特殊区域时显示提示
+ * - 任务相关区域提示
+ * - 副本进入提示
+ *
+ * @note 消息最大长度为1024字符
+ */
 void WorldSession::SendAreaTriggerMessage(char const* Text, ...)
 {
     va_list ap;
@@ -588,6 +985,45 @@ void WorldSession::SendAreaTriggerMessage(char const* Text, ...)
     SendPacket(&data);
 }
 
+/**
+ * @brief 处理区域触发器消息
+ *
+ * 当玩家进入区域触发器范围时，客户端发送此消息。
+ * 区域触发器用于各种游戏机制：传送、任务完成、旅馆休息等。
+ *
+ * @param recvData 接收的网络数据包，包含区域触发器ID
+ *
+ * 调用时机：
+ * - 玩家进入区域触发器范围时
+ * - 客户端发送 CMSG_AREATRIGGER 消息
+ *
+ * 处理流程：
+ * 1. 验证玩家不在飞行中
+ * 2. 查找区域触发器定义
+ * 3. 验证玩家在触发器范围内
+ * 4. 检查条件是否满足
+ * 5. 调用脚本处理（如果存在）
+ * 6. 处理任务区域触发器
+ * 7. 处理旅馆区域触发器（进入休息状态）
+ * 8. 处理战场区域触发器
+ * 9. 处理户外PvP区域触发器
+ * 10. 处理传送区域触发器
+ *
+ * 区域触发器类型：
+ * - 任务触发器：完成探索任务
+ * - 旅馆触发器：设置休息状态
+ * - 传送触发器：传送玩家到其他位置
+ * - 战场触发器：战场特定逻辑
+ *
+ * 传送处理：
+ * - 检查目标地图进入权限
+ * - 处理副本进入限制
+ * - 处理团队和难度设置
+ * - 在尸体所在地图入口复活死亡玩家
+ *
+ * @see Player::TeleportTo()
+ * @see ScriptMgr::OnAreaTrigger()
+ */
 void WorldSession::HandleAreaTriggerOpcode(WorldPacket& recvData)
 {
     uint32 triggerId;
@@ -739,6 +1175,38 @@ void WorldSession::HandleAreaTriggerOpcode(WorldPacket& recvData)
         player->TeleportTo(at->target_mapId, at->target_X, at->target_Y, at->target_Z, at->target_Orientation, TELE_TO_NOT_LEAVE_TRANSPORT);
 }
 
+/**
+ * @brief 处理更新账户数据的请求
+ *
+ * 当客户端同步账户数据（如宏、界面设置等）到服务器时，处理数据解压和保存。
+ * 账户数据用于跨角色共享设置和备份。
+ *
+ * @param recvData 接收的网络数据包，包含：
+ *                 - type: 数据类型（0-7）
+ *                 - timestamp: 时间戳
+ *                 - decompressedSize: 解压后大小
+ *                 - 压缩的数据内容
+ *
+ * 调用时机：
+ * - 玩家修改宏或界面设置时
+ * - 客户端发送 CMSG_UPDATE_ACCOUNT_DATA 消息
+ *
+ * 数据类型：
+ * - 宏配置
+ * - 界面布局
+ * - 快捷键设置
+ * - 等等
+ *
+ * 处理流程：
+ * 1. 验证数据类型有效
+ * 2. 如果解压大小为0，清除该类型数据
+ * 3. 如果解压大小超过限制，拒绝更新
+ * 4. 解压缩数据
+ * 5. 保存账户数据
+ * 6. 发送更新完成确认
+ *
+ * @see SetAccountData()
+ */
 void WorldSession::HandleUpdateAccountData(WorldPacket& recvData)
 {
     TC_LOG_DEBUG("network", "WORLD: Received CMSG_UPDATE_ACCOUNT_DATA");
@@ -794,6 +1262,26 @@ void WorldSession::HandleUpdateAccountData(WorldPacket& recvData)
     SendPacket(&data);
 }
 
+/**
+ * @brief 处理请求账户数据的请求
+ *
+ * 当客户端需要获取账户数据时，服务器从数据库读取数据、压缩并发送给客户端。
+ *
+ * @param recvData 接收的网络数据包，包含数据类型
+ *
+ * 调用时机：
+ * - 玩家登录时
+ * - 玩家请求同步设置时
+ * - 客户端发送 CMSG_REQUEST_ACCOUNT_DATA 消息
+ *
+ * 处理流程：
+ * 1. 验证数据类型有效
+ * 2. 获取账户数据
+ * 3. 压缩数据
+ * 4. 发送数据给客户端
+ *
+ * @see GetAccountData()
+ */
 void WorldSession::HandleRequestAccountData(WorldPacket& recvData)
 {
     TC_LOG_DEBUG("network", "WORLD: Received CMSG_REQUEST_ACCOUNT_DATA");
@@ -832,6 +1320,24 @@ void WorldSession::HandleRequestAccountData(WorldPacket& recvData)
     SendPacket(&data);
 }
 
+/**
+ * @brief 处理设置动作按钮的请求
+ *
+ * 当玩家拖拽技能或物品到动作条时，更新动作按钮配置。
+ * 也用于移除动作按钮（设置数据为0）。
+ *
+ * @param recvData 接收的网络数据包，包含：
+ *                 - button: 按钮位置索引
+ *                 - packetData: 按钮数据（包含动作ID和类型）
+ *
+ * 调用时机：
+ * - 玩家拖拽技能/物品到动作条时
+ * - 玩家右键点击动作按钮移除时
+ * - 客户端发送 CMSG_SET_ACTION_BUTTON 消息
+ *
+ * @see Player::addActionButton()
+ * @see Player::removeActionButton()
+ */
 void WorldSession::HandleSetActionButtonOpcode(WorldPacket& recvData)
 {
     uint8 button;
@@ -845,18 +1351,50 @@ void WorldSession::HandleSetActionButtonOpcode(WorldPacket& recvData)
         GetPlayer()->addActionButton(button, ACTION_BUTTON_ACTION(packetData), ACTION_BUTTON_TYPE(packetData));
 }
 
+/**
+ * @brief 处理过场动画完成消息
+ *
+ * 当过场动画播放完毕时，客户端发送此消息。
+ * 服务器清理过场动画相关的资源，如视觉路点NPC。
+ *
+ * @param packet 完成过场动画数据包（空数据包）
+ *
+ * @see CinematicMgr::EndCinematic()
+ */
 void WorldSession::HandleCompleteCinematic(WorldPackets::Misc::CompleteCinematic& /*packet*/)
 {
     // If player has sight bound to visual waypoint NPC we should remove it
     GetPlayer()->GetCinematicMgr()->EndCinematic();
 }
 
+/**
+ * @brief 处理下一个过场动画摄像机消息
+ *
+ * 当过场动画实际开始播放时，客户端发送此消息。
+ * 服务器开始服务端的过场动画处理流程。
+ *
+ * @param packet 下一个摄像机数据包（空数据包）
+ *
+ * @note 客户端在过场动画开始时发送此消息
+ *
+ * @see CinematicMgr::BeginCinematic()
+ */
 void WorldSession::HandleNextCinematicCamera(WorldPackets::Misc::NextCinematicCamera& /*packet*/)
 {
     // Sent by client when cinematic actually begun. So we begin the server side process
     GetPlayer()->GetCinematicMgr()->BeginCinematic();
 }
 
+/**
+ * @brief 处理电影完成消息
+ *
+ * 当电影播放完毕时，客户端发送此消息。
+ * 服务器触发电影完成脚本事件。
+ *
+ * @param packet 完成电影数据包（空数据包）
+ *
+ * @see ScriptMgr::OnMovieComplete()
+ */
 void WorldSession::HandleCompleteMovie(WorldPackets::Misc::CompleteMovie& /*packet*/)
 {
     uint32 movie = _player->GetMovie();
@@ -867,6 +1405,15 @@ void WorldSession::HandleCompleteMovie(WorldPackets::Misc::CompleteMovie& /*pack
     sScriptMgr->OnMovieComplete(_player, movie);
 }
 
+/**
+ * @brief 处理动作条显示切换
+ *
+ * 当玩家切换动作条的显示/隐藏状态时，保存设置到角色数据。
+ *
+ * @param recvData 接收的网络数据包，包含动作条显示标志
+ *
+ * @see Player::SetByteValue()
+ */
 void WorldSession::HandleSetActionBarToggles(WorldPacket& recvData)
 {
     uint8 actionBar;
@@ -882,6 +1429,16 @@ void WorldSession::HandleSetActionBarToggles(WorldPacket& recvData)
     GetPlayer()->SetByteValue(PLAYER_FIELD_BYTES, PLAYER_FIELD_BYTES_OFFSET_ACTION_BAR_TOGGLES, actionBar);
 }
 
+/**
+ * @brief 处理查询游戏时间请求
+ *
+ * 当玩家请求查看游戏时间时，返回总游戏时间和当前等级游戏时间。
+ *
+ * @param packet 游戏时间请求包，包含是否触发脚本事件标志
+ *
+ * @see Player::GetTotalPlayedTime()
+ * @see Player::GetLevelPlayedTime()
+ */
 void WorldSession::HandlePlayedTime(WorldPackets::Character::PlayedTimeClient& packet)
 {
     WorldPackets::Character::PlayedTime playedTime;
@@ -891,6 +1448,30 @@ void WorldSession::HandlePlayedTime(WorldPackets::Character::PlayedTimeClient& p
     SendPacket(playedTime.Write());
 }
 
+/**
+ * @brief 处理观察玩家装备请求
+ *
+ * 当玩家右键点击其他玩家并选择"观察"时，服务器发送目标玩家的装备和天赋信息。
+ *
+ * @param recvData 接收的网络数据包，包含目标玩家的GUID
+ *
+ * 调用时机：
+ * - 玩家右键点击其他玩家选择"观察"时
+ * - 客户端发送 CMSG_INSPECT 消息
+ *
+ * 处理流程：
+ * 1. 查找目标玩家
+ * 2. 验证距离在观察范围内
+ * 3. 验证不能观察敌对目标
+ * 4. 发送天赋和装备信息
+ *
+ * 权限检查：
+ * - GM可以观察所有玩家
+ * - 普通玩家只能观察同阵营玩家的详细天赋
+ *
+ * @see Player::BuildPlayerTalentsInfoData()
+ * @see Player::BuildEnchantmentsInfoData()
+ */
 void WorldSession::HandleInspectOpcode(WorldPacket& recvData)
 {
     ObjectGuid guid;
@@ -929,6 +1510,15 @@ void WorldSession::HandleInspectOpcode(WorldPacket& recvData)
     SendPacket(&data);
 }
 
+/**
+ * @brief 处理观察荣誉统计请求
+ *
+ * 当玩家查看其他玩家的荣誉统计时，发送目标的荣誉点数和击杀数据。
+ *
+ * @param recvData 接收的网络数据包，包含目标玩家的GUID
+ *
+ * @see HandleInspectOpcode()
+ */
 void WorldSession::HandleInspectHonorStatsOpcode(WorldPacket& recvData)
 {
     ObjectGuid guid;
@@ -958,6 +1548,16 @@ void WorldSession::HandleInspectHonorStatsOpcode(WorldPacket& recvData)
     SendPacket(&data);
 }
 
+/**
+ * @brief 处理世界传送请求
+ *
+ * GM专用命令，允许直接传送到指定坐标。
+ * 需要特定的RBAC权限才能使用。
+ *
+ * @param worldTeleport 世界传送数据包，包含时间、地图ID、坐标和朝向
+ *
+ * @see Player::TeleportTo()
+ */
 void WorldSession::HandleWorldTeleportOpcode(WorldPackets::Misc::WorldTeleport& worldTeleport)
 {
     if (_player->IsInFlight())
@@ -978,6 +1578,21 @@ void WorldSession::HandleWorldTeleportOpcode(WorldPackets::Misc::WorldTeleport& 
         SendNotification(LANG_YOU_NOT_HAVE_PERMISSION);
 }
 
+/**
+ * @brief 处理WhoIs查询请求
+ *
+ * GM专用命令，查询指定角色的账户信息。
+ * 需要特定的RBAC权限才能使用。
+ *
+ * @param recvData 接收的网络数据包，包含角色名称
+ *
+ * 返回信息：
+ * - 角色账户名
+ * - 注册邮箱
+ * - 最后登录IP
+ *
+ * @see Player::GetSession()
+ */
 void WorldSession::HandleWhoIsOpcode(WorldPacket& recvData)
 {
     TC_LOG_DEBUG("network", "Received opcode CMSG_WHOIS");
@@ -1039,6 +1654,23 @@ void WorldSession::HandleWhoIsOpcode(WorldPacket& recvData)
         GetPlayer()->GetName(), charname);
 }
 
+/**
+ * @brief 处理投诉请求
+ *
+ * 当玩家举报其他玩家的垃圾信息或不当行为时，记录投诉信息。
+ * 支持邮件投诉和聊天投诉两种类型。
+ *
+ * @param recvData 接收的网络数据包，包含：
+ *                 - spam_type: 投诉类型（0=邮件，1=聊天）
+ *                 - spammer_guid: 被投诉玩家GUID
+ *                 - 其他类型相关的数据
+ *
+ * 处理效果：
+ * - 邮件投诉：自动删除该发送者的所有邮件
+ * - 聊天投诉：自动忽略该发送者的所有聊天消息直到登出
+ *
+ * @note 服务器仅记录投诉信息，不做进一步处理
+ */
 void WorldSession::HandleComplainOpcode(WorldPacket& recvData)
 {
     TC_LOG_DEBUG("network", "WORLD: CMSG_COMPLAIN");
@@ -1069,9 +1701,10 @@ void WorldSession::HandleComplainOpcode(WorldPacket& recvData)
     }
 
     // NOTE: all chat messages from this spammer automatically ignored by spam reporter until logout in case chat spam.
+    // 如果是邮件垃圾信息，客户端会自动删除该发送者的所有邮件
     // if it's mail spam - ALL mails from this spammer automatically removed by client
 
-    // Complaint Received message
+    // 发送投诉已收到消息 / Complaint Received message
     WorldPacket data(SMSG_COMPLAIN_RESULT, 1);
     data << uint8(0);
     SendPacket(&data);
@@ -1080,6 +1713,19 @@ void WorldSession::HandleComplainOpcode(WorldPacket& recvData)
         spam_type, spammer_guid.ToString(), unk1, unk2, unk3, unk4, description);
 }
 
+/**
+ * @brief 处理服务器分割状态查询
+ *
+ * 查询服务器是否处于分割状态。用于暴雪官方服务器分割通知。
+ * 私服通常返回正常状态。
+ *
+ * @param recvData 接收的网络数据包，包含未知参数
+ *
+ * 状态码：
+ * - 0x0: 服务器正常
+ * - 0x1: 服务器已分割
+ * - 0x2: 服务器分割待定
+ */
 void WorldSession::HandleRealmSplitOpcode(WorldPacket& recvData)
 {
     TC_LOG_DEBUG("network", "CMSG_REALM_SPLIT");
@@ -1100,6 +1746,16 @@ void WorldSession::HandleRealmSplitOpcode(WorldPacket& recvData)
     //TC_LOG_DEBUG("response sent {}", unk);
 }
 
+/**
+ * @brief 处理远视技能请求
+ *
+ * 当玩家使用远视技能切换视角时，更新玩家的观察者设置。
+ *
+ * @param recvData 接收的网络数据包，包含是否应用远视
+ *
+ * @see Player::SetSeer()
+ * @see Player::UpdateVisibilityForPlayer()
+ */
 void WorldSession::HandleFarSightOpcode(WorldPacket& recvData)
 {
     TC_LOG_DEBUG("network", "WORLD: CMSG_FAR_SIGHT");
@@ -1124,6 +1780,15 @@ void WorldSession::HandleFarSightOpcode(WorldPacket& recvData)
     GetPlayer()->UpdateVisibilityForPlayer();
 }
 
+/**
+ * @brief 处理设置称号请求
+ *
+ * 当玩家选择显示哪个称号时，更新玩家当前显示的称号。
+ *
+ * @param recvData 接收的网络数据包，包含称号ID（-1表示无称号）
+ *
+ * @see Player::HasTitle()
+ */
 void WorldSession::HandleSetTitleOpcode(WorldPacket& recvData)
 {
     TC_LOG_DEBUG("network", "CMSG_SET_TITLE");
@@ -1143,6 +1808,21 @@ void WorldSession::HandleSetTitleOpcode(WorldPacket& recvData)
     GetPlayer()->SetUInt32Value(PLAYER_CHOSEN_TITLE, title);
 }
 
+/**
+ * @brief 处理重置副本请求
+ *
+ * 当玩家请求重置所有绑定的副本时，重置副本进度。
+ * 如果玩家在团队中，只有队长可以执行此操作。
+ *
+ * @param recvData 接收的网络数据包（空数据包）
+ *
+ * 调用时机：
+ * - 玩家右键点击自己的头像选择"重置所有副本"时
+ * - 客户端发送 CMSG_RESET_INSTANCES 消息
+ *
+ * @see Group::ResetInstances()
+ * @see Player::ResetInstances()
+ */
 void WorldSession::HandleResetInstancesOpcode(WorldPacket& /*recvData*/)
 {
     TC_LOG_DEBUG("network", "WORLD: CMSG_RESET_INSTANCES");
@@ -1156,6 +1836,28 @@ void WorldSession::HandleResetInstancesOpcode(WorldPacket& /*recvData*/)
         _player->ResetInstances(INSTANCE_RESET_ALL, false);
 }
 
+/**
+ * @brief 处理设置地下城难度请求
+ *
+ * 当玩家更改地下城难度设置时，更新难度并重置受影响的副本。
+ * 如果玩家在团队中，只有队长可以更改设置。
+ *
+ * @param recvData 接收的网络数据包，包含难度模式
+ *
+ * 难度模式：
+ * - 0: 普通模式
+ * - 1: 英雄模式
+ *
+ * 处理流程：
+ * 1. 验证难度值有效
+ * 2. 验证玩家不在副本中
+ * 3. 如果在团队中，验证所有成员都不在副本中
+ * 4. 重置副本进度
+ * 5. 更新难度设置
+ *
+ * @see Group::SetDungeonDifficulty()
+ * @see Player::SetDungeonDifficulty()
+ */
 void WorldSession::HandleSetDungeonDifficultyOpcode(WorldPacket& recvData)
 {
     TC_LOG_DEBUG("network", "MSG_SET_DUNGEON_DIFFICULTY");
@@ -1215,6 +1917,22 @@ void WorldSession::HandleSetDungeonDifficultyOpcode(WorldPacket& recvData)
     }
 }
 
+/**
+ * @brief 处理设置团队副本难度请求
+ *
+ * 当玩家更改团队副本难度设置时，更新难度并重置受影响的副本。
+ * 如果玩家在团队中，只有队长可以更改设置。
+ *
+ * @param recvData 接收的网络数据包，包含难度模式
+ *
+ * 难度模式：
+ * - 0: 10人普通
+ * - 1: 25人普通
+ * - 2: 10人英雄
+ * - 3: 25人英雄
+ *
+ * @see HandleSetDungeonDifficultyOpcode()
+ */
 void WorldSession::HandleSetRaidDifficultyOpcode(WorldPacket& recvData)
 {
     TC_LOG_DEBUG("network", "MSG_SET_RAID_DIFFICULTY");
@@ -1272,6 +1990,16 @@ void WorldSession::HandleSetRaidDifficultyOpcode(WorldPacket& recvData)
     }
 }
 
+/**
+ * @brief 处理设置飞行基准测试模式
+ *
+ * 当玩家使用/timetest命令时，切换飞行基准测试模式。
+ * 用于测试飞行路线的性能。
+ *
+ * @param recvData 接收的网络数据包，包含模式标志（0=关闭，1=开启）
+ *
+ * @see PLAYER_FLAGS_TAXI_BENCHMARK
+ */
 void WorldSession::HandleSetTaxiBenchmarkOpcode(WorldPacket& recvData)
 {
     TC_LOG_DEBUG("network", "WORLD: CMSG_SET_TAXI_BENCHMARK_MODE");
@@ -1284,6 +2012,15 @@ void WorldSession::HandleSetTaxiBenchmarkOpcode(WorldPacket& recvData)
     TC_LOG_DEBUG("network", "Client used \"/timetest {}\" command", mode);
 }
 
+/**
+ * @brief 处理查询观察成就请求
+ *
+ * 当玩家观察其他玩家时，请求目标玩家的成就数据。
+ *
+ * @param recvData 接收的网络数据包，包含目标玩家的GUID
+ *
+ * @see Player::SendRespondInspectAchievements()
+ */
 void WorldSession::HandleQueryInspectAchievements(WorldPacket& recvData)
 {
     ObjectGuid guid;
@@ -1303,6 +2040,15 @@ void WorldSession::HandleQueryInspectAchievements(WorldPacket& recvData)
     player->SendRespondInspectAchievements(_player);
 }
 
+/**
+ * @brief 处理世界状态UI时间更新请求
+ *
+ * 客户端请求当前游戏时间用于UI显示。
+ *
+ * @param recvData 接收的网络数据包（空数据包）
+ *
+ * @see GameTime::GetGameTime()
+ */
 void WorldSession::HandleWorldStateUITimerUpdate(WorldPacket& /*recvData*/)
 {
     // empty opcode
@@ -1313,6 +2059,16 @@ void WorldSession::HandleWorldStateUITimerUpdate(WorldPacket& /*recvData*/)
     SendPacket(response.Write());
 }
 
+/**
+ * @brief 处理准备接收账户数据时间戳
+ *
+ * 客户端表示已准备好接收账户数据时间戳。
+ * 服务器发送所有账户数据类型的时间戳。
+ *
+ * @param recvData 接收的网络数据包（空数据包）
+ *
+ * @see SendAccountDataTimes()
+ */
 void WorldSession::HandleReadyForAccountDataTimes(WorldPacket& /*recvData*/)
 {
     // empty opcode
@@ -1321,12 +2077,32 @@ void WorldSession::HandleReadyForAccountDataTimes(WorldPacket& /*recvData*/)
     SendAccountDataTimes(GLOBAL_CACHE_MASK);
 }
 
+/**
+ * @brief 发送相位偏移设置给客户端
+ *
+ * 设置玩家的相位偏移，用于多相位系统。
+ * 不同相位的玩家看不到彼此。
+ *
+ * @param PhaseShift 相位偏移值
+ *
+ * @see SMSG_SET_PHASE_SHIFT
+ */
 void WorldSession::SendSetPhaseShift(uint32 PhaseShift)
 {
     WorldPacket data(SMSG_SET_PHASE_SHIFT, 4);
     data << uint32(PhaseShift);
     SendPacket(&data);
 }
+
+/**
+ * @brief 处理区域灵魂医者查询请求
+ *
+ * 当玩家与战场或战场的灵魂医者交互时，查询复活等待时间。
+ *
+ * @param recvData 接收的网络数据包，包含灵魂医者的GUID
+ *
+ * @see BattlegroundMgr::SendAreaSpiritHealerQueryOpcode()
+ */
 // Battlefield and Battleground
 void WorldSession::HandleAreaSpiritHealerQueryOpcode(WorldPacket& recvData)
 {
@@ -1351,6 +2127,15 @@ void WorldSession::HandleAreaSpiritHealerQueryOpcode(WorldPacket& recvData)
         bf->SendAreaSpiritHealerQueryOpcode(_player, guid);
 }
 
+/**
+ * @brief 处理区域灵魂医者排队请求
+ *
+ * 当玩家点击灵魂医者请求复活时，将玩家加入复活队列。
+ *
+ * @param recvData 接收的网络数据包，包含灵魂医者的GUID
+ *
+ * @see Battleground::AddPlayerToResurrectQueue()
+ */
 void WorldSession::HandleAreaSpiritHealerQueueOpcode(WorldPacket& recvData)
 {
     TC_LOG_DEBUG("network", "WORLD: CMSG_AREA_SPIRIT_HEALER_QUEUE");
@@ -1374,6 +2159,16 @@ void WorldSession::HandleAreaSpiritHealerQueueOpcode(WorldPacket& recvData)
         bf->AddPlayerToResurrectQueue(guid, _player->GetGUID());
 }
 
+/**
+ * @brief 处理炉石和复活请求
+ *
+ * 在冬拥湖等战场中，当玩家请求离开时，传送回绑定炉石位置并复活。
+ *
+ * @param recvData 接收的网络数据包（空数据包）
+ *
+ * @see Player::TeleportTo()
+ * @see Player::ResurrectPlayer()
+ */
 void WorldSession::HandleHearthAndResurrect(WorldPacket& /*recvData*/)
 {
     if (_player->IsInFlight())
@@ -1394,6 +2189,17 @@ void WorldSession::HandleHearthAndResurrect(WorldPacket& /*recvData*/)
     _player->TeleportTo(_player->m_homebindMapId, _player->m_homebindX, _player->m_homebindY, _player->m_homebindZ, _player->GetOrientation());
 }
 
+/**
+ * @brief 处理副本锁定响应
+ *
+ * 当玩家尝试进入已有进度的副本时，显示确认对话框。
+ * 玩家可以选择接受绑定或传送到墓地。
+ *
+ * @param recvPacket 接收的网络数据包，包含接受标志（0=拒绝，1=接受）
+ *
+ * @see Player::BindToInstance()
+ * @see Player::RepopAtGraveyard()
+ */
 void WorldSession::HandleInstanceLockResponse(WorldPacket& recvPacket)
 {
     uint8 accept;
@@ -1414,6 +2220,31 @@ void WorldSession::HandleInstanceLockResponse(WorldPacket& recvPacket)
     _player->SetPendingBind(0, 0);
 }
 
+/**
+ * @brief 处理更新导弹轨迹请求
+ *
+ * 当玩家施放有弹道效果的法术时，客户端发送导弹轨迹数据。
+ * 服务器更新法术目标的轨迹信息。
+ *
+ * @param recvPacket 接收的网络数据包，包含：
+ *                   - guid: 施法者GUID
+ *                   - spellId: 法术ID
+ *                   - elevation: 仰角
+ *                   - speed: 速度
+ *                   - firePos: 发射位置
+ *                   - impactPos: 落点位置
+ *                   - moveStop: 是否停止移动
+ *
+ * 处理流程：
+ * 1. 获取施法者和当前施放的法术
+ * 2. 验证法术匹配
+ * 3. 更新法术目标的发射和落点位置
+ * 4. 设置弹道高度和速度
+ * 5. 如果包含移动停止标志，处理移动数据包
+ *
+ * @see Spell::m_targets
+ * @see HandleMovementOpcodes()
+ */
 void WorldSession::HandleUpdateMissileTrajectory(WorldPacket& recvPacket)
 {
     TC_LOG_DEBUG("network", "WORLD: CMSG_UPDATE_MISSILE_TRAJECTORY");

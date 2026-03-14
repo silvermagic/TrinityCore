@@ -15,6 +15,23 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file OutdoorPvPSI.cpp
+ * @brief 希利苏斯户外PvP系统实现 - 希利希斯资源争夺战
+ *
+ * 本模块实现了希利苏斯地区的资源争夺机制：
+ * - 玩家收集希利希斯尘埃并运送到己方营地
+ * - 先达到200资源的阵营获得区域增益效果
+ * - 增加塞纳里奥议会声望奖励
+ * - 击杀敌方玩家不掉落旗帜，但会在远处生成希利希斯堆
+ *
+ * 主要功能：
+ * - 希利希斯资源收集和运送机制
+ * - 区域触发器处理资源交付
+ * - 资源计数和阵营增益效果
+ * - 旗帜掉落处理和希利希斯堆生成
+ */
+
 #include "OutdoorPvPSI.h"
 #include "DBCStores.h"
 #include "GameObject.h"
@@ -28,21 +45,39 @@
 #include "World.h"
 #include "WorldStatePackets.h"
 
+/** 最大资源数量，先达到此数量的阵营获得增益效果 */
 uint32 const SI_MAX_RESOURCES = 200;
+
+/** 联盟资源交付区域触发器ID */
 uint32 const SI_AREATRIGGER_H = 4168;
+
+/** 部落资源交付区域触发器ID */
 uint32 const SI_AREATRIGGER_A = 4162;
+
+/** 联盟任务完成积分标记 */
 uint32 const SI_TURNIN_QUEST_CM_A = 17090;
+
+/** 部落任务完成积分标记 */
 uint32 const SI_TURNIN_QUEST_CM_H = 18199;
+
+/** 希利希斯堆游戏对象ID */
 uint32 const SI_SILITHYST_MOUND = 181597;
+
+/** 受增益效果影响的区域数量 */
 uint8 const OutdoorPvPSIBuffZonesNum = 3;
+
+/** 受增益效果影响的区域ID数组 */
 uint32 const OutdoorPvPSIBuffZones[OutdoorPvPSIBuffZonesNum] = { 1377, 3428, 3429 };
 
+/**
+ * @brief 构造函数 - 初始化希利苏斯户外PvP实例
+ */
 OutdoorPvPSI::OutdoorPvPSI()
 {
     m_TypeId = OUTDOOR_PVP_SI;
-    m_Gathered_A = 0;
-    m_Gathered_H = 0;
-    m_LastController = 0;
+    m_Gathered_A = 0;      // 联盟收集的资源数量
+    m_Gathered_H = 0;      // 部落收集的资源数量
+    m_LastController = 0;  // 最后控制者阵营
 }
 
 void OutdoorPvPSI::FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& packet)

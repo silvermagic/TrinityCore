@@ -15,6 +15,30 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file PathGenerator.cpp
+ * @brief 寻路系统核心实现模块
+ *
+ * 本模块实现了基于 Detour 导航网格的寻路算法,包括:
+ * - 多边形路径计算(A*算法)
+ * - 点路径生成和优化
+ * - 平滑路径处理
+ * - 特殊地形处理(水面、飞行等)
+ *
+ * 算法流程:
+ * 1. 验证起点和终点坐标有效性
+ * 2. 检查导航网格可用性
+ * 3. 查找起点和终点的多边形
+ * 4. 使用A*算法计算多边形路径
+ * 5. 从多边形路径生成路径点
+ * 6. 可选的路径平滑处理
+ *
+ * 性能优化策略:
+ * - 路径缓存和增量更新
+ * - 射线检测用于短距离
+ * - 限制路径长度避免过度计算
+ */
+
 #include "PathGenerator.h"
 #include "Map.h"
 #include "Creature.h"
@@ -27,69 +51,110 @@
 #include "Metric.h"
 
 ////////////////// PathGenerator //////////////////
+
+/**
+ * @brief PathGenerator 构造函数实现
+ *
+ * 初始化路径生成器,加载导航网格数据并设置过滤器。
+ * 如果地图启用了寻路功能,则加载对应的导航网格查询对象。
+ */
 PathGenerator::PathGenerator(WorldObject const* owner) :
     _polyLength(0), _type(PATHFIND_BLANK), _useStraightPath(false),
     _forceDestination(false), _pointPathLimit(MAX_POINT_PATH_LENGTH), _useRaycast(false),
     _endPosition(G3D::Vector3::zero()), _source(owner), _navMesh(nullptr),
     _navMeshQuery(nullptr)
 {
+    // 初始化多边形引用数组为0
     memset(_pathPolyRefs, 0, sizeof(_pathPolyRefs));
 
     TC_LOG_DEBUG("maps.mmaps", "++ PathGenerator::PathGenerator for {}", _source->GetGUID().ToString());
 
+    // 获取地图ID并检查是否启用寻路
     uint32 mapId = _source->GetMapId();
     if (DisableMgr::IsPathfindingEnabled(mapId))
     {
+        // 获取导航网格管理器并加载导航网格数据
         MMAP::MMapManager* mmap = MMAP::MMapFactory::createOrGetMMapManager();
         _navMeshQuery = mmap->GetNavMeshQuery(mapId, _source->GetInstanceId());
         _navMesh = _navMeshQuery ? _navMeshQuery->getAttachedNavMesh() : mmap->GetNavMesh(mapId);
     }
 
+    // 创建查询过滤器
     CreateFilter();
 }
 
+/**
+ * @brief PathGenerator 析构函数实现
+ */
 PathGenerator::~PathGenerator()
 {
     TC_LOG_DEBUG("maps.mmaps", "++ PathGenerator::~PathGenerator() for {}", _source->GetGUID().ToString());
 }
 
+/**
+ * @brief 计算从起点到终点的移动路径
+ *
+ * 核心寻路方法,执行完整的寻路流程:
+ * 1. 验证坐标有效性
+ * 2. 检查导航网格可用性
+ * 3. 计算多边形路径
+ * 4. 生成点路径
+ */
 bool PathGenerator::CalculatePath(float destX, float destY, float destZ, bool forceDest)
 {
+    // 获取单位当前位置作为起点
     float x, y, z;
     _source->GetPosition(x, y, z);
 
+    // 验证起点和终点坐标的有效性
     if (!Trinity::IsValidMapCoord(destX, destY, destZ) || !Trinity::IsValidMapCoord(x, y, z))
         return false;
 
+    // 记录性能指标
     TC_METRIC_DETAILED_EVENT("mmap_events", "CalculatePath", "");
 
+    // 设置终点位置
     G3D::Vector3 dest(destX, destY, destZ);
     SetEndPosition(dest);
 
+    // 设置起点位置
     G3D::Vector3 start(x, y, z);
     SetStartPosition(start);
 
+    // 设置是否强制到达终点
     _forceDestination = forceDest;
 
     TC_LOG_DEBUG("maps.mmaps", "++ PathGenerator::CalculatePath() for {}", _source->GetGUID().ToString());
 
-    // make sure navMesh works - we can run on map w/o mmap
-    // check if the start and end point have a .mmtile loaded (can we pass via not loaded tile on the way?)
+    // 检查导航网格是否可用:
+    // - 导航网格对象是否存在
+    // - 导航网格查询对象是否存在
+    // - 单位是否忽略寻路
+    // - 起点和终点是否有导航网格瓦片
     Unit const* _sourceUnit = _source->ToUnit();
     if (!_navMesh || !_navMeshQuery || (_sourceUnit && _sourceUnit->HasUnitState(UNIT_STATE_IGNORE_PATHFINDING)) ||
         !HaveTile(start) || !HaveTile(dest))
     {
+        // 如果导航网格不可用,构建直线路径(不进行寻路)
         BuildShortcut();
         _type = PathType(PATHFIND_NORMAL | PATHFIND_NOT_USING_PATH);
         return true;
     }
 
+    // 更新查询过滤器
     UpdateFilter();
 
+    // 构建多边形路径
     BuildPolyPath(start, dest);
     return true;
 }
 
+/**
+ * @brief 在多边形路径中查找指定位置的多边形
+ *
+ * 遍历多边形路径,找到距离指定点最近的多边形。
+ * 用于在已有路径中快速定位当前所在的多边形。
+ */
 dtPolyRef PathGenerator::GetPathPolyByPosition(dtPolyRef const* polyPath, uint32 polyPathSize, float const* point, float* distance) const
 {
     if (!polyPath || !polyPathSize)
@@ -98,12 +163,15 @@ dtPolyRef PathGenerator::GetPathPolyByPosition(dtPolyRef const* polyPath, uint32
     dtPolyRef nearestPoly = INVALID_POLYREF;
     float minDist = FLT_MAX;
 
+    // 遍历所有多边形,计算到指定点的距离
     for (uint32 i = 0; i < polyPathSize; ++i)
     {
         float closestPoint[VERTEX_SIZE];
+        // 在多边形上找到距离指定点最近的点
         if (dtStatusFailed(_navMeshQuery->closestPointOnPoly(polyPath[i], point, closestPoint, nullptr)))
             continue;
 
+        // 计算距离的平方
         float d = dtVdistSqr(point, closestPoint);
         if (d < minDist)
         {
@@ -111,6 +179,7 @@ dtPolyRef PathGenerator::GetPathPolyByPosition(dtPolyRef const* polyPath, uint32
             nearestPoly = polyPath[i];
         }
 
+        // 如果距离足够小,提前退出循环
         if (minDist < 1.0f) // shortcut out - close enough for us
             break;
     }
@@ -118,22 +187,27 @@ dtPolyRef PathGenerator::GetPathPolyByPosition(dtPolyRef const* polyPath, uint32
     if (distance)
         *distance = dtMathSqrtf(minDist);
 
+    // 只有当距离小于3.0时才认为找到了有效的多边形
     return (minDist < 3.0f) ? nearestPoly : INVALID_POLYREF;
 }
 
+/**
+ * @brief 根据位置获取多边形
+ *
+ * 首先在当前路径中查找,如果未找到则进行全局搜索。
+ * 使用分层搜索策略,先用小范围搜索,失败后扩大搜索范围。
+ */
 dtPolyRef PathGenerator::GetPolyByLocation(float const* point, float* distance) const
 {
-    // first we check the current path
-    // if the current path doesn't contain the current poly,
-    // we need to use the expensive navMesh.findNearestPoly
+    // 首先检查当前路径中是否包含该位置的多边形
+    // 这样可以避免使用昂贵的 findNearestPoly 操作
     dtPolyRef polyRef = GetPathPolyByPosition(_pathPolyRefs, _polyLength, point, distance);
     if (polyRef != INVALID_POLYREF)
         return polyRef;
 
-    // we don't have it in our old path
-    // try to get it by findNearestPoly()
-    // first try with low search box
-    float extents[VERTEX_SIZE] = {3.0f, 5.0f, 3.0f};    // bounds of poly search area
+    // 当前路径中没有找到,使用 findNearestPoly 进行全局搜索
+    // 首先尝试使用较小的搜索范围
+    float extents[VERTEX_SIZE] = {3.0f, 5.0f, 3.0f};    // 多边形搜索区域边界
     float closestPoint[VERTEX_SIZE] = {0.0f, 0.0f, 0.0f};
     if (dtStatusSucceed(_navMeshQuery->findNearestPoly(point, extents, &_filter, &polyRef, closestPoint)) && polyRef != INVALID_POLYREF)
     {
@@ -141,9 +215,8 @@ dtPolyRef PathGenerator::GetPolyByLocation(float const* point, float* distance) 
         return polyRef;
     }
 
-    // still nothing ..
-    // try with bigger search box
-    // Note that the extent should not overlap more than 128 polygons in the navmesh (see dtNavMeshQuery::findNearestPoly)
+    // 仍然没有找到,尝试使用更大的搜索范围
+    // 注意:搜索范围不应覆盖超过128个多边形(参见 dtNavMeshQuery::findNearestPoly)
     extents[1] = 50.0f;
 
     if (dtStatusSucceed(_navMeshQuery->findNearestPoly(point, extents, &_filter, &polyRef, closestPoint)) && polyRef != INVALID_POLYREF)
@@ -152,40 +225,52 @@ dtPolyRef PathGenerator::GetPolyByLocation(float const* point, float* distance) 
         return polyRef;
     }
 
+    // 完全找不到有效的多边形
     *distance = FLT_MAX;
     return INVALID_POLYREF;
 }
 
+/**
+ * @brief 构建多边形路径
+ *
+ * 使用 A* 算法在导航网格上查找从起点到终点的多边形序列。
+ * 这是寻路的核心方法,处理各种边界情况和优化策略。
+ */
 void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 const& endPos)
 {
-    // *** getting start/end poly logic ***
+    // *** 获取起点和终点多边形逻辑 ***
 
     float distToStartPoly, distToEndPoly;
+    // 注意:Detour 使用 YZX 坐标顺序,需要转换
     float startPoint[VERTEX_SIZE] = {startPos.y, startPos.z, startPos.x};
     float endPoint[VERTEX_SIZE] = {endPos.y, endPos.z, endPos.x};
 
+    // 查找起点和终点所在的多边形
     dtPolyRef startPoly = GetPolyByLocation(startPoint, &distToStartPoly);
     dtPolyRef endPoly = GetPolyByLocation(endPoint, &distToEndPoly);
 
     _type = PathType(PATHFIND_NORMAL);
 
-    // we have a hole in our mesh
-    // make shortcut path and mark it as NOPATH ( with flying and swimming exception )
-    // its up to caller how he will use this info
+    // 导航网格中存在空洞(无法找到起点或终点多边形)
+    // 构建捷径路径并标记为 NOPATH (飞行和游泳单位除外)
+    // 调用者自行决定如何处理这种情况
     if (startPoly == INVALID_POLYREF || endPoly == INVALID_POLYREF)
     {
         TC_LOG_DEBUG("maps.mmaps", "++ BuildPolyPath :: (startPoly == 0 || endPoly == 0)");
         BuildShortcut();
+
+        // 检查单位是否可以飞行
         bool path = _source->GetTypeId() == TYPEID_UNIT && _source->ToCreature()->CanFly();
 
+        // 检查单位是否可以游泳
         bool waterPath = _source->GetTypeId() == TYPEID_UNIT && _source->ToCreature()->CanSwim();
         if (waterPath)
         {
-            // Check both start and end points, if they're both in water, then we can *safely* let the creature move
+            // 检查起点和终点是否都在水中,如果是则允许移动
             for (uint32 i = 0; i < _pathPoints.size(); ++i)
             {
                 ZLiquidStatus status = _source->GetMap()->GetLiquidStatus(_source->GetPhaseMask(), _pathPoints[i].x, _pathPoints[i].y, _pathPoints[i].z, MAP_ALL_LIQUIDS, nullptr, _source->GetCollisionHeight());
-                // One of the points is not in the water, cancel movement.
+                // 如果有一个点不在水中,取消移动
                 if (status == LIQUID_MAP_NO_WATER)
                 {
                     waterPath = false;
@@ -194,13 +279,14 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
             }
         }
 
+        // 如果单位可以飞行或游泳,允许使用捷径
         if (path || waterPath)
         {
             _type = PathType(PATHFIND_NORMAL | PATHFIND_NOT_USING_PATH);
             return;
         }
 
-        // raycast doesn't need endPoly to be valid
+        // 射线检测不需要终点多边形有效
         if (!_useRaycast)
         {
             _type = PATHFIND_NOPATH;
@@ -208,7 +294,8 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
         }
     }
 
-    // we may need a better number here
+    // 检查起点或终点是否远离导航网格多边形(距离大于7码)
+    // 这个阈值可能需要调整
     bool startFarFromPoly = distToStartPoly > 7.0f;
     bool endFarFromPoly = distToEndPoly > 7.0f;
     if (startFarFromPoly || endFarFromPoly)
@@ -217,10 +304,14 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
 
         bool buildShotrcut = false;
 
+        // 判断是起点还是终点远离多边形
         G3D::Vector3 const& p = (distToStartPoly > 7.0f) ? startPos : endPos;
+
+        // 检查是否在水下
         if (_source->GetMap()->IsUnderWater(_source->GetPhaseMask(), p.x, p.y, p.z))
         {
             TC_LOG_DEBUG("maps.mmaps", "++ BuildPolyPath :: underWater case");
+            // 如果单位可以游泳,允许构建捷径
             if (Unit const* _sourceUnit = _source->ToUnit())
                 if (_sourceUnit->CanSwim())
                     buildShotrcut = true;
@@ -230,9 +321,10 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
             TC_LOG_DEBUG("maps.mmaps", "++ BuildPolyPath :: flying case");
             if (Unit const* _sourceUnit = _source->ToUnit())
             {
+                // 如果单位可以飞行,允许构建捷径
                 if (_sourceUnit->CanFly())
                     buildShotrcut = true;
-                // Allow to build a shortcut if the unit is falling and it's trying to move downwards towards a target (i.e. charging)
+                // 如果单位正在下落且试图向下移动(如冲锋),允许构建捷径
                 else if (_sourceUnit->IsFalling() && endPos.z < startPos.z)
                     buildShotrcut = true;
             }
@@ -240,6 +332,7 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
 
         if (buildShotrcut)
         {
+            // 构建捷径路径
             BuildShortcut();
             _type = PathType(PATHFIND_NORMAL | PATHFIND_NOT_USING_PATH);
 
@@ -249,14 +342,16 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
         }
         else
         {
+            // 无法构建捷径,将终点设置为最近的多边形边界点
             float closestPoint[VERTEX_SIZE];
-            // we may want to use closestPointOnPolyBoundary instead
+            // 可以考虑使用 closestPointOnPolyBoundary 替代
             if (dtStatusSucceed(_navMeshQuery->closestPointOnPoly(endPoly, endPoint, closestPoint, nullptr)))
             {
                 dtVcopy(endPoint, closestPoint);
                 SetActualEndPosition(G3D::Vector3(endPoint[2], endPoint[0], endPoint[1]));
             }
 
+            // 标记路径为不完整
             _type = PathType(PATHFIND_INCOMPLETE);
 
             AddFarFromPolyFlags(startFarFromPoly, endFarFromPoly);
@@ -526,14 +621,21 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
     BuildPointPath(startPoint, endPoint);
 }
 
+/**
+ * @brief 构建点路径
+ *
+ * 从多边形路径生成具体的路径点数组。
+ * 支持直线路径和平滑路径两种模式。
+ */
 void PathGenerator::BuildPointPath(const float *startPoint, const float *endPoint)
 {
     float pathPoints[MAX_POINT_PATH_LENGTH*VERTEX_SIZE];
     uint32 pointCount = 0;
     dtStatus dtResult = DT_FAILURE;
+
+    // 射线检测模式不支持构建多点路径,只能返回起点和终点/撞击点
     if (_useRaycast)
     {
-        // _straightLine uses raycast and it currently doesn't support building a point path, only a 2-point path with start and hitpoint/end is returned
         TC_LOG_ERROR("maps.mmaps", "PathGenerator::BuildPointPath() called with _useRaycast for unit {}", _source->GetGUID().ToString());
         BuildShortcut();
         _type = PATHFIND_NOPATH;
@@ -541,41 +643,42 @@ void PathGenerator::BuildPointPath(const float *startPoint, const float *endPoin
     }
     else if (_useStraightPath)
     {
+        // 使用直线路径模式:沿多边形边界生成路径点
         dtResult = _navMeshQuery->findStraightPath(
-                startPoint,         // start position
-                endPoint,           // end position
-                _pathPolyRefs,     // current path
-                _polyLength,       // lenth of current path
-                pathPoints,         // [out] path corner points
-                nullptr,               // [out] flags
-                nullptr,               // [out] shortened path
+                startPoint,         // 起点位置
+                endPoint,           // 终点位置
+                _pathPolyRefs,     // 当前多边形路径
+                _polyLength,       // 多边形路径长度
+                pathPoints,         // [out] 路径拐点
+                nullptr,               // [out] 标志
+                nullptr,               // [out] 缩短路径
                 (int*)&pointCount,
-                _pointPathLimit);   // maximum number of points/polygons to use
+                _pointPathLimit);   // 最大路径点数量
     }
     else
     {
+        // 使用平滑路径模式:生成平滑的曲线路径
         dtResult = FindSmoothPath(
-                startPoint,         // start position
-                endPoint,           // end position
-                _pathPolyRefs,     // current path
-                _polyLength,       // length of current path
-                pathPoints,         // [out] path corner points
+                startPoint,         // 起点位置
+                endPoint,           // 终点位置
+                _pathPolyRefs,     // 当前多边形路径
+                _polyLength,       // 多边形路径长度
+                pathPoints,         // [out] 平滑路径点
                 (int*)&pointCount,
-                _pointPathLimit);    // maximum number of points
+                _pointPathLimit);   // 最大路径点数量
     }
 
-    // Special case with start and end positions very close to each other
+    // 特殊情况:起点和终点非常接近,只生成了一个点
     if (_polyLength == 1 && pointCount == 1)
     {
-        // First point is start position, append end position
+        // 第一个点是起点位置,追加终点位置
         dtVcopy(&pathPoints[1 * VERTEX_SIZE], endPoint);
         pointCount++;
     }
     else if ( pointCount < 2 || dtStatusFailed(dtResult))
     {
-        // only happens if pass bad data to findStraightPath or navmesh is broken
-        // single point paths can be generated here
-        /// @todo check the exact cases
+        // 只在传递错误数据到 findStraightPath 或导航网格损坏时发生
+        // 单点路径可能在这里生成
         TC_LOG_DEBUG("maps.mmaps", "++ PathGenerator::BuildPointPath FAILED! path sized {} returned\n", pointCount);
         BuildShortcut();
         _type = PathType(_type | PATHFIND_NOPATH);
@@ -583,33 +686,38 @@ void PathGenerator::BuildPointPath(const float *startPoint, const float *endPoin
     }
     else if (pointCount >= _pointPathLimit)
     {
+        // 路径点数量达到限制
         TC_LOG_DEBUG("maps.mmaps", "++ PathGenerator::BuildPointPath FAILED! path sized {} returned, lower than limit set to {}", pointCount, _pointPathLimit);
         BuildShortcut();
         _type = PathType(_type | PATHFIND_SHORT);
         return;
     }
 
+    // 将 Detour 坐标系(Y,Z,X)转换为游戏坐标系(X,Y,Z)
     _pathPoints.resize(pointCount);
     for (uint32 i = 0; i < pointCount; ++i)
         _pathPoints[i] = G3D::Vector3(pathPoints[i*VERTEX_SIZE+2], pathPoints[i*VERTEX_SIZE], pathPoints[i*VERTEX_SIZE+1]);
 
+    // 规范化路径(修正Z坐标)
     NormalizePath();
 
-    // first point is always our current location - we need the next one
+    // 第一个点总是当前位置,我们需要的是最后一个点作为实际终点
     SetActualEndPosition(_pathPoints[pointCount-1]);
 
-    // force the given destination, if needed
+    // 如果需要强制到达目标点
     if (_forceDestination &&
         (!(_type & PATHFIND_NORMAL) || !InRange(GetEndPosition(), GetActualEndPosition(), 1.0f, 1.0f)))
     {
-        // we may want to keep partial subpath
+        // 可能需要保留部分子路径
         if (Dist3DSqr(GetActualEndPosition(), GetEndPosition()) < 0.3f * Dist3DSqr(GetStartPosition(), GetEndPosition()))
         {
+            // 实际终点接近目标终点,直接修改最后一个点
             SetActualEndPosition(GetEndPosition());
             _pathPoints[_pathPoints.size()-1] = GetEndPosition();
         }
         else
         {
+            // 实际终点距离目标终点较远,构建捷径
             SetActualEndPosition(GetEndPosition());
             BuildShortcut();
         }
@@ -620,30 +728,50 @@ void PathGenerator::BuildPointPath(const float *startPoint, const float *endPoin
     TC_LOG_DEBUG("maps.mmaps", "++ PathGenerator::BuildPointPath path type {} size {} poly-size {}", _type, pointCount, _polyLength);
 }
 
+/**
+ * @brief 规范化路径
+ *
+ * 对路径中每个点的Z坐标进行修正,确保路径在地形上可行。
+ * 调用单位的 UpdateAllowedPositionZ 方法调整高度。
+ */
 void PathGenerator::NormalizePath()
 {
     for (uint32 i = 0; i < _pathPoints.size(); ++i)
         _source->UpdateAllowedPositionZ(_pathPoints[i].x, _pathPoints[i].y, _pathPoints[i].z);
 }
 
+/**
+ * @brief 构建直线路径(捷径)
+ *
+ * 创建从起点到终点的直线路径,不进行寻路。
+ * 适用于短距离移动、飞行、游泳或无法使用导航网格的情况。
+ * 注意:不进行碰撞检测,可能穿越障碍物
+ */
 void PathGenerator::BuildShortcut()
 {
     TC_LOG_DEBUG("maps.mmaps", "++ BuildShortcut :: making shortcut");
 
     Clear();
 
-    // make two point path, our curr pos is the start, and dest is the end
+    // 创建两点路径:起点和终点
     _pathPoints.resize(2);
 
-    // set start and a default next position
+    // 设置起点和终点
     _pathPoints[0] = GetStartPosition();
     _pathPoints[1] = GetActualEndPosition();
 
+    // 规范化路径
     NormalizePath();
 
     _type = PATHFIND_SHORTCUT;
 }
 
+/**
+ * @brief 创建查询过滤器
+ *
+ * 根据单位类型和移动能力创建导航网格查询过滤器。
+ * 定义单位可以通行的区域类型(地面、水面、岩浆等)。
+ */
 void PathGenerator::CreateFilter()
 {
     uint16 includeFlags = 0;
@@ -652,34 +780,43 @@ void PathGenerator::CreateFilter()
     if (_source->GetTypeId() == TYPEID_UNIT)
     {
         Creature* creature = (Creature*)_source;
+        // 生物可以行走
         if (creature->CanWalk())
-            includeFlags |= NAV_GROUND;          // walk
+            includeFlags |= NAV_GROUND;          // 地面
 
-        // creatures don't take environmental damage
+        // 生物不会受到环境伤害,可以进入各种液体
         if (creature->CanEnterWater())
-            includeFlags |= (NAV_WATER | NAV_MAGMA_SLIME);                 // swim
+            includeFlags |= (NAV_WATER | NAV_MAGMA_SLIME);                 // 游泳
     }
-    else // assume Player
+    else // 假设是玩家
     {
-        // perfect support not possible, just stay 'safe'
+        // 玩家支持不可能完美,保持安全设置
         includeFlags |= (NAV_GROUND | NAV_WATER | NAV_MAGMA_SLIME);
     }
 
     _filter.setIncludeFlags(includeFlags);
     _filter.setExcludeFlags(excludeFlags);
 
+    // 更新过滤器
     UpdateFilter();
 }
 
+/**
+ * @brief 更新查询过滤器
+ *
+ * 根据单位当前状态动态调整可通行区域。
+ * 允许生物在被强制移动到无法正常移动的地形时使用不同的移动类型。
+ */
 void PathGenerator::UpdateFilter()
 {
-    // allow creatures to cheat and use different movement types if they are moved
-    // forcefully into terrain they can't normally move in
+    // 允许生物作弊:如果被强制移动到无法正常移动的地形,使用不同的移动类型
     if (Unit const* _sourceUnit = _source->ToUnit())
     {
+        // 如果单位在水中或水下
         if (_sourceUnit->IsInWater() || _sourceUnit->IsUnderWater())
         {
             uint16 includedFlags = _filter.getIncludeFlags();
+            // 添加当前位置的地形类型
             includedFlags |= GetNavTerrain(_source->GetPositionX(),
                                            _source->GetPositionY(),
                                            _source->GetPositionZ());
@@ -687,6 +824,7 @@ void PathGenerator::UpdateFilter()
             _filter.setIncludeFlags(includedFlags);
         }
 
+        // 生物在战斗或逃避模式下,可以通行陡峭地形
         if (Creature const* _sourceCreature = _source->ToCreature())
             if (_sourceCreature->IsInCombat() || _sourceCreature->IsInEvadeMode())
                 _filter.setIncludeFlags(_filter.getIncludeFlags() | NAV_GROUND_STEEP);

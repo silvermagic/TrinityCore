@@ -22,6 +22,23 @@ Comment: All npc related commands
 Category: commandscripts
 EndScriptData */
 
+/**
+ * @file cs_npc.cpp
+ * @brief NPC管理命令模块
+ *
+ * 本模块提供了一系列GM命令，用于创建、修改、删除和管理NPC（非玩家角色）。
+ * 主要功能包括：
+ * - NPC创建与删除：添加新NPC到世界、删除现有NPC
+ * - NPC属性设置：等级、阵营、模型、标志、移动类型等
+ * - NPC行为控制：跟随、移动、播放表情、说话等
+ * - NPC信息查询：显示NPC详细信息、附近NPC列表
+ * - 商人管理：添加/删除商品列表中的物品
+ * - 生成组管理：批量生成/消除NPC组
+ *
+ * 这些命令主要用于世界构建、内容测试和服务器管理。
+ * 所有命令都需要相应的RBAC权限，且大部分仅限游戏内使用。
+ */
+
 #include "ScriptMgr.h"
 #include "Chat.h"
 #include "CreatureAI.h"
@@ -46,20 +63,89 @@ EndScriptData */
 
 using namespace Trinity::ChatCommands;
 
+/**
+ * @brief 生物生成ID类型定义
+ *
+ * 支持通过超链接或数值指定生物的生成ID
+ */
 using CreatureSpawnId = Variant<Hyperlink<creature>, ObjectGuid::LowType>;
+
+/**
+ * @brief 生物模板ID类型定义
+ *
+ * 支持通过超链接或数值指定生物的模板ID
+ */
 using CreatureEntry = Variant<Hyperlink<creature_entry>, uint32>;
 
 // shared with cs_gobject.cpp, definitions are at the bottom of this file
+// 与 cs_gobject.cpp 共享的函数声明，定义在文件底部
 bool HandleNpcSpawnGroup(ChatHandler* handler, std::vector<Variant<uint32, EXACT_SEQUENCE("force"), EXACT_SEQUENCE("ignorerespawn")>> const& opts);
 bool HandleNpcDespawnGroup(ChatHandler* handler, std::vector<Variant<uint32, EXACT_SEQUENCE("removerespawntime")>> const& opts);
 
+/**
+ * @class npc_commandscript
+ * @brief NPC命令脚本类
+ *
+ * 该类继承自CommandScript，提供所有与NPC管理相关的GM命令。
+ * 命令分为几个类别：
+ * - npc add: 添加NPC相关（创建NPC、添加商人物品、设置移动路径等）
+ * - npc set: 设置NPC属性（等级、阵营、模型、标志等）
+ * - npc: 其他命令（信息查询、跟随、说话、删除等）
+ *
+ * 所有命令都需要相应的RBAC权限，且大部分仅限游戏内使用（Console::No）。
+ */
 class npc_commandscript : public CommandScript
 {
 public:
+    /**
+     * @brief 构造函数
+     *
+     * 初始化NPC命令脚本，注册命令名称为"npc_commandscript"
+     */
     npc_commandscript() : CommandScript("npc_commandscript") { }
 
+    /**
+     * @brief 获取所有NPC命令的命令表
+     * @return 返回命令表，包含所有NPC相关命令的定义
+     *
+     * 该函数注册了以下命令类别：
+     * - npcAddCommandTable: NPC添加命令
+     *   - npc add formation: 添加阵型成员
+     *   - npc add item: 添加商人物品
+     *   - npc add move: 添加移动路径点
+     *   - npc add temp: 添加临时NPC
+     *   - npc add: 创建NPC
+     *
+     * - npcSetCommandTable: NPC设置命令
+     *   - npc set allowmove: 允许/禁止移动
+     *   - npc set entry: 设置模板ID
+     *   - npc set factionid: 设置阵营
+     *   - npc set flag: 设置NPC标志
+     *   - npc set level: 设置等级
+     *   - npc set link: 设置链接
+     *   - npc set model: 设置模型
+     *   - npc set movetype: 设置移动类型
+     *   - npc set phase: 设置阶段
+     *   - npc set wanderdistance: 设置游荡距离
+     *   - npc set spawntime: 设置生成时间
+     *   - npc set data: 设置数据
+     *
+     * - npcCommandTable: 其他NPC命令
+     *   - npc info: 显示NPC信息
+     *   - npc near: 显示附近NPC
+     *   - npc move: 移动NPC
+     *   - npc playemote: 播放表情
+     *   - npc say/textemote/whisper/yell: 说话相关
+     *   - npc tame: 驯服
+     *   - npc spawngroup/despawngroup: 生成组管理
+     *   - npc delete: 删除NPC
+     *   - npc follow/follow stop: 跟随控制
+     *   - npc evade: 重置战斗
+     *   - npc showloot: 显示战利品
+     */
     ChatCommandTable GetCommands() const override
     {
+        // NPC添加命令子表
         static ChatCommandTable npcAddCommandTable =
         {
             { "formation",      HandleNpcAddFormationCommand,      rbac::RBAC_PERM_COMMAND_NPC_ADD_FORMATION,  Console::No },
@@ -69,6 +155,7 @@ public:
 //          { "weapon",         HandleNpcAddWeaponCommand,         rbac::RBAC_PERM_COMMAND_NPC_ADD_WEAPON,     Console::No },
             { "",               HandleNpcAddCommand,               rbac::RBAC_PERM_COMMAND_NPC_ADD,            Console::No },
         };
+        // NPC设置命令子表
         static ChatCommandTable npcSetCommandTable =
         {
             { "allowmove",      HandleNpcSetAllowMovementCommand,  rbac::RBAC_PERM_COMMAND_NPC_SET_ALLOWMOVE,  Console::No },
@@ -84,6 +171,7 @@ public:
             { "spawntime",      HandleNpcSetSpawnTimeCommand,      rbac::RBAC_PERM_COMMAND_NPC_SET_SPAWNTIME,  Console::No },
             { "data",           HandleNpcSetDataCommand,           rbac::RBAC_PERM_COMMAND_NPC_SET_DATA,       Console::No },
         };
+        // NPC主命令表
         static ChatCommandTable npcCommandTable =
         {
             { "add", npcAddCommandTable },
@@ -113,6 +201,27 @@ public:
         return commandTable;
     }
 
+    /**
+     * @brief 创建NPC命令处理函数
+     * @param handler 聊天处理器指针
+     * @param id 生物模板ID
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .npc add <模板ID> - 在玩家当前位置创建指定类型的NPC
+     *
+     * 执行流程：
+     * 1. 验证生物模板是否存在
+     * 2. 如果玩家在交通工具上，创建NPC乘客并保存到数据库
+     * 3. 否则，创建普通NPC：
+     *    - 生成唯一GUID
+     *    - 创建生物对象
+     *    - 保存到数据库
+     *    - 重新从数据库加载以确保正确初始化
+     *    - 将生物添加到网格系统
+     *
+     * @note 创建的NPC会持久化到数据库，服务器重启后仍然存在
+     *       NPC的位置、阶段掩码等属性基于玩家当前状态
+     */
     //add spawn of creature
     static bool HandleNpcAddCommand(ChatHandler* handler, CreatureEntry id)
     {
@@ -165,6 +274,31 @@ public:
         return true;
     }
 
+    /**
+     * @brief 添加商人物品命令处理函数
+     * @param handler 聊天处理器指针
+     * @param item 物品模板指针
+     * @param mc 最大库存数量（可选）
+     * @param it 补充时间（可选，秒）
+     * @param ec 扩展花费ID（可选）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .npc add item <物品ID> [最大数量] [补充时间] [扩展花费]
+     *
+     * 参数说明：
+     * - 物品ID: 要添加到商品列表的物品
+     * - 最大数量: 0表示无限供应，否则为限量商品
+     * - 补充时间: 限量商品的补充时间（秒）
+     * - 扩展花费: 特殊货币花费ID（如荣誉点、竞技场点等）
+     *
+     * 执行流程：
+     * 1. 验证物品是否存在
+     * 2. 获取选中的商人NPC
+     * 3. 验证商品数据有效性
+     * 4. 添加物品到NPC的商品列表
+     *
+     * @note 选中的NPC必须具有商人的NPC标志
+     */
     //add item in vendorlist
     static bool HandleNpcAddVendorItemCommand(ChatHandler* handler, ItemTemplate const* item, Optional<uint32> mc, Optional<uint32> it, Optional<uint32> ec)
     {
@@ -201,6 +335,23 @@ public:
         return true;
     }
 
+    /**
+     * @brief 添加NPC移动路径点命令处理函数
+     * @param handler 聊天处理器指针
+     * @param lowGuid 生物生成ID
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .npc add move <生成ID> - 为NPC设置路径点移动类型
+     *
+     * 该命令将NPC的移动类型设置为WAYPOINT_MOTION_TYPE，
+     * 使NPC按照预设的路径点进行移动。
+     *
+     * 执行流程：
+     * 1. 验证生物是否存在
+     * 2. 更新数据库中的移动类型为路径点移动
+     *
+     * @note 需要先设置路径点，NPC才会真正移动
+     */
     //add move for creature
     static bool HandleNpcAddMoveCommand(ChatHandler* handler, CreatureSpawnId lowGuid)
     {
@@ -226,6 +377,20 @@ public:
         return true;
     }
 
+    /**
+     * @brief 允许/禁止NPC移动命令处理函数
+     * @param handler 聊天处理器指针
+     * @return 始终返回true
+     *
+     * .npc set allowmove - 切换全服NPC移动开关
+     *
+     * 该命令用于全局控制所有NPC的移动行为：
+     * - 如果当前允许移动，则禁止
+     * - 如果当前禁止移动，则允许
+     *
+     * @note 这是一个全局设置，影响服务器上所有NPC的移动
+     *       主要用于调试或特殊事件期间冻结所有NPC
+     */
     static bool HandleNpcSetAllowMovementCommand(ChatHandler* handler)
     {
         if (sWorld->getAllowMovement())
@@ -241,6 +406,20 @@ public:
         return true;
     }
 
+    /**
+     * @brief 设置NPC模板ID命令处理函数
+     * @param handler 聊天处理器指针
+     * @param newEntryNum 新的模板ID
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .npc set entry <模板ID> - 将选中的NPC更改为新的模板类型
+     *
+     * 该命令会更新NPC的所有属性为新模板的默认值，
+     * 包括模型、属性、技能等。
+     *
+     * @note 这是一个临时修改，不会保存到数据库
+     *       重启服务器或NPC重生后会恢复原模板
+     */
     static bool HandleNpcSetEntryCommand(ChatHandler* handler, CreatureEntry newEntryNum)
     {
         if (!newEntryNum)
@@ -261,6 +440,22 @@ public:
         return true;
     }
 
+    /**
+     * @brief 设置NPC等级命令处理函数
+     * @param handler 聊天处理器指针
+     * @param lvl 新等级（1到最大玩家等级+3）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .npc set level <等级> - 设置选中NPC的等级
+     *
+     * 执行流程：
+     * 1. 验证等级是否在有效范围内
+     * 2. 获取选中的NPC（不能是宠物）
+     * 3. 设置NPC的等级和生命值
+     * 4. 保存到数据库
+     *
+     * @note 等级会影响NPC的属性，生命值会被重新计算
+     */
     //change level of creature or pet
     static bool HandleNpcSetLevelCommand(ChatHandler* handler, uint8 lvl)
     {
@@ -287,6 +482,23 @@ public:
         return true;
     }
 
+    /**
+     * @brief 删除NPC命令处理函数
+     * @param handler 聊天处理器指针
+     * @param spawnIdArg 生物生成ID（可选）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .npc delete [生成ID] - 删除选中或指定ID的NPC
+     *
+     * 执行流程：
+     * 1. 如果提供了生成ID，直接使用该ID
+     * 2. 否则使用选中的NPC
+     * 3. 如果是临时召唤物，执行反召唤
+     * 4. 否则从数据库中删除该NPC
+     *
+     * @note 删除操作会从世界中移除NPC并从数据库中删除记录
+     *       此操作不可逆，请谨慎使用
+     */
     static bool HandleNpcDeleteCommand(ChatHandler* handler, Optional<CreatureSpawnId> spawnIdArg)
     {
         ObjectGuid::LowType spawnId;
@@ -323,6 +535,21 @@ public:
         }
     }
 
+    /**
+     * @brief 删除商人物品命令处理函数
+     * @param handler 聊天处理器指针
+     * @param item 要删除的物品模板指针
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .npc delete item <物品ID> - 从选中商人的商品列表中删除指定物品
+     *
+     * 执行流程：
+     * 1. 验证选中的NPC是否是商人
+     * 2. 验证物品是否存在
+     * 3. 从商人的商品列表中移除物品
+     *
+     * @note 选中的NPC必须具有商人的NPC标志
+     */
     //del item from vendor list
     static bool HandleNpcDeleteVendorItemCommand(ChatHandler* handler, ItemTemplate const* item)
     {
@@ -353,6 +580,24 @@ public:
         return true;
     }
 
+    /**
+     * @brief 设置NPC阵营命令处理函数
+     * @param handler 聊天处理器指针
+     * @param factionId 阵营模板ID
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .npc set factionid <阵营ID> - 设置选中NPC的阵营
+     *
+     * 执行流程：
+     * 1. 验证阵营ID是否有效
+     * 2. 获取选中的NPC
+     * 3. 更新内存中的阵营
+     * 4. 更新模板数据
+     * 5. 更新数据库记录
+     *
+     * @note 阵营决定NPC对玩家和其他NPC的敌对/友好关系
+     *       阵营ID定义在 FactionTemplate.dbc 中
+     */
     //set faction of creature
     static bool HandleNpcSetFactionIdCommand(ChatHandler* handler, uint32 factionId)
     {
@@ -391,6 +636,29 @@ public:
         return true;
     }
 
+    /**
+     * @brief 设置NPC标志命令处理函数
+     * @param handler 聊天处理器指针
+     * @param npcFlags NPC标志位掩码
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .npc set flag <标志> - 设置选中NPC的NPC标志
+     *
+     * NPC标志决定NPC的功能类型，例如：
+     * - NPC_FLAG_GOSSIP: 可以对话
+     * - NPC_FLAG_QUESTGIVER: 任务NPC
+     * - NPC_FLAG_VENDOR: 商人
+     * - NPC_FLAG_TRAINER: 训练师
+     * - NPC_FLAG_FLIGHTMASTER: 飞行管理员
+     * 等等
+     *
+     * 执行流程：
+     * 1. 获取选中的NPC
+     * 2. 设置新的NPC标志
+     * 3. 更新数据库
+     *
+     * @note 修改后需要重新进入游戏才能看到效果
+     */
     //set npcflag of creature
     static bool HandleNpcSetFlagCommand(ChatHandler* handler, NPCFlags npcFlags)
     {
@@ -417,6 +685,25 @@ public:
         return true;
     }
 
+    /**
+     * @brief 设置NPC数据命令处理函数（用于脚本测试）
+     * @param handler 聊天处理器指针
+     * @param data_1 数据1
+     * @param data_2 数据2
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .npc set data <数据1> <数据2> - 向NPC的AI发送数据
+     *
+     * 该命令用于脚本调试，可以向NPC的AI传递自定义数据。
+     * AI脚本可以通过SetData/GetData接口接收和使用这些数据。
+     *
+     * 执行流程：
+     * 1. 获取选中的NPC
+     * 2. 调用NPC的AI的SetData方法
+     * 3. 显示NPC的AI类型或脚本名称
+     *
+     * @note 主要用于开发和调试AI脚本
+     */
     //set data of creature for testing scripting
     static bool HandleNpcSetDataCommand(ChatHandler* handler, uint32 data_1, uint32 data_2)
     {
@@ -435,6 +722,20 @@ public:
         return true;
     }
 
+    /**
+     * @brief 让NPC跟随玩家命令处理函数
+     * @param handler 聊天处理器指针
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .npc follow - 让选中的NPC跟随自己
+     *
+     * 执行流程：
+     * 1. 获取玩家和选中的NPC
+     * 2. 设置NPC的移动模式为跟随玩家
+     * 3. 使用宠物的默认跟随距离和角度
+     *
+     * @note 这是一个临时效果，NPC重生后会恢复原行为
+     */
     //npc follow handling
     static bool HandleNpcFollowCommand(ChatHandler* handler)
     {
@@ -455,6 +756,29 @@ public:
         return true;
     }
 
+    /**
+     * @brief 显示NPC详细信息命令处理函数
+     * @param handler 聊天处理器指针
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .npc info - 显示选中NPC的详细信息
+     *
+     * 显示的信息包括：
+     * - 基本信息：名称、生成ID、GUID、模板ID、阵营、NPC标志、模型ID
+     * - 生成组信息：组名、组ID、组标志、激活状态
+     * - 重生信息：兼容模式、重生延迟
+     * - 等级和装备信息
+     * - 生命值信息
+     * - 移动模板数据
+     * - 单位标志和动态标志
+     * - 战利品ID（普通战利品、偷窃战利品、剥皮战利品）
+     * - 副本ID、阶段掩码、护甲值
+     * - 位置坐标
+     * - AI信息：AI名称、脚本名称、AI类型、反应状态
+     * - 额外标志和机制免疫掩码
+     *
+     * @note 这是一个非常有用的调试和信息查询命令
+     */
     static bool HandleNpcInfoCommand(ChatHandler* handler)
     {
         Creature* target = handler->getSelectedCreature();
@@ -527,6 +851,22 @@ public:
         return true;
     }
 
+    /**
+     * @brief 查找附近NPC命令处理函数
+     * @param handler 聊天处理器指针
+     * @param dist 搜索距离（可选，默认10.0）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .npc near [距离] - 列出玩家附近的NPC
+     *
+     * 执行流程：
+     * 1. 确定搜索距离（默认10码）
+     * 2. 从数据库查询指定距离内的所有NPC
+     * 3. 显示每个NPC的生成ID、名称和位置
+     * 4. 统计并显示找到的NPC总数
+     *
+     * @note 用于查找附近的NPC，便于管理和调试
+     */
     static bool HandleNpcNearCommand(ChatHandler* handler, Optional<float> dist)
     {
         float distance = dist.value_or(10.0f);
@@ -573,6 +913,23 @@ public:
         return true;
     }
 
+    /**
+     * @brief 移动NPC到玩家位置命令处理函数
+     * @param handler 聊天处理器指针
+     * @param spawnid NPC生成ID（可选）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .npc move [生成ID] - 将NPC移动到玩家当前位置
+     *
+     * 执行流程：
+     * 1. 如果提供了生成ID，使用该ID；否则使用选中的NPC
+     * 2. 验证NPC是否存在且与玩家在同一地图
+     * 3. 更新内存中的NPC位置
+     * 4. 更新数据库中的NPC位置
+     * 5. 如果NPC当前在游戏中，重新生成以应用新位置
+     *
+     * @note 这是一个持久化操作，会更新数据库
+     */
     //move selected creature
     static bool HandleNpcMoveCommand(ChatHandler* handler, Optional<CreatureSpawnId> spawnid)
     {
@@ -623,6 +980,19 @@ public:
         return true;
     }
 
+    /**
+     * @brief 播放NPC表情命令处理函数
+     * @param handler 聊天处理器指针
+     * @param emote 表情ID
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .npc playemote <表情ID> - 让选中的NPC播放指定表情
+     *
+     * 该命令设置NPC的表情状态，使其持续播放指定表情。
+     * 表情ID定义在 Emotes.dbc 中。
+     *
+     * @note 这是一个临时效果，NPC重生后会恢复
+     */
     //play npc emote
     static bool HandleNpcPlayEmoteCommand(ChatHandler* handler, Emote emote)
     {
@@ -639,6 +1009,23 @@ public:
         return true;
     }
 
+    /**
+     * @brief 设置NPC模型命令处理函数
+     * @param handler 聊天处理器指针
+     * @param displayId 显示ID（模型ID）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .npc set model <显示ID> - 设置选中NPC的模型外观
+     *
+     * 执行流程：
+     * 1. 获取选中的NPC（不能是宠物）
+     * 2. 验证显示ID是否有效
+     * 3. 设置当前显示ID和原生显示ID
+     * 4. 保存到数据库
+     *
+     * @note 显示ID定义在 CreatureDisplayInfo.dbc 中
+     *       此修改会持久化到数据库
+     */
     //set model of creature
     static bool HandleNpcSetModelCommand(ChatHandler* handler, uint32 displayId)
     {
@@ -774,6 +1161,24 @@ public:
         return true;
     }
 
+    /**
+     * @brief 设置NPC阶段掩码命令处理函数
+     * @param handler 聊天处理器指针
+     * @param phasemask 阶段掩码值（不能为0）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .npc set phase <阶段掩码> - 设置选中NPC的阶段掩码
+     *
+     * 阶段掩码控制NPC的可见性和交互性，只有当玩家和NPC的阶段掩码有交集时才能看到NPC。
+     *
+     * 执行流程：
+     * 1. 验证阶段掩码不为0
+     * 2. 获取选中的NPC
+     * 3. 设置NPC的阶段掩码
+     * 4. 如果不是宠物，保存到数据库
+     *
+     * @note 阶段系统用于任务链中的阶段性内容展示
+     */
     //npc phasemask handling
     //change phasemask of creature or pet
     static bool HandleNpcSetPhaseCommand(ChatHandler* handler, uint32 phasemask)
@@ -801,6 +1206,25 @@ public:
         return true;
     }
 
+    /**
+     * @brief 设置NPC游荡距离命令处理函数
+     * @param handler 聊天处理器指针
+     * @param option 游荡距离（非负数）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .npc set wanderdistance <距离> - 设置NPC的游荡距离
+     *
+     * 执行流程：
+     * 1. 验证距离参数（必须>=0）
+     * 2. 根据距离设置移动类型：
+     *    - 距离=0: 站立不动（IDLE_MOTION_TYPE）
+     *    - 距离>0: 随机游荡（RANDOM_MOTION_TYPE）
+     * 3. 更新NPC的游荡距离和移动类型
+     * 4. 如果NPC活着，重新生成以应用新设置
+     * 5. 更新数据库
+     *
+     * @note 游荡距离决定NPC随机移动的范围
+     */
     //set spawn dist of creature
     static bool HandleNpcSetWanderDistanceCommand(ChatHandler* handler, float option)
     {
@@ -843,6 +1267,21 @@ public:
         return true;
     }
 
+    /**
+     * @brief 设置NPC重生时间命令处理函数
+     * @param handler 聊天处理器指针
+     * @param spawnTime 重生时间（秒）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .npc set spawntime <秒数> - 设置NPC被击杀后的重生时间
+     *
+     * 执行流程：
+     * 1. 获取选中的NPC
+     * 2. 更新数据库中的重生时间
+     * 3. 更新内存中的重生延迟
+     *
+     * @note 重生时间从NPC死亡开始计算
+     */
     //spawn time handling
     static bool HandleNpcSetSpawnTimeCommand(ChatHandler* handler, uint32 spawnTime)
     {
@@ -861,6 +1300,22 @@ public:
         return true;
     }
 
+    /**
+     * @brief 让NPC说话命令处理函数
+     * @param handler 聊天处理器指针
+     * @param text 说话内容
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .npc say <文本> - 让选中的NPC说话（附近玩家可见）
+     *
+     * 该命令让NPC以普通说话的方式发送消息，附近玩家都能看到。
+     * 根据文本末尾标点符号自动触发相应表情：
+     * - '?' 触发疑问表情
+     * - '!' 触发感叹表情
+     * - 其他 触发说话表情
+     *
+     * @note 这是临时效果，仅用于测试或剧情演示
+     */
     static bool HandleNpcSayCommand(ChatHandler* handler, Tail text)
     {
         if (text.empty())
@@ -887,6 +1342,19 @@ public:
         return true;
     }
 
+    /**
+     * @brief 让NPC发送文本表情命令处理函数
+     * @param handler 聊天处理器指针
+     * @param text 表情文本
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .npc textemote <文本> - 让选中NPC发送文本表情
+     *
+     * 该命令让NPC以表情文本的形式发送消息，例如：
+     * ".npc textemote 挥手致意" 会显示为 "NPC名 挥手致意"
+     *
+     * @note 这是临时效果，仅用于测试或剧情演示
+     */
     //show text emote by creature in chat
     static bool HandleNpcTextEmoteCommand(ChatHandler* handler, Tail text)
     {
@@ -907,6 +1375,21 @@ public:
         return true;
     }
 
+    /**
+     * @brief 停止NPC跟随命令处理函数
+     * @param handler 聊天处理器指针
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .npc follow stop - 停止选中NPC跟随自己
+     *
+     * 执行流程：
+     * 1. 获取玩家和选中的NPC
+     * 2. 查找NPC的跟随移动生成器
+     * 3. 验证是否正在跟随该玩家
+     * 4. 移除跟随移动生成器
+     *
+     * @note 只能停止正在跟随自己的NPC
+     */
     // npc unfollow handling
     static bool HandleNpcUnFollowCommand(ChatHandler* handler)
     {
@@ -942,6 +1425,19 @@ public:
         return true;
     }
 
+    /**
+     * @brief 让NPC私聊玩家命令处理函数
+     * @param handler 聊天处理器指针
+     * @param recv 接收者（玩家名称或链接）
+     * @param text 私聊内容
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .npc whisper <玩家名> <文本> - 让选中NPC私聊指定玩家
+     *
+     * 该命令让NPC向指定玩家发送私聊消息，只有该玩家能看到。
+     *
+     * @note 这是临时效果，仅用于测试或剧情演示
+     */
     // make npc whisper to player
     static bool HandleNpcWhisperCommand(ChatHandler* handler, Variant<Hyperlink<player>, std::string_view> recv, Tail text)
     {
@@ -965,6 +1461,19 @@ public:
         return true;
     }
 
+    /**
+     * @brief 让NPC喊话命令处理函数
+     * @param handler 聊天处理器指针
+     * @param text 喊话内容
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .npc yell <文本> - 让选中NPC喊话（大范围可见）
+     *
+     * 该命令让NPC以喊话方式发送消息，比普通说话范围更大。
+     * 同时触发喊话表情动画。
+     *
+     * @note 这是临时效果，仅用于测试或剧情演示
+     */
     static bool HandleNpcYellCommand(ChatHandler* handler, Tail text)
     {
         if (text.empty())
@@ -986,6 +1495,23 @@ public:
         return true;
     }
 
+    /**
+     * @brief 添加临时NPC命令处理函数
+     * @param handler 聊天处理器指针
+     * @param lootStr 战利品选项（可选，"loot"或"noloot"）
+     * @param id 生物模板ID
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .npc add temp [loot|noloot] <模板ID> - 在玩家位置生成临时NPC
+     *
+     * 参数说明：
+     * - loot: NPC死亡后留下尸体一段时间（30秒）
+     * - noloot: NPC死亡后立即消失
+     *
+     * 临时NPC不会保存到数据库，适合用于测试或临时事件。
+     *
+     * @note 临时NPC在消失后不会重生
+     */
     // add creature, temp only
     static bool HandleNpcAddTempSpawnCommand(ChatHandler* handler, Optional<std::string_view> lootStr, CreatureEntry id)
     {
@@ -1009,6 +1535,28 @@ public:
         return true;
     }
 
+    /**
+     * @brief 驯服NPC命令处理函数
+     * @param handler 聊天处理器指针
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .npc tame - 将选中的NPC驯服为自己的宠物
+     *
+     * 执行流程：
+     * 1. 验证目标是否可驯服（必须是生物，不能已经是宠物）
+     * 2. 检查玩家是否已有宠物
+     * 3. 验证生物模板是否可驯服（考虑猎人天赋）
+     * 4. 创建驯服的宠物
+     * 5. 设置宠物位置在玩家附近
+     * 6. 设置宠物为防御模式
+     * 7. 计算合适的等级（玩家等级-5与目标等级的最大值）
+     * 8. 添加宠物到世界并显示升级效果
+     * 9. 设置玩家拥有宠物
+     * 10. 保存宠物到数据库并初始化技能
+     *
+     * @note 只有可驯服的生物才能被驯服
+     *       兽王猎人可以驯服特殊宠物
+     */
     //npc tame handling
     static bool HandleNpcTameCommand(ChatHandler* handler)
     {
@@ -1076,6 +1624,26 @@ public:
         return true;
     }
 
+    /**
+     * @brief 强制NPC进入逃脱模式命令处理函数
+     * @param handler 聊天处理器指针
+     * @param why 逃脱原因（可选）
+     * @param force 强制标志（可选）
+     * @return 命令执行成功返回true，失败返回false
+     *
+     * .npc evade [原因] [force] - 强制NPC进入逃脱模式
+     *
+     * 该命令让NPC脱离战斗并返回出生点，用于：
+     * - 重置卡住的NPC
+     * - 测试逃脱行为
+     * - 清除NPC的战斗状态
+     *
+     * 参数：
+     * - 原因: 指定逃脱原因（如EVADE_REASON_NO_HOSTILES等）
+     * - force: 强制逃脱，即使NPC已经在逃脱状态
+     *
+     * @note 不能对宠物使用此命令
+     */
     static bool HandleNpcEvadeCommand(ChatHandler* handler, Optional<CreatureAI::EvadeReason> why, Optional<EXACT_SEQUENCE("force")> force)
     {
         Creature* creatureTarget = handler->getSelectedCreature();

@@ -15,6 +15,23 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file OutdoorPvPZM.cpp
+ * @brief 赞加沼泽户外PvP系统实现 - 双塔废墟争夺战
+ *
+ * 本模块实现了赞加沼泽的双塔废墟争夺战机制：
+ * - 东部信标塔 (East Beacon)
+ * - 西部信标塔 (West Beacon)
+ * - 中央墓地争夺点
+ *
+ * 主要功能：
+ * - 两座信标塔的争夺机制
+ * - 占领全部两座塔后才能占领中央墓地
+ * - 墓地控制权转移
+ * - 旗帜携带机制（从战场斥候获取战旗并携带到墓地）
+ * - 阵营增益效果管理
+ */
+
 #include "OutdoorPvPZM.h"
 #include "Creature.h"
 #include "GossipDef.h"
@@ -26,62 +43,74 @@
 #include "ScriptMgr.h"
 #include "WorldStatePackets.h"
 
+/** 受PvP增益效果影响的区域数量 */
 uint8 const OutdoorPvPZMBuffZonesNum = 5;
 
-// the buff is cast in these zones
+/** 受PvP增益效果影响的区域ID数组 */
 uint32 const OutdoorPvPZMBuffZones[OutdoorPvPZMBuffZonesNum] = { 3521, 3607, 3717, 3715, 3716 };
 
-// linked when the central tower is controlled
+/** 墓地所在区域ID */
 uint32 const ZM_GRAVEYARD_ZONE = 3521;
 
-// linked when the central tower is controlled
+/** 墓地ID */
 uint32 const ZM_GRAVEYARD_ID = 969;
 
-// banners 182527, 182528, 182529, gotta check them ingame
+/** 联盟控制时的旗帜游戏对象配置 */
 go_type const ZM_Banner_A = { 182527, 530, { 253.54f, 7083.81f, 36.7728f, -0.017453f }, { 0.0f, 0.0f, 0.008727f, -0.999962f } };
+
+/** 部落控制时的旗帜游戏对象配置 */
 go_type const ZM_Banner_H = { 182528, 530, { 253.54f, 7083.81f, 36.7728f, -0.017453f }, { 0.0f, 0.0f, 0.008727f, -0.999962f } };
+
+/** 中立状态下的旗帜游戏对象配置 */
 go_type const ZM_Banner_N = { 182529, 530, { 253.54f, 7083.81f, 36.7728f, -0.017453f }, { 0.0f, 0.0f, 0.008727f, -0.999962f } };
 
-// horde field scout spawn data
+/** 部落战场斥候生成数据 */
 creature_type const ZM_HordeFieldScout = { 18564, 530, { 296.625f, 7818.4f, 42.6294f, 5.18363f } };
 
-// alliance field scout spawn data
+/** 联盟战场斥候生成数据 */
 creature_type const ZM_AllianceFieldScout = { 18581, 530, { 374.395f, 6230.08f, 22.8351f, 0.593412f } };
 
+/**
+ * @brief 信标塔世界状态信息结构
+ */
 struct zm_beacon
 {
-    uint32 ui_tower_n;
-    uint32 ui_tower_h;
-    uint32 ui_tower_a;
-    uint32 map_tower_n;
-    uint32 map_tower_h;
-    uint32 map_tower_a;
-    uint32 event_enter;
-    uint32 event_leave;
+    uint32 ui_tower_n;     ///< UI显示 - 中立状态
+    uint32 ui_tower_h;     ///< UI显示 - 部落控制
+    uint32 ui_tower_a;     ///< UI显示 - 联盟控制
+    uint32 map_tower_n;    ///< 地图显示 - 中立状态
+    uint32 map_tower_h;    ///< 地图显示 - 部落控制
+    uint32 map_tower_a;    ///< 地图显示 - 联盟控制
+    uint32 event_enter;    ///< 进入区域事件ID
+    uint32 event_leave;    ///< 离开区域事件ID
 };
 
+/** 信标塔世界状态信息数组 */
 zm_beacon const ZMBeaconInfo[ZM_NUM_BEACONS] =
 {
     { 2560, 2559, 2558, 2652, 2651, 2650, 11807, 11806 },
     { 2557, 2556, 2555, 2646, 2645, 2644, 11805, 11804 }
 };
 
+/** 联盟占领信标塔时的区域广播文本ID */
 uint32 const ZMBeaconCaptureA[ZM_NUM_BEACONS] =
 {
     TEXT_EAST_BEACON_TAKEN_ALLIANCE,
     TEXT_WEST_BEACON_TAKEN_ALLIANCE
 };
 
+/** 部落占领信标塔时的区域广播文本ID */
 uint32 const ZMBeaconCaptureH[ZM_NUM_BEACONS] =
 {
     TEXT_EAST_BEACON_TAKEN_HORDE,
     TEXT_WEST_BEACON_TAKEN_HORDE
 };
 
+/** 信标塔争夺点游戏对象配置 */
 go_type const ZMCapturePoints[ZM_NUM_BEACONS] =
 {
-    { 182523, 530, { 303.243f, 6841.36f, 40.1245f, -1.58825f }, { 0.0f, 0.0f, 0.71325f, -0.700909f } },
-    { 182522, 530, { 336.466f, 7340.26f, 41.4984f, -1.58825f }, { 0.0f, 0.0f, 0.71325f, -0.700909f } }
+    { 182523, 530, { 303.243f, 6841.36f, 40.1245f, -1.58825f }, { 0.0f, 0.0f, 0.71325f, -0.700909f } },  // 东部信标塔
+    { 182522, 530, { 336.466f, 7340.26f, 41.4984f, -1.58825f }, { 0.0f, 0.0f, 0.71325f, -0.700909f } }   // 西部信标塔
 };
 
 OPvPCapturePointZM_Beacon::OPvPCapturePointZM_Beacon(OutdoorPvP* pvp, ZM_BeaconType type) : OPvPCapturePoint(pvp), m_TowerType(type), m_TowerState(ZM_TOWERSTATE_N)

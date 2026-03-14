@@ -1,3 +1,28 @@
+/**
+ * @file Object.cpp
+ * @brief 游戏对象基类实现文件
+ *
+ * 本文件实现了 Object 类及其相关功能，这是 TrinityCore 中所有游戏对象的基类。
+ * Object 类提供了：
+ * - 对象属性值管理系统（UpdateField 系统）
+ * - 对象创建、更新、销毁的网络同步机制
+ * - 对象在世界中的生命周期管理
+ * - 类型系统和类型转换支持
+ *
+ * 继承关系：
+ * - Object（基类）
+ *   - WorldObject（世界中的对象，有位置信息）
+ *     - Unit（单位：玩家、生物等）
+ *       - Player（玩家）
+ *       - Creature（生物）
+ *     - GameObject（游戏对象）
+ *     - DynamicObject（动态对象）
+ *     - Corpse（尸体）
+ *   - Item（物品）
+ *
+ * @note 本文件是 TrinityCore 核心架构的重要组成部分，修改时需格外谨慎
+ */
+
 /*
  * This file is part of the TrinityCore Project. See AUTHORS file for Copyright information
  *
@@ -51,6 +76,17 @@
 #include "World.h"
 #include <G3D/Vector3.h>
 
+/**
+ * @brief 可见性距离常量表
+ *
+ * 根据不同的可见性类型定义不同的可视距离：
+ * - Normal: 默认可见距离（普通对象）
+ * - Tiny: 极小可见距离（小型对象）
+ * - Small: 小型可见距离
+ * - Large: 大型可见距离（大型NPC等）
+ * - Gigantic: 巨型可见距离（世界Boss等）
+ * - Max: 最大可见距离上限
+ */
 constexpr float VisibilityDistances[AsUnderlyingType(VisibilityDistanceType::Max)] =
 {
     DEFAULT_VISIBILITY_DISTANCE,
@@ -61,23 +97,51 @@ constexpr float VisibilityDistances[AsUnderlyingType(VisibilityDistanceType::Max
     MAX_VISIBILITY_DISTANCE
 };
 
+/**
+ * @brief Object 类构造函数
+ *
+ * 初始化对象的基本属性：
+ * - 设置对象类型为 TYPEID_OBJECT（基类类型）
+ * - 设置对象类型掩码为 TYPEMASK_OBJECT
+ * - 初始化更新标志为无
+ * - 将属性值数组指针设为 nullptr（稍后由 _InitValues 分配）
+ * - 初始化字段通知标志为动态标志
+ * - 设置对象状态标志为不在世界中
+ *
+ * @note 使用 NoopObjectDeleter 初始化脚本引用，防止脚本系统删除对象
+ *       实际的对象生命周期由游戏系统管理
+ */
 Object::Object() : m_scriptRef(this, NoopObjectDeleter())
 {
-    m_objectTypeId      = TYPEID_OBJECT;
-    m_objectType        = TYPEMASK_OBJECT;
-    m_updateFlag        = UPDATEFLAG_NONE;
+    m_objectTypeId      = TYPEID_OBJECT;    ///< 对象类型ID，派生类会覆盖此值
+    m_objectType        = TYPEMASK_OBJECT;  ///< 对象类型掩码，用于快速类型判断
+    m_updateFlag        = UPDATEFLAG_NONE;  ///< 更新标志，用于控制更新包的生成
 
-    m_uint32Values      = nullptr;
-    m_valuesCount       = 0;
-    _fieldNotifyFlags   = UF_FLAG_DYNAMIC;
+    m_uint32Values      = nullptr;          ///< 属性值数组，稍后由 _InitValues 分配
+    m_valuesCount       = 0;                ///< 属性值数量，由派生类设置
+    _fieldNotifyFlags   = UF_FLAG_DYNAMIC;  ///< 字段通知标志，用于控制哪些字段需要通知
 
-    m_inWorld           = false;
-    m_isNewObject       = false;
-    m_objectUpdated     = false;
+    m_inWorld           = false;            ///< 对象是否在世界中
+    m_isNewObject       = false;            ///< 是否为新创建的对象
+    m_objectUpdated     = false;            ///< 对象是否在更新队列中
 }
 
+/**
+ * @brief Object 类析构函数
+ *
+ * 执行对象销毁时的安全检查和资源清理：
+ * 1. 检查对象是否仍在世界中（如果是，记录致命错误并中止）
+ * 2. 检查对象是否仍在更新队列中（如果是，记录致命错误并中止）
+ * 3. 释放属性值数组的内存
+ *
+ * @warning 如果对象仍在世界中或仍在更新队列中被销毁，会导致服务器崩溃
+ *          这是严重的逻辑错误，必须先正确调用 RemoveFromWorld
+ *
+ * @note 对于 Item 对象，会额外记录其槽位信息以便调试
+ */
 Object::~Object()
 {
+    // 安全检查：对象不应在世界中被销毁
     if (IsInWorld())
     {
         TC_LOG_FATAL("misc", "Object::~Object {} deleted but still in world!!", GetGUID().ToString());
@@ -86,16 +150,30 @@ Object::~Object()
         ABORT();
     }
 
+    // 安全检查：对象不应在更新队列中被销毁
     if (m_objectUpdated)
     {
         TC_LOG_FATAL("misc", "Object::~Object {} deleted but still in update list!!", GetGUID().ToString());
         ABORT();
     }
 
+    // 释放属性值数组内存
     delete [] m_uint32Values;
     m_uint32Values = nullptr;
 }
 
+/**
+ * @brief 初始化属性值数组
+ *
+ * 根据派生类设置的 m_valuesCount 分配属性值数组内存：
+ * - 分配 m_valuesCount 个 uint32 的空间
+ * - 将所有值初始化为 0
+ * - 设置变更掩码的计数
+ * - 标记对象为未更新状态
+ *
+ * @pre m_valuesCount 必须在调用前由派生类正确设置
+ * @note 此函数由 _Create 自动调用，一般不需要手动调用
+ */
 void Object::_InitValues()
 {
     m_uint32Values = new uint32[m_valuesCount];
@@ -106,16 +184,43 @@ void Object::_InitValues()
     m_objectUpdated = false;
 }
 
+/**
+ * @brief 创建对象并设置基本属性
+ *
+ * 这是对象初始化的核心函数，执行以下操作：
+ * 1. 如果属性值数组未初始化，调用 _InitValues 进行初始化
+ * 2. 根据参数构造对象的 GUID
+ * 3. 设置对象的 GUID 字段（OBJECT_FIELD_GUID）
+ * 4. 设置对象的类型掩码字段（OBJECT_FIELD_TYPE）
+ * 5. 设置压缩 GUID（用于网络传输优化）
+ *
+ * @param guidlow  GUID 的低位部分（对象在某个类型中的唯一编号）
+ * @param entry    对象的条目ID（对应数据库中的条目）
+ * @param guidhigh GUID 的高位部分（定义对象类型，如 HighGuid::Player）
+ *
+ * @note GUID 由三部分组成：高位类型标识 + 条目ID + 低位编号
+ *       例如：Player GUID = HighGuid::Player + 0 + 玩家数据库ID
+ */
 void Object::_Create(ObjectGuid::LowType guidlow, uint32 entry, HighGuid guidhigh)
 {
     if (!m_uint32Values) _InitValues();
 
+    // 构造完整的 GUID
     ObjectGuid guid(guidhigh, entry, guidlow);
-    SetGuidValue(OBJECT_FIELD_GUID, guid);
-    SetUInt32Value(OBJECT_FIELD_TYPE, m_objectType);
-    m_PackGUID.Set(guid);
+    SetGuidValue(OBJECT_FIELD_GUID, guid);      // 设置 GUID 字段
+    SetUInt32Value(OBJECT_FIELD_TYPE, m_objectType);  // 设置类型掩码
+    m_PackGUID.Set(guid);                       // 设置压缩 GUID，用于网络包优化
 }
 
+/**
+ * @brief 拼接指定范围的属性值字段
+ *
+ * 将从 startIndex 开始的 size 个属性值拼接成字符串，用于调试输出
+ *
+ * @param startIndex 起始索引
+ * @param size       要拼接的字段数量
+ * @return 拼接后的字符串，格式为 "值1 值2 值3 ..."
+ */
 std::string Object::_ConcatFields(uint16 startIndex, uint16 size) const
 {
     std::ostringstream ss;
@@ -124,6 +229,15 @@ std::string Object::_ConcatFields(uint16 startIndex, uint16 size) const
     return ss.str();
 }
 
+// ============================================================================
+// 添加到世界
+// ============================================================================
+// 职责：将对象标记为在世界中，触发相关初始化
+// 参数：无
+// 返回值：无
+// 调用时机：对象创建后、传送后
+// 注意：必须在 AddToMap 之前调用
+// ============================================================================
 void Object::AddToWorld()
 {
     if (m_inWorld)
@@ -143,6 +257,15 @@ void Object::AddToWorld()
         m_scriptRef.reset(this, NoopObjectDeleter());
 }
 
+// ============================================================================
+// 从世界移除
+// ============================================================================
+// 职责：将对象标记为不在世界中，清理相关状态
+// 参数：无
+// 返回值：无
+// 调用时机：对象销毁、传送离开时
+// 注意：必须在 RemoveFromMap 之后调用
+// ============================================================================
 void Object::RemoveFromWorld()
 {
     if (!m_inWorld)
@@ -156,18 +279,43 @@ void Object::RemoveFromWorld()
     m_scriptRef = nullptr;
 }
 
+/**
+ * @brief 构建移动更新块
+ *
+ * 构建一个包含对象移动信息的更新块，用于通知客户端对象的移动状态变化。
+ * 这通常用于对象位置、速度或移动标志发生变化时。
+ *
+ * @param data  更新数据容器，用于存储构建的数据
+ * @param flags 移动更新标志
+ *
+ * @note 更新块格式：
+ *       1. 更新类型（UPDATETYPE_MOVEMENT）
+ *       2. 压缩的 GUID
+ *       3. 移动信息（由 BuildMovementUpdate 填充）
+ */
 void Object::BuildMovementUpdateBlock(UpdateData* data, uint32 flags) const
 {
     ByteBuffer& buf = data->GetBuffer();
 
-    buf << uint8(UPDATETYPE_MOVEMENT);
-    buf << GetPackGUID();
+    buf << uint8(UPDATETYPE_MOVEMENT);  // 更新类型：移动更新
+    buf << GetPackGUID();                // 对象的压缩 GUID
 
-    BuildMovementUpdate(&buf, flags);
+    BuildMovementUpdate(&buf, flags);    // 填充移动信息
 
     data->AddUpdateBlock();
 }
 
+// ============================================================================
+// 构建创建更新块
+// ============================================================================
+// 职责：构建对象的创建更新数据包，发送给指定玩家
+// 参数：
+//   updateData - 更新数据容器
+//   target    - 目标玩家
+// 返回值：无
+// 调用时机：对象进入玩家视野时
+// 注意：包含对象的所有可见属性
+// ============================================================================
 void Object::BuildCreateUpdateBlockForPlayer(UpdateData* data, Player* target) const
 {
     if (!target)
@@ -198,41 +346,89 @@ void Object::BuildCreateUpdateBlockForPlayer(UpdateData* data, Player* target) c
     data->AddUpdateBlock();
 }
 
+/**
+ * @brief 向指定玩家发送对象更新
+ *
+ * 根据玩家是否已经在客户端看到此对象，发送不同类型的更新：
+ * - 如果玩家已经在客户端看到此对象：发送属性值更新
+ * - 如果玩家还没有看到此对象：发送创建更新
+ *
+ * @param player 目标玩家
+ *
+ * @note 这是单播更新，只发送给指定玩家
+ */
 void Object::SendUpdateToPlayer(Player* player)
 {
-    // send create update to player
+    // 发送创建更新到玩家
     UpdateData upd;
     WorldPacket packet;
 
+    // 根据玩家是否已经在客户端看到此对象，选择更新类型
     if (player->HaveAtClient(this))
-        BuildValuesUpdateBlockForPlayer(&upd, player);
+        BuildValuesUpdateBlockForPlayer(&upd, player);  // 属性值更新
     else
-        BuildCreateUpdateBlockForPlayer(&upd, player);
+        BuildCreateUpdateBlockForPlayer(&upd, player);  // 创建更新
     upd.BuildPacket(&packet);
     player->SendDirectMessage(&packet);
 }
 
+/**
+ * @brief 构建属性值更新块
+ *
+ * 构建一个只包含属性值变化的更新块，用于已经存在的对象的属性更新
+ *
+ * @param data   更新数据容器
+ * @param target 目标玩家
+ *
+ * @note 更新块格式：
+ *       1. 更新类型（UPDATETYPE_VALUES）
+ *       2. 压缩的 GUID
+ *       3. 变化的属性值（由 BuildValuesUpdate 填充）
+ */
 void Object::BuildValuesUpdateBlockForPlayer(UpdateData* data, Player const* target) const
 {
     ByteBuffer& buf = data->GetBuffer();
 
-    buf << uint8(UPDATETYPE_VALUES);
-    buf << GetPackGUID();
+    buf << uint8(UPDATETYPE_VALUES);  // 更新类型：属性值更新
+    buf << GetPackGUID();              // 对象的压缩 GUID
 
-    BuildValuesUpdate(UPDATETYPE_VALUES, &buf, target);
+    BuildValuesUpdate(UPDATETYPE_VALUES, &buf, target);  // 填充属性值
 
     data->AddUpdateBlock();
 }
 
+/**
+ * @brief 构建超出范围更新块
+ *
+ * 将对象添加到超出范围的 GUID 列表中，通知客户端此对象已经超出视野范围
+ *
+ * @param data 更新数据容器
+ *
+ * @note 客户端收到此消息后会销毁对应的对象实例
+ */
 void Object::BuildOutOfRangeUpdateBlock(UpdateData* data) const
 {
     data->AddOutOfRangeGUID(GetGUID());
 }
 
+/**
+ * @brief 为玩家销毁对象
+ *
+ * 通知客户端销毁指定对象，通常在对象离开玩家视野或对象被删除时调用。
+ * 对于竞技场中的单位，会发送特殊的竞技场销毁消息。
+ *
+ * @param target  目标玩家
+ * @param onDeath 如果为 true，客户端会触发死亡动画和中断相关效果
+ *
+ * @note 当 onDeath 为 true 时，客户端会调用 CGUnit_C::OnDeath()，触发：
+ *       - 死亡动画
+ *       - 中断某些法术/投射物/光环/声音
+ */
 void Object::DestroyForPlayer(Player* target, bool onDeath) const
 {
     ASSERT(target);
 
+    // 如果是竞技场中的单位，发送特殊的竞技场销毁消息
     if (IsUnit())
     {
         if (Battleground* bg = target->GetBattleground())
@@ -246,38 +442,89 @@ void Object::DestroyForPlayer(Player* target, bool onDeath) const
         }
     }
 
+    // 发送标准的对象销毁消息
     WorldPacket data(SMSG_DESTROY_OBJECT, 8 + 1);
     data << uint64(GetGUID());
-    //! If the following bool is true, the client will call "void CGUnit_C::OnDeath()" for this object.
-    //! OnDeath() does for eg trigger death animation and interrupts certain spells/missiles/auras/sounds...
+    //! 如果以下 bool 为 true，客户端会为此对象调用 "void CGUnit_C::OnDeath()"
+    //! OnDeath() 会触发死亡动画并中断某些法术/投射物/光环/声音...
     data << uint8(onDeath ? 1 : 0);
     target->SendDirectMessage(&data);
 }
 
+/**
+ * @brief 获取指定索引处的32位有符号整数值
+ *
+ * 从属性值数组中读取指定索引的值
+ *
+ * @param index 属性索引（定义在 UpdateFields.h 中）
+ * @return 指定索引处的32位有符号整数
+ *
+ * @warning 如果索引超出范围，会记录错误并触发断言失败
+ */
 int32 Object::GetInt32Value(uint16 index) const
 {
     ASSERT(index < m_valuesCount || PrintIndexError(index, false));
     return m_int32Values[index];
 }
 
+// ============================================================================
+// 获取/设置属性值（32位无符号整数）
+// ============================================================================
+// 职责：读写对象的属性值
+// 参数：
+//   index - 属性索引
+//   value - 要设置的值（仅 Set）
+// 返回值：属性值（仅 Get）
+// 调用时机：任何需要读写对象属性的地方
+// 注意：属性索引定义在 UpdateFields.h 中
+// ============================================================================
 uint32 Object::GetUInt32Value(uint16 index) const
 {
     ASSERT(index < m_valuesCount || PrintIndexError(index, false));
     return m_uint32Values[index];
 }
 
+/**
+ * @brief 获取指定索引处的64位无符号整数值
+ *
+ * 从属性值数组中读取两个连续的32位值，组合成64位值
+ *
+ * @param index 属性起始索引
+ * @return 指定索引处的64位无符号整数
+ *
+ * @note GUID 和某些大数值使用64位存储，占用两个连续的32位字段
+ */
 uint64 Object::GetUInt64Value(uint16 index) const
 {
     ASSERT(index + 1 < m_valuesCount || PrintIndexError(index, false));
     return *((uint64*)&(m_uint32Values[index]));
 }
 
+/**
+ * @brief 获取指定索引处的浮点值
+ *
+ * 从属性值数组中读取指定索引的浮点值（通过联合体重解释）
+ *
+ * @param index 属性索引
+ * @return 指定索引处的浮点值
+ */
 float Object::GetFloatValue(uint16 index) const
 {
     ASSERT(index < m_valuesCount || PrintIndexError(index, false));
     return m_floatValues[index];
 }
 
+/**
+ * @brief 获取指定索引和偏移处的字节值
+ *
+ * 从一个32位字段中读取特定的字节（0-3）
+ *
+ * @param index  属性索引
+ * @param offset 字节偏移（0=最低字节，3=最高字节）
+ * @return 指定位置的字节值
+ *
+ * @note 常用于读取标志字段中的特定标志位
+ */
 uint8 Object::GetByteValue(uint16 index, uint8 offset) const
 {
     ASSERT(index < m_valuesCount || PrintIndexError(index, false));
@@ -285,6 +532,15 @@ uint8 Object::GetByteValue(uint16 index, uint8 offset) const
     return *(((uint8*)&m_uint32Values[index])+offset);
 }
 
+/**
+ * @brief 获取指定索引和偏移处的16位无符号整数值
+ *
+ * 从一个32位字段中读取特定的16位字（0-1）
+ *
+ * @param index  属性索引
+ * @param offset 字偏移（0=低16位，1=高16位）
+ * @return 指定位置的16位无符号整数
+ */
 uint16 Object::GetUInt16Value(uint16 index, uint8 offset) const
 {
     ASSERT(index < m_valuesCount || PrintIndexError(index, false));
@@ -292,59 +548,96 @@ uint16 Object::GetUInt16Value(uint16 index, uint8 offset) const
     return *(((uint16*)&m_uint32Values[index])+offset);
 }
 
+/**
+ * @brief 获取指定索引处的GUID值
+ *
+ * 从属性值数组中读取GUID（占用两个连续的32位字段）
+ *
+ * @param index 属性起始索引
+ * @return 指定索引处的GUID
+ */
 ObjectGuid Object::GetGuidValue(uint16 index) const
 {
     ASSERT(index + 1 < m_valuesCount || PrintIndexError(index, false));
     return *((ObjectGuid*)&(m_uint32Values[index]));
 }
 
+/**
+ * @brief 构建移动更新数据
+ *
+ * 根据对象的类型和状态，构建详细的移动信息数据包。这是对象同步的核心函数之一。
+ *
+ * @param data  数据缓冲区，用于存储构建的移动信息
+ * @param flags 更新标志，决定包含哪些移动信息
+ *
+ * 更新标志含义：
+ * - UPDATEFLAG_LIVING: 活着的单位，包含完整移动信息和速度
+ * - UPDATEFLAG_POSITION: 位置信息（非活动对象）
+ * - UPDATEFLAG_STATIONARY_POSITION: 静止位置（游戏对象等）
+ * - UPDATEFLAG_UNKNOWN: 未知标志，发送0值
+ * - UPDATEFLAG_LOWGUID: 低GUID标志，发送对象ID
+ * - UPDATEFLAG_HAS_TARGET: 有攻击目标，发送目标GUID
+ * - UPDATEFLAG_TRANSPORT: 运输工具，发送路径进度
+ * - UPDATEFLAG_VEHICLE: 载具，发送载具信息
+ * - UPDATEFLAG_ROTATION: 旋转信息（游戏对象）
+ *
+ * @note 该函数根据不同的标志组合构建不同格式的数据包，
+ *       客户端需要根据相同的标志来解析数据
+ */
 void Object::BuildMovementUpdate(ByteBuffer* data, uint16 flags) const
 {
     Unit const* unit = nullptr;
     WorldObject const* object = nullptr;
 
+    // 尝试转换为 Unit 或 WorldObject
     unit = ToUnit();
     if (!unit)
         object = ToWorldObject();
 
-    *data << uint16(flags);                                  // update flags
+    *data << uint16(flags);  // 写入更新标志
 
-    // 0x20
+    // 0x20 - 活动单位（玩家、生物等）
     if (flags & UPDATEFLAG_LIVING)
     {
         ASSERT(unit);
+        // 构建移动包（包含位置、朝向、移动标志等）
         unit->BuildMovementPacket(data);
 
-        *data << unit->GetSpeed(MOVE_WALK)
-              << unit->GetSpeed(MOVE_RUN)
-              << unit->GetSpeed(MOVE_RUN_BACK)
-              << unit->GetSpeed(MOVE_SWIM)
-              << unit->GetSpeed(MOVE_SWIM_BACK)
-              << unit->GetSpeed(MOVE_FLIGHT)
-              << unit->GetSpeed(MOVE_FLIGHT_BACK)
-              << unit->GetSpeed(MOVE_TURN_RATE)
-              << unit->GetSpeed(MOVE_PITCH_RATE);
+        // 写入各种移动速度
+        *data << unit->GetSpeed(MOVE_WALK)          // 行走速度
+              << unit->GetSpeed(MOVE_RUN)           // 奔跑速度
+              << unit->GetSpeed(MOVE_RUN_BACK)      // 后退速度
+              << unit->GetSpeed(MOVE_SWIM)          // 游泳速度
+              << unit->GetSpeed(MOVE_SWIM_BACK)     // 游泳后退速度
+              << unit->GetSpeed(MOVE_FLIGHT)        // 飞行速度
+              << unit->GetSpeed(MOVE_FLIGHT_BACK)   // 飞行后退速度
+              << unit->GetSpeed(MOVE_TURN_RATE)     // 转身速度
+              << unit->GetSpeed(MOVE_PITCH_RATE);   // 俯仰速度
 
-        // 0x08000000
+        // 如果启用了样条移动，写入样条数据
         if (unit->m_movementInfo.GetMovementFlags() & MOVEMENTFLAG_SPLINE_ENABLED)
             Movement::PacketBuilder::WriteCreate(*unit->movespline, *data);
     }
     else
     {
+        // 0x1 - 位置更新（非活动对象）
         if (flags & UPDATEFLAG_POSITION)
         {
             ASSERT(object);
             Transport* transport = object->GetTransport();
 
+            // 如果在运输工具上，写入运输工具的 GUID
             if (transport)
                 *data << transport->GetPackGUID();
             else
                 *data << uint8(0);
 
+            // 写入世界坐标
             *data << object->GetPositionX();
             *data << object->GetPositionY();
                 *data << object->GetPositionZ();
 
+            // 如果在运输工具上，写入相对于运输工具的坐标
             if (transport)
             {
                 *data << object->GetTransOffsetX();
@@ -353,13 +646,16 @@ void Object::BuildMovementUpdate(ByteBuffer* data, uint16 flags) const
             }
             else
             {
+                // 否则再次写入世界坐标（协议要求）
                 *data << object->GetPositionX();
                 *data << object->GetPositionY();
                     *data << object->GetPositionZ();
             }
 
+            // 写入朝向
             *data << object->GetOrientation();
 
+            // 尸体需要额外写入朝向信息
             if (GetTypeId() == TYPEID_CORPSE)
                 *data << float(object->GetOrientation());
             else
@@ -367,7 +663,7 @@ void Object::BuildMovementUpdate(ByteBuffer* data, uint16 flags) const
         }
         else
         {
-            // 0x40
+            // 0x40 - 静止位置（用于静态游戏对象）
             if (flags & UPDATEFLAG_STATIONARY_POSITION)
             {
                 ASSERT(object);
@@ -379,13 +675,13 @@ void Object::BuildMovementUpdate(ByteBuffer* data, uint16 flags) const
         }
     }
 
-    // 0x8
+    // 0x8 - 未知标志，发送 0
     if (flags & UPDATEFLAG_UNKNOWN)
     {
         *data << uint32(0);
     }
 
-    // 0x10
+    // 0x10 - 低GUID，根据对象类型发送不同的值
     if (flags & UPDATEFLAG_LOWGUID)
     {
         switch (GetTypeId())
@@ -396,26 +692,26 @@ void Object::BuildMovementUpdate(ByteBuffer* data, uint16 flags) const
             case TYPEID_GAMEOBJECT:
             case TYPEID_DYNAMICOBJECT:
             case TYPEID_CORPSE:
-                *data << uint32(GetGUID().GetCounter());              // GetGUID().GetCounter()
+                *data << uint32(GetGUID().GetCounter());  // 发送 GUID 的计数器部分
                 break;
-            //! Unit, Player and default here are sending wrong values.
-            /// @todo Research the proper formula
+            //! Unit、Player 和默认情况发送错误的值
+            /// @todo 研究正确的公式
             case TYPEID_UNIT:
-                *data << uint32(0x0000000B);                // unk
+                *data << uint32(0x0000000B);  // 未知值
                 break;
             case TYPEID_PLAYER:
                 if (flags & UPDATEFLAG_SELF)
-                    *data << uint32(0x0000002F);            // unk
+                    *data << uint32(0x0000002F);  // 自己的未知值
                 else
-                    *data << uint32(0x00000008);            // unk
+                    *data << uint32(0x00000008);  // 其他玩家的未知值
                 break;
             default:
-                *data << uint32(0x00000000);                // unk
+                *data << uint32(0x00000000);  // 默认未知值
                 break;
         }
     }
 
-    // 0x4
+    // 0x4 - 有攻击目标，发送目标 GUID
     if (flags & UPDATEFLAG_HAS_TARGET)
     {
         ASSERT(unit);
@@ -425,14 +721,14 @@ void Object::BuildMovementUpdate(ByteBuffer* data, uint16 flags) const
             *data << uint8(0);
     }
 
-    // 0x2
+    // 0x2 - 运输工具，发送路径进度
     if (flags & UPDATEFLAG_TRANSPORT)
     {
         GameObject const* go = ToGameObject();
-        /** @TODO Use IsTransport() to also handle type 11 (TRANSPORT)
-            Currently grid objects are not updated if there are no nearby players,
-            this causes clients to receive different PathProgress
-            resulting in players seeing the object in a different position
+        /** @TODO 使用 IsTransport() 也处理类型 11 (TRANSPORT)
+            目前如果没有附近玩家，网格对象不会更新，
+            这会导致客户端收到不同的 PathProgress
+            结果玩家看到对象在不同位置
         */
         if (go && go->ToTransport())
             *data << uint32(go->GetGOValue()->Transport.PathProgress);
@@ -440,25 +736,37 @@ void Object::BuildMovementUpdate(ByteBuffer* data, uint16 flags) const
             *data << uint32(GameTime::GetGameTimeMS());
     }
 
-    // 0x80
+    // 0x80 - 载具信息
     if (flags & UPDATEFLAG_VEHICLE)
     {
-        /// @todo Allow players to aquire this updateflag.
+        /// @todo 允许玩家获取此更新标志
         ASSERT(unit);
         ASSERT(unit->GetVehicleKit());
         ASSERT(unit->GetVehicleKit()->GetVehicleInfo());
         *data << uint32(unit->GetVehicleKit()->GetVehicleInfo()->ID);
+        // 根据是否在运输工具上，发送不同的朝向
         if (unit->HasUnitMovementFlag(MOVEMENTFLAG_ONTRANSPORT))
             *data << float(unit->GetTransOffsetO());
         else
             *data << float(unit->GetOrientation());
     }
 
-    // 0x200
+    // 0x200 - 旋转信息（游戏对象）
     if (flags & UPDATEFLAG_ROTATION)
         *data << int64(ToGameObject()->GetPackedLocalRotation());
 }
 
+// ============================================================================
+// 构建属性更新
+// ============================================================================
+// 职责：构建对象的属性更新数据包
+// 参数：
+//   updateData - 更新数据容器
+//   target    - 目标玩家
+// 返回值：无
+// 调用时机：对象属性改变时
+// 注意：仅发送变化的属性
+// ============================================================================
 void Object::BuildValuesUpdate(uint8 updateType, ByteBuffer* data, Player const* target) const
 {
     if (!target)
@@ -485,12 +793,29 @@ void Object::BuildValuesUpdate(uint8 updateType, ByteBuffer* data, Player const*
     data->append(fieldBuffer);
 }
 
+/**
+ * @brief 如果需要，将对象添加到更新队列
+ *
+ * 检查对象是否在世界中且未在更新队列中，如果是则添加到更新队列。
+ * 这确保对象的属性变化能够被同步到客户端。
+ *
+ * @note 只有在世界中且未更新的对象才会被添加，避免重复添加
+ */
 void Object::AddToObjectUpdateIfNeeded()
 {
     if (m_inWorld && !m_objectUpdated)
         m_objectUpdated = AddToObjectUpdate();
 }
 
+/**
+ * @brief 清除更新掩码
+ *
+ * 清除所有标记为已修改的属性字段，并可选择从更新队列中移除对象。
+ *
+ * @param remove 如果为 true，同时从更新队列中移除对象
+ *
+ * @note 通常在对象属性已同步到客户端后调用
+ */
 void Object::ClearUpdateMask(bool remove)
 {
     _changesMask.Clear();
@@ -504,10 +829,21 @@ void Object::ClearUpdateMask(bool remove)
     }
 }
 
+/**
+ * @brief 构建字段更新
+ *
+ * 为指定玩家构建属性值更新块，并将其添加到更新数据映射中。
+ *
+ * @param player   目标玩家
+ * @param data_map 更新数据映射（玩家 -> 更新数据）
+ *
+ * @note 如果映射中不存在该玩家的更新数据，会自动创建
+ */
 void Object::BuildFieldsUpdate(Player* player, UpdateDataMapType& data_map) const
 {
     UpdateDataMapType::iterator iter = data_map.find(player);
 
+    // 如果映射中不存在该玩家的更新数据，创建一个新的
     if (iter == data_map.end())
     {
         std::pair<UpdateDataMapType::iterator, bool> p = data_map.emplace(player, UpdateData());
@@ -518,10 +854,34 @@ void Object::BuildFieldsUpdate(Player* player, UpdateDataMapType& data_map) cons
     BuildValuesUpdateBlockForPlayer(&iter->second, iter->first);
 }
 
+/**
+ * @brief 获取更新字段数据和可见性标志
+ *
+ * 根据对象类型和目标玩家的关系，确定哪些字段对目标玩家可见。
+ * 不同类型的对象有不同的可见性规则：
+ * - Item/Container: 所有者可见更多字段
+ * - Unit/Player: 所有者、队伍成员、特殊光环目标可见更多字段
+ * - GameObject: 所有者可见更多字段
+ * - DynamicObject: 施法者可见更多字段
+ * - Corpse: 所有者可见更多字段
+ *
+ * @param target 目标玩家
+ * @param flags  输出参数，返回字段标志数组
+ * @return 可见性标志，用于判断字段是否对目标可见
+ *
+ * @note 可见性标志包括：
+ *       - UF_FLAG_PUBLIC: 公共字段，所有人可见
+ *       - UF_FLAG_PRIVATE: 私有字段，仅自己可见
+ *       - UF_FLAG_OWNER: 所有者字段，所有者可见
+ *       - UF_FLAG_ITEM_OWNER: 物品所有者字段
+ *       - UF_FLAG_PARTY_MEMBER: 队伍成员字段
+ *       - UF_FLAG_SPECIAL_INFO: 特殊信息字段（如心灵感应光环）
+ */
 uint32 Object::GetUpdateFieldData(Player const* target, uint32*& flags) const
 {
     uint32 visibleFlag = UF_FLAG_PUBLIC;
 
+    // 如果目标是自己，可以看见私有字段
     if (target == this)
         visibleFlag |= UF_FLAG_PRIVATE;
 
@@ -530,6 +890,7 @@ uint32 Object::GetUpdateFieldData(Player const* target, uint32*& flags) const
         case TYPEID_ITEM:
         case TYPEID_CONTAINER:
             flags = ItemUpdateFieldFlags;
+            // 物品所有者可以看见所有者和物品所有者字段
             if (((Item const*)this)->GetOwnerGUID() == target->GetGUID())
                 visibleFlag |= UF_FLAG_OWNER | UF_FLAG_ITEM_OWNER;
             break;
@@ -538,29 +899,35 @@ uint32 Object::GetUpdateFieldData(Player const* target, uint32*& flags) const
         {
             Player* plr = ToUnit()->GetCharmerOrOwnerPlayerOrPlayerItself();
             flags = UnitUpdateFieldFlags;
+            // 单位所有者可以看见所有者字段
             if (ToUnit()->GetOwnerGUID() == target->GetGUID())
                 visibleFlag |= UF_FLAG_OWNER;
 
+            // 如果有特殊信息标志且目标有心灵感应光环，可以看见特殊信息字段
             if (HasDynamicFlag(UNIT_DYNFLAG_SPECIALINFO))
                 if (ToUnit()->HasAuraTypeWithCaster(SPELL_AURA_EMPATHY, target->GetGUID()))
                     visibleFlag |= UF_FLAG_SPECIAL_INFO;
 
+            // 队伍成员可以看见队伍成员字段
             if (plr && plr->IsInSameRaidWith(target))
                 visibleFlag |= UF_FLAG_PARTY_MEMBER;
             break;
         }
         case TYPEID_GAMEOBJECT:
             flags = GameObjectUpdateFieldFlags;
+            // 游戏对象所有者可以看见所有者字段
             if (ToGameObject()->GetOwnerGUID() == target->GetGUID())
                 visibleFlag |= UF_FLAG_OWNER;
             break;
         case TYPEID_DYNAMICOBJECT:
             flags = DynamicObjectUpdateFieldFlags;
+            // 动态对象施法者可以看见所有者字段
             if (ToDynObject()->GetCasterGUID() == target->GetGUID())
                 visibleFlag |= UF_FLAG_OWNER;
             break;
         case TYPEID_CORPSE:
             flags = CorpseUpdateFieldFlags;
+            // 尸体所有者可以看见所有者字段
             if (ToCorpse()->GetOwnerGUID() == target->GetGUID())
                 visibleFlag |= UF_FLAG_OWNER;
             break;
@@ -571,40 +938,78 @@ uint32 Object::GetUpdateFieldData(Player const* target, uint32*& flags) const
     return visibleFlag;
 }
 
+/**
+ * @brief 从字符串加载数据到字段
+ *
+ * 从空格分隔的字符串中解析多个值，并设置到连续的字段中。
+ * 通常用于从数据库加载对象的多个属性值。
+ *
+ * @param data        空格分隔的字符串数据
+ * @param startOffset 起始字段偏移
+ * @param count       要加载的字段数量
+ * @return 如果加载成功返回 true，否则返回 false
+ *
+ * @note 字符串必须包含恰好 count 个以空格分隔的数值
+ */
 bool Object::_LoadIntoDataField(std::string const& data, uint32 startOffset, uint32 count)
 {
     if (data.empty())
         return false;
 
+    // 将字符串分割为多个标记
     std::vector<std::string_view> tokens = Trinity::Tokenize(data, ' ', false);
 
+    // 检查标记数量是否正确
     if (tokens.size() != count)
         return false;
 
+    // 解析每个标记并设置字段值
     for (uint32 index = 0; index < count; ++index)
     {
         Optional<uint32> val = Trinity::StringTo<uint32>(tokens[index]);
         if (!val)
             return false;
         m_uint32Values[startOffset + index] = *val;
-        _changesMask.SetBit(startOffset + index);
+        _changesMask.SetBit(startOffset + index);  // 标记字段已修改
     }
     return true;
 }
 
+/**
+ * @brief 设置指定索引处的32位有符号整数值
+ *
+ * 设置属性值并标记为已修改，如果值发生变化会自动添加到更新队列
+ *
+ * @param index 属性索引
+ * @param value 要设置的值
+ *
+ * @note 只有值真正改变时才会标记为已修改并添加到更新队列
+ */
 void Object::SetInt32Value(uint16 index, int32 value)
 {
     ASSERT(index < m_valuesCount || PrintIndexError(index, true));
 
+    // 只有值改变时才更新
     if (m_int32Values[index] != value)
     {
         m_int32Values[index] = value;
-        _changesMask.SetBit(index);
+        _changesMask.SetBit(index);  // 标记字段已修改
 
-        AddToObjectUpdateIfNeeded();
+        AddToObjectUpdateIfNeeded();  // 确保对象在更新队列中
     }
 }
 
+// ============================================================================
+// 获取/设置属性值（32位无符号整数）
+// ============================================================================
+// 职责：读写对象的属性值
+// 参数：
+//   index - 属性索引
+//   value - 要设置的值（仅 Set）
+// 返回值：属性值（仅 Get）
+// 调用时机：任何需要读写对象属性的地方
+// 注意：属性索引定义在 UpdateFields.h 中
+// ============================================================================
 void Object::SetUInt32Value(uint16 index, uint32 value)
 {
     ASSERT(index < m_valuesCount || PrintIndexError(index, true));
@@ -618,6 +1023,15 @@ void Object::SetUInt32Value(uint16 index, uint32 value)
     }
 }
 
+/**
+ * @brief 更新指定索引处的32位无符号整数值
+ *
+ * 与 SetUInt32Value 不同，此函数不检查值是否变化，直接更新并标记为已修改。
+ * 通常用于需要强制更新的场景。
+ *
+ * @param index 属性索引
+ * @param value 要设置的值
+ */
 void Object::UpdateUInt32Value(uint16 index, uint32 value)
 {
     ASSERT(index < m_valuesCount || PrintIndexError(index, true));
@@ -626,11 +1040,20 @@ void Object::UpdateUInt32Value(uint16 index, uint32 value)
     _changesMask.SetBit(index);
 }
 
+/**
+ * @brief 设置指定索引处的64位无符号整数值
+ *
+ * 设置64位值（存储在两个连续的32位字段中），如果值变化则标记为已修改
+ *
+ * @param index 属性起始索引
+ * @param value 要设置的64位值
+ */
 void Object::SetUInt64Value(uint16 index, uint64 value)
 {
     ASSERT(index + 1 < m_valuesCount || PrintIndexError(index, true));
     if (*((uint64*)&(m_uint32Values[index])) != value)
     {
+        // 将64位值拆分为高低32位
         m_uint32Values[index] = PAIR64_LOPART(value);
         m_uint32Values[index + 1] = PAIR64_HIPART(value);
         _changesMask.SetBit(index);
@@ -640,6 +1063,15 @@ void Object::SetUInt64Value(uint16 index, uint64 value)
     }
 }
 
+/**
+ * @brief 添加GUID值（仅在字段为空时）
+ *
+ * 如果指定字段当前为空，设置新的GUID值。常用于设置可选的GUID引用。
+ *
+ * @param index 属性起始索引
+ * @param value 要设置的GUID值
+ * @return 如果设置成功返回 true，如果字段已有值返回 false
+ */
 bool Object::AddGuidValue(uint16 index, ObjectGuid value)
 {
     ASSERT(index + 1 < m_valuesCount || PrintIndexError(index, true));
@@ -657,6 +1089,15 @@ bool Object::AddGuidValue(uint16 index, ObjectGuid value)
     return false;
 }
 
+/**
+ * @brief 移除GUID值（仅在字段匹配时）
+ *
+ * 如果指定字段当前的GUID与参数匹配，清除该字段。
+ *
+ * @param index 属性起始索引
+ * @param value 要移除的GUID值
+ * @return 如果移除成功返回 true，如果字段值不匹配返回 false
+ */
 bool Object::RemoveGuidValue(uint16 index, ObjectGuid value)
 {
     ASSERT(index + 1 < m_valuesCount || PrintIndexError(index, true));
@@ -675,6 +1116,14 @@ bool Object::RemoveGuidValue(uint16 index, ObjectGuid value)
     return false;
 }
 
+/**
+ * @brief 设置指定索引处的浮点值
+ *
+ * 设置浮点值，如果值变化则标记为已修改
+ *
+ * @param index 属性索引
+ * @param value 要设置的浮点值
+ */
 void Object::SetFloatValue(uint16 index, float value)
 {
     ASSERT(index < m_valuesCount || PrintIndexError(index, true));
@@ -688,13 +1137,24 @@ void Object::SetFloatValue(uint16 index, float value)
     }
 }
 
+/**
+ * @brief 设置指定索引和偏移处的字节值
+ *
+ * 在一个32位字段中设置特定的字节（0-3），保持其他字节不变
+ *
+ * @param index  属性索引
+ * @param offset 字节偏移（0=最低字节，3=最高字节）
+ * @param value  要设置的字节值
+ */
 void Object::SetByteValue(uint16 index, uint8 offset, uint8 value)
 {
     ASSERT(index < m_valuesCount || PrintIndexError(index, true));
     ASSERT(offset < 4);
 
+    // 检查该字节是否需要更新
     if (uint8(m_uint32Values[index] >> (offset * 8)) != value)
     {
+        // 清除旧字节并设置新字节
         m_uint32Values[index] &= ~uint32(uint32(0xFF) << (offset * 8));
         m_uint32Values[index] |= uint32(uint32(value) << (offset * 8));
         _changesMask.SetBit(index);
@@ -704,13 +1164,24 @@ void Object::SetByteValue(uint16 index, uint8 offset, uint8 value)
     }
 }
 
+/**
+ * @brief 设置指定索引和偏移处的16位无符号整数值
+ *
+ * 在一个32位字段中设置特定的16位字（0-1），保持其他字不变
+ *
+ * @param index  属性索引
+ * @param offset 字偏移（0=低16位，1=高16位）
+ * @param value  要设置的16位值
+ */
 void Object::SetUInt16Value(uint16 index, uint8 offset, uint16 value)
 {
     ASSERT(index < m_valuesCount || PrintIndexError(index, true));
     ASSERT(offset < 2);
 
+    // 检查该字是否需要更新
     if (uint16(m_uint32Values[index] >> (offset * 16)) != value)
     {
+        // 清除旧字并设置新字
         m_uint32Values[index] &= ~uint32(uint32(0xFFFF) << (offset * 16));
         m_uint32Values[index] |= uint32(uint32(value) << (offset * 16));
         _changesMask.SetBit(index);
@@ -719,6 +1190,14 @@ void Object::SetUInt16Value(uint16 index, uint8 offset, uint16 value)
     }
 }
 
+/**
+ * @brief 设置指定索引处的GUID值
+ *
+ * 设置GUID值（存储在两个连续的32位字段中），如果值变化则标记为已修改
+ *
+ * @param index 属性起始索引
+ * @param value 要设置的GUID值
+ */
 void Object::SetGuidValue(uint16 index, ObjectGuid value)
 {
     ASSERT(index + 1 < m_valuesCount || PrintIndexError(index, true));
@@ -732,6 +1211,14 @@ void Object::SetGuidValue(uint16 index, ObjectGuid value)
     }
 }
 
+/**
+ * @brief 设置统计浮点值（确保非负）
+ *
+ * 设置浮点值，如果值为负则设置为0。常用于统计值（如生命值、法力值等）
+ *
+ * @param index 属性索引
+ * @param value 要设置的浮点值
+ */
 void Object::SetStatFloatValue(uint16 index, float value)
 {
     if (value < 0)
@@ -740,6 +1227,14 @@ void Object::SetStatFloatValue(uint16 index, float value)
     SetFloatValue(index, value);
 }
 
+/**
+ * @brief 设置统计整数值（确保非负）
+ *
+ * 设置整数值，如果值为负则设置为0。常用于统计值（如攻击强度、防御等）
+ *
+ * @param index 属性索引
+ * @param value 要设置的整数值
+ */
 void Object::SetStatInt32Value(uint16 index, int32 value)
 {
     if (value < 0)
@@ -748,6 +1243,15 @@ void Object::SetStatInt32Value(uint16 index, int32 value)
     SetUInt32Value(index, uint32(value));
 }
 
+/**
+ * @brief 应用无符号32位整数值的修改量
+ *
+ * 根据参数添加或减去指定值，结果不会小于0
+ *
+ * @param index 属性索引
+ * @param val   修改量（可正可负）
+ * @param apply true表示添加，false表示减去
+ */
 void Object::ApplyModUInt32Value(uint16 index, int32 val, bool apply)
 {
     int32 cur = GetUInt32Value(index);
@@ -757,6 +1261,15 @@ void Object::ApplyModUInt32Value(uint16 index, int32 val, bool apply)
     SetUInt32Value(index, cur);
 }
 
+/**
+ * @brief 应用有符号32位整数值的修改量
+ *
+ * 根据参数添加或减去指定值，允许负数结果
+ *
+ * @param index 属性索引
+ * @param val   修改量
+ * @param apply true表示添加，false表示减去
+ */
 void Object::ApplyModInt32Value(uint16 index, int32 val, bool apply)
 {
     int32 cur = GetInt32Value(index);
@@ -764,6 +1277,15 @@ void Object::ApplyModInt32Value(uint16 index, int32 val, bool apply)
     SetInt32Value(index, cur);
 }
 
+/**
+ * @brief 应用有符号浮点值的修改量
+ *
+ * 根据参数添加或减去指定值，允许负数结果
+ *
+ * @param index 属性索引
+ * @param val   修改量
+ * @param apply true表示添加，false表示减去
+ */
 void Object::ApplyModSignedFloatValue(uint16 index, float val, bool apply)
 {
     float cur = GetFloatValue(index);
@@ -771,6 +1293,15 @@ void Object::ApplyModSignedFloatValue(uint16 index, float val, bool apply)
     SetFloatValue(index, cur);
 }
 
+/**
+ * @brief 应用正浮点值的修改量
+ *
+ * 根据参数添加或减去指定值，结果不会小于0
+ *
+ * @param index 属性索引
+ * @param val   修改量
+ * @param apply true表示添加，false表示减去
+ */
 void Object::ApplyModPositiveFloatValue(uint16 index, float val, bool apply)
 {
     float cur = GetFloatValue(index);
@@ -780,6 +1311,14 @@ void Object::ApplyModPositiveFloatValue(uint16 index, float val, bool apply)
     SetFloatValue(index, cur);
 }
 
+/**
+ * @brief 设置标志位
+ *
+ * 使用位或操作设置指定的标志位
+ *
+ * @param index   属性索引
+ * @param newFlag 要设置的标志位
+ */
 void Object::SetFlag(uint16 index, uint32 newFlag)
 {
     ASSERT(index < m_valuesCount || PrintIndexError(index, true));
@@ -795,6 +1334,14 @@ void Object::SetFlag(uint16 index, uint32 newFlag)
     }
 }
 
+/**
+ * @brief 移除标志位
+ *
+ * 使用位与非操作移除指定的标志位
+ *
+ * @param index   属性索引
+ * @param oldFlag 要移除的标志位
+ */
 void Object::RemoveFlag(uint16 index, uint32 oldFlag)
 {
     ASSERT(index < m_valuesCount || PrintIndexError(index, true));
@@ -811,6 +1358,14 @@ void Object::RemoveFlag(uint16 index, uint32 oldFlag)
     }
 }
 
+/**
+ * @brief 切换标志位
+ *
+ * 如果标志位已设置则移除，否则设置
+ *
+ * @param index 属性索引
+ * @param flag  要切换的标志位
+ */
 void Object::ToggleFlag(uint16 index, uint32 flag)
 {
     if (HasFlag(index, flag))
@@ -819,17 +1374,42 @@ void Object::ToggleFlag(uint16 index, uint32 flag)
         SetFlag(index, flag);
 }
 
+/**
+ * @brief 检查是否设置了指定标志位
+ *
+ * @param index 属性索引
+ * @param flag  要检查的标志位
+ * @return 如果设置了指定标志位返回 true
+ */
 bool Object::HasFlag(uint16 index, uint32 flag) const
 {
     ASSERT(index < m_valuesCount || PrintIndexError(index, true));
     return (m_uint32Values[index] & flag) != 0;
 }
 
+/**
+ * @brief 应用或移除标志位
+ *
+ * 根据参数设置或移除指定的标志位
+ *
+ * @param index 属性索引
+ * @param flag  标志位
+ * @param apply true表示设置，false表示移除
+ */
 void Object::ApplyModFlag(uint16 index, uint32 flag, bool apply)
 {
     if (apply) SetFlag(index, flag); else RemoveFlag(index, flag);
 }
 
+/**
+ * @brief 设置字节标志位
+ *
+ * 在32位字段的特定字节中设置标志位
+ *
+ * @param index   属性索引
+ * @param offset  字节偏移（0-3）
+ * @param newFlag 要设置的标志位
+ */
 void Object::SetByteFlag(uint16 index, uint8 offset, uint8 newFlag)
 {
     ASSERT(index < m_valuesCount || PrintIndexError(index, true));
@@ -844,6 +1424,15 @@ void Object::SetByteFlag(uint16 index, uint8 offset, uint8 newFlag)
     }
 }
 
+/**
+ * @brief 移除字节标志位
+ *
+ * 在32位字段的特定字节中移除标志位
+ *
+ * @param index   属性索引
+ * @param offset  字节偏移（0-3）
+ * @param oldFlag 要移除的标志位
+ */
 void Object::RemoveByteFlag(uint16 index, uint8 offset, uint8 oldFlag)
 {
     ASSERT(index < m_valuesCount || PrintIndexError(index, true));
@@ -858,6 +1447,15 @@ void Object::RemoveByteFlag(uint16 index, uint8 offset, uint8 oldFlag)
     }
 }
 
+/**
+ * @brief 切换字节标志位
+ *
+ * 在32位字段的特定字节中切换标志位状态
+ *
+ * @param index  属性索引
+ * @param offset 字节偏移（0-3）
+ * @param flag   要切换的标志位
+ */
 void Object::ToggleByteFlag(uint16 index, uint8 offset, uint8 flag)
 {
     if (HasByteFlag(index, offset, flag))
@@ -866,6 +1464,16 @@ void Object::ToggleByteFlag(uint16 index, uint8 offset, uint8 flag)
         SetByteFlag(index, offset, flag);
 }
 
+/**
+ * @brief 检查是否设置了字节标志位
+ *
+ * 检查32位字段的特定字节中是否设置了指定标志位
+ *
+ * @param index  属性索引
+ * @param offset 字节偏移（0-3）
+ * @param flag   要检查的标志位
+ * @return 如果设置了指定标志位返回 true
+ */
 bool Object::HasByteFlag(uint16 index, uint8 offset, uint8 flag) const
 {
     ASSERT(index < m_valuesCount || PrintIndexError(index, false));
@@ -873,11 +1481,29 @@ bool Object::HasByteFlag(uint16 index, uint8 offset, uint8 flag) const
     return (((uint8*)&m_uint32Values[index])[offset] & flag) != 0;
 }
 
+/**
+ * @brief 应用或移除字节标志位
+ *
+ * 根据参数设置或移除字节标志位
+ *
+ * @param index  属性索引
+ * @param offset 字节偏移（0-3）
+ * @param flag   标志位
+ * @param apply  true表示设置，false表示移除
+ */
 void Object::ApplyModByteFlag(uint16 index, uint8 offset, uint8 flag, bool apply)
 {
     if (apply) SetByteFlag(index, offset, flag); else RemoveByteFlag(index, offset, flag);
 }
 
+/**
+ * @brief 设置64位标志位
+ *
+ * 在64位字段中设置标志位
+ *
+ * @param index   属性起始索引
+ * @param newFlag 要设置的标志位
+ */
 void Object::SetFlag64(uint16 index, uint64 newFlag)
 {
     uint64 oldval = GetUInt64Value(index);
@@ -885,6 +1511,14 @@ void Object::SetFlag64(uint16 index, uint64 newFlag)
     SetUInt64Value(index, newval);
 }
 
+/**
+ * @brief 移除64位标志位
+ *
+ * 在64位字段中移除标志位
+ *
+ * @param index   属性起始索引
+ * @param oldFlag 要移除的标志位
+ */
 void Object::RemoveFlag64(uint16 index, uint64 oldFlag)
 {
     uint64 oldval = GetUInt64Value(index);
@@ -892,6 +1526,14 @@ void Object::RemoveFlag64(uint16 index, uint64 oldFlag)
     SetUInt64Value(index, newval);
 }
 
+/**
+ * @brief 切换64位标志位
+ *
+ * 在64位字段中切换标志位状态
+ *
+ * @param index 属性起始索引
+ * @param flag  要切换的标志位
+ */
 void Object::ToggleFlag64(uint16 index, uint64 flag)
 {
     if (HasFlag64(index, flag))
@@ -900,17 +1542,43 @@ void Object::ToggleFlag64(uint16 index, uint64 flag)
         SetFlag64(index, flag);
 }
 
+/**
+ * @brief 检查是否设置了64位标志位
+ *
+ * @param index 属性起始索引
+ * @param flag  要检查的标志位
+ * @return 如果设置了指定标志位返回 true
+ */
 bool Object::HasFlag64(uint16 index, uint64 flag) const
 {
     ASSERT(index < m_valuesCount || PrintIndexError(index, false));
     return (GetUInt64Value(index) & flag) != 0;
 }
 
+/**
+ * @brief 应用或移除64位标志位
+ *
+ * 根据参数设置或移除64位标志位
+ *
+ * @param index 属性起始索引
+ * @param flag  标志位
+ * @param apply true表示设置，false表示移除
+ */
 void Object::ApplyModFlag64(uint16 index, uint64 flag, bool apply)
 {
     if (apply) SetFlag64(index, flag); else RemoveFlag64(index, flag);
 }
 
+/**
+ * @brief 打印索引错误信息
+ *
+ * 当尝试访问不存在的字段时，记录详细的错误信息。
+ * 此函数总是返回 false，用于在断言中触发失败。
+ *
+ * @param index 出错的属性索引
+ * @param set   true表示设置操作，false表示获取操作
+ * @return 总是返回 false
+ */
 bool Object::PrintIndexError(uint32 index, bool set) const
 {
     TC_LOG_ERROR("misc", "Attempt to {} non-existing value field: {} (count: {}) for object typeid: {} type mask: {}", (set ? "set value to" : "get value from"), index, m_valuesCount, GetTypeId(), m_objectType);
@@ -919,6 +1587,13 @@ bool Object::PrintIndexError(uint32 index, bool set) const
     return false;
 }
 
+/**
+ * @brief 获取调试信息
+ *
+ * 生成对象的调试信息字符串，包含 GUID 和 Entry
+ *
+ * @return 调试信息字符串
+ */
 std::string Object::GetDebugInfo() const
 {
     std::stringstream sstr;

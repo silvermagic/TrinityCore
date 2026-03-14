@@ -15,6 +15,24 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file OutdoorPvPTF.cpp
+ * @brief 泰罗卡森林户外PvP系统实现 - 奥金顿之灵争夺战
+ *
+ * 本模块实现了泰罗卡森林的五座灵魂塔争夺战：
+ * - 西北塔 (Northwest)
+ * - 北塔 (North)
+ * - 东北塔 (Northeast)
+ * - 东南塔 (Southeast)
+ * - 南塔 (South)
+ *
+ * 主要功能：
+ * - 五座灵魂塔的争夺和占领机制
+ * - 占领全部五座塔后获得奥金顿祝福增益效果
+ * - 占领后锁定6小时，期间无法被争夺
+ * - 锁定期间显示倒计时UI
+ */
+
 #include "GameObject.h"
 #include "Map.h"
 #include "ObjectAccessor.h"
@@ -24,26 +42,32 @@
 #include "ScriptMgr.h"
 #include "WorldStatePackets.h"
 
+/** 受PvP增益效果影响的区域数量 */
 uint8 const OutdoorPvPTFBuffZonesNum = 5;
+
+/** 受PvP增益效果影响的区域ID数组 (泰罗卡森林及相关副本) */
 uint32 const OutdoorPvPTFBuffZones[OutdoorPvPTFBuffZonesNum] =
 {
-    3519 /*Terokkar Forest*/,
-    3791 /*Sethekk Halls*/,
-    3789 /*Shadow Labyrinth*/,
-    3792 /*Mana-Tombs*/,
-    3790 /*Auchenai Crypts*/
+    3519 /*Terokkar Forest*/,           // 泰罗卡森林
+    3791 /*Sethekk Halls*/,              // 赛泰克大厅
+    3789 /*Shadow Labyrinth*/,           // 暗影迷宫
+    3792 /*Mana-Tombs*/,                 // 法力陵墓
+    3790 /*Auchenai Crypts*/             // 奥金尼地穴
 };
 
-// locked for 6 hours after capture
+/** 占领后锁定时间（6小时，单位毫秒） */
 uint32 const TF_LOCK_TIME = 3600 * 6 * 1000;
 
-// update lock timer every 1/4 minute (overkill, but this way it's sure the timer won't "jump" 2 minutes at once.)
+/** 锁定计时器更新间隔（15秒），确保计时器不会"跳跃" */
 uint32 const TF_LOCK_TIME_UPDATE = 15000;
 
-// blessing of auchindoun, used in TeamCastSpell which uses signed int, so signed
+/** 奥金顿祝福增益法术ID，用于TeamCastSpell（带符号整型） */
 int32 const TF_CAPTURE_BUFF = 33377;
 
+/** 联盟占领任务ID */
 uint32 const TF_ALLY_QUEST = 11505;
+
+/** 部落占领任务ID */
 uint32 const TF_HORDE_QUEST = 11506;
 
 go_type const TFCapturePoints[TF_TOWER_NUM] =

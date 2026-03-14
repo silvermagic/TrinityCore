@@ -15,6 +15,18 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file    boss_kelthuzad.cpp
+ * @brief   克尔苏加德首领战斗脚本
+ *
+ * 本模块实现了纳克萨玛斯最终首领克尔苏加德的战斗逻辑，包括：
+ * - 第一阶段：小怪波次召唤（骷髅、女妖、憎恶）
+ * - 第二阶段：克尔苏加德本体技能（寒冰箭、暗影裂隙、法力引爆、冰霜冲击、克尔苏加德之链）
+ * - 第三阶段：召唤冰冠守护者
+ * - 相关小怪AI（骷髅、女妖、憎恶、冰冠守护者、暗影裂隙）
+ * - 法术脚本和成就判定
+ */
+
 #include "naxxramas.h"
 #include "CommonHelpers.h"
 #include "GameObject.h"
@@ -29,6 +41,10 @@
 #include "SpellScript.h"
 #include "TemporarySummon.h"
 
+/**
+ * @enum Texts
+ * @brief 对话文本ID
+ */
 enum Texts
 {
     SAY_AGGRO                                              = 7,
@@ -48,6 +64,12 @@ enum Texts
     EMOTE_GUARDIAN_APPEAR                                  = 1
 };
 
+/**
+ * @enum Events
+ * @brief 事件ID定义
+ *
+ * 用于事件调度器，控制克尔苏加德各阶段的技能释放
+ */
 enum Events
 {
     // phase one
@@ -69,6 +91,12 @@ enum Events
     EVENT_TRANSITION_SUMMON,
 };
 
+/**
+ * @enum Actions
+ * @brief 动作ID定义
+ *
+ * 用于AI之间通信的动作标识
+ */
 enum Actions
 {
     ACTION_BEGIN_ENCOUNTER,
@@ -77,12 +105,20 @@ enum Actions
     ACTION_KELTHUZAD_DIED
 };
 
+/**
+ * @enum KTData
+ * @brief 克尔苏加德数据ID
+ */
 enum KTData
 {
     DATA_MINION_POCKET_ID,
     DATA_ABOMINATION_DEATH_COUNT
 };
 
+/**
+ * @enum Spells
+ * @brief 法术ID定义
+ */
 enum Spells
 {
     // Kel'thuzad - Phase one
@@ -111,26 +147,45 @@ enum Spells
     SPELL_VOID_BLAST                        = 27812
 };
 
-static const uint8 nGuardianSpawns = 4;
-static const uint8 nMinionGroups = 7;
+static const uint8 nGuardianSpawns = 4;    // 冰冠守护者召唤数量（25人模式）
+static const uint8 nMinionGroups = 7;      // 小怪生成组数量
+
+/**
+ * @enum SummonGroups
+ * @brief 召唤组ID定义
+ */
 enum SummonGroups
 {
     SUMMON_GROUP_GUARDIAN_FIRST             = 01 /*..04 */,
     SUMMON_GROUP_MINION_FIRST               = 05 /*..11 */
 };
+
+/// 传送门数据列表，用于第三阶段召唤冰冠守护者
 static const std::initializer_list<NAXData64> portalList = { DATA_KELTHUZAD_PORTAL01, DATA_KELTHUZAD_PORTAL02, DATA_KELTHUZAD_PORTAL03, DATA_KELTHUZAD_PORTAL04 };
 
+/**
+ * @enum Phases
+ * @brief 战斗阶段定义
+ */
 enum Phases
 {
-    PHASE_ONE   = 1,
-    PHASE_TWO   = 2 // "phase three" is not actually a phase in events, as timers from phase two carry over
+    PHASE_ONE   = 1,  // 第一阶段：召唤小怪波次
+    PHASE_TWO   = 2   // 第二阶段：克尔苏加德本体战斗（"第三阶段"不是事件中的独立阶段，因为第二阶段的计时器会延续）
 };
 
+/**
+ * @enum Movements
+ * @brief 移动ID定义
+ */
 enum Movements
 {
-    MOVEMENT_MINION_RANDOM = 1,
+    MOVEMENT_MINION_RANDOM = 1,  // 小怪随机移动ID
 };
 
+/**
+ * @enum Creatures
+ * @brief 生物NPC ID定义
+ */
 enum Creatures
 {
     NPC_SKELETON1                                           = 16427, // Soldiers of the Frozen Wastes
@@ -152,12 +207,24 @@ static const Position minionSpawnPoints[nMinionSpawnPoints] = {
     { 3704.00f, -5170.00f, 143.65f }, // summon group 10
     { 3751.95f, -5158.90f, 143.65f }  // summon group 11
 };
+
+/**
+ * @brief 获取随机小怪生成点
+ * @return 随机的小怪生成位置引用
+ */
 static inline Position const& GetRandomMinionSpawnPoint()
 {
     return minionSpawnPoints[urand(0, nMinionSpawnPoints - 1)];
 }
 
-// uniformly distribute on the circle
+/**
+ * @brief 在圆形区域内均匀分布地获取随机位置
+ * @param center 圆心位置
+ * @param radius 半径
+ * @return 随机生成的位置
+ *
+ * 使用三角分布确保位置在圆内均匀分布
+ */
 static Position GetRandomPositionOnCircle(Position const& center, float radius)
 {
     double angle = rand_norm() * 2.0 * M_PI;
@@ -167,11 +234,24 @@ static Position GetRandomPositionOnCircle(Position const& center, float radius)
     return Position(center.GetPositionX() + std::sin(angle)*relDistance*radius, center.GetPositionY() + std::cos(angle)*relDistance*radius, center.GetPositionZ());
 }
 
+/**
+ * @class KelThuzadCharmedPlayerAI
+ * @brief 克尔苏加德魅惑玩家AI
+ *
+ * 当玩家被克尔苏加德之链控制时使用的特殊AI
+ * 优先攻击治疗职业
+ */
 class KelThuzadCharmedPlayerAI : public SimpleCharmedPlayerAI
 {
     public:
         KelThuzadCharmedPlayerAI(Player* player) : SimpleCharmedPlayerAI(player) { }
 
+        /**
+         * @struct CharmedPlayerTargetSelectPred
+         * @brief 魅惑玩家目标选择谓词
+         *
+         * 用于选择被魅惑玩家的攻击目标
+         */
         struct CharmedPlayerTargetSelectPred
         {
             bool operator()(Unit const* target) const
@@ -183,11 +263,17 @@ class KelThuzadCharmedPlayerAI : public SimpleCharmedPlayerAI
                     return false;
                 if (pTarget->HasBreakableByDamageCrowdControlAura())
                     return false;
-                // We _really_ dislike healers. So we hit them in the face. Repeatedly. Exclusively.
+                // 我们真的非常讨厌治疗。所以我们只打他们的脸。反复地。专门地。
                 return Trinity::Helpers::Entity::IsPlayerHealer(pTarget);
             }
         };
 
+        /**
+         * @brief 选择攻击目标
+         * @return 选中的攻击目标
+         *
+         * 优先选择治疗职业作为攻击目标
+         */
         Unit* SelectAttackTarget() const override
         {
             if (Creature* charmer = GetCharmer())
@@ -201,6 +287,12 @@ class KelThuzadCharmedPlayerAI : public SimpleCharmedPlayerAI
         }
 };
 
+/**
+ * @struct ManaUserTargetSelector
+ * @brief 法力使用者目标选择器
+ *
+ * 用于选择拥有法力的玩家作为目标（用于法力引爆技能）
+ */
 struct ManaUserTargetSelector
 {
     bool operator()(Unit const* target) const
@@ -209,15 +301,39 @@ struct ManaUserTargetSelector
     }
 };
 
+/**
+ * @struct boss_kelthuzad
+ * @brief 克尔苏加德首领AI
+ *
+ * 实现纳克萨玛斯最终首领克尔苏加德的战斗逻辑
+ *
+ * 战斗分为三个阶段：
+ * - 第一阶段：召唤骷髅、女妖和憎恶小怪波次（3分33秒）
+ * - 第二阶段：克尔苏加德本体战斗，使用寒冰箭、暗影裂隙、法力引爆、冰霜冲击、克尔苏加德之链
+ * - 第三阶段（45%血量）：召唤冰冠守护者增援
+ */
 struct boss_kelthuzad : public BossAI
 {
     public:
+        /**
+         * @brief 构造函数
+         * @param creature 生物对象指针
+         */
         boss_kelthuzad(Creature* creature) : BossAI(creature, BOSS_KELTHUZAD), _skeletonCount(0), _bansheeCount(0), _abominationCount(0), _abominationDeathCount(0), _frostboltCooldown(0), _phaseThree(false), _guardianCount(0)
         {
             for (uint8 i = 0; i < nGuardianSpawns; ++i)
                 _guardianGroups[i] = SUMMON_GROUP_GUARDIAN_FIRST + i;
         }
 
+        /**
+         * @brief 重置首领状态
+         *
+         * 重置克尔苏加德到初始状态：
+         * - 设置为被动反应状态
+         * - 设置为不可交互
+         * - 设置免疫玩家攻击
+         * - 重置所有计数器
+         */
         void Reset() override
         {
             if (!me->IsAlive())
@@ -233,6 +349,12 @@ struct boss_kelthuzad : public BossAI
             _phaseThree = false;
         }
 
+        /**
+         * @brief 进入脱战模式
+         * @param why 脱战原因
+         *
+         * 当战斗重置时，关闭所有传送门并脱战
+         */
         void EnterEvadeMode(EvadeReason /*why*/) override
         {
             if (!me->IsAlive())
@@ -246,17 +368,35 @@ struct boss_kelthuzad : public BossAI
             _DespawnAtEvade();
         }
 
+        /**
+         * @brief 刚刚召唤生物时
+         * @param summon 被召唤的生物
+         *
+         * 防止召唤的小怪自动进入战斗
+         */
         void JustSummoned (Creature* summon) override
         { // prevent DoZoneInCombat
             summons.Summon(summon);
         }
 
+        /**
+         * @brief 击杀单位时
+         * @param victim 被击杀的单位
+         *
+         * 击杀玩家时播放台词
+         */
         void KilledUnit(Unit* victim) override
         {
             if (victim->GetTypeId() == TYPEID_PLAYER)
                 Talk(SAY_SLAY);
         }
 
+        /**
+         * @brief 死亡时
+         * @param killer 击杀者
+         *
+         * 死亡时通知所有存活的冰冠守护者逃离，并播放死亡台词
+         */
         void JustDied(Unit* /*killer*/) override
         {
             SummonList::iterator it = summons.begin();
@@ -276,12 +416,28 @@ struct boss_kelthuzad : public BossAI
             Talk(SAY_DEATH);
         }
 
+        /**
+         * @brief 受到伤害时
+         * @param attacker 攻击者
+         * @param damage 伤害值（可修改）
+         * @param damageType 伤害类型
+         * @param spellInfo 法术信息
+         *
+         * 第一阶段免疫所有伤害
+         */
         void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType /*damageType*/, SpellInfo const* /*spellInfo = nullptr*/) override
         {
             if (events.IsInPhase(PHASE_ONE))
                 damage = 0;
         }
 
+        /**
+         * @brief 被法术命中时
+         * @param caster 施法者
+         * @param spellInfo 法术信息
+         *
+         * 当被克尔苏加德之链虚语法术命中时，选择3个随机目标并施放真正的链技能
+         */
         void SpellHit(WorldObject* /*caster*/, SpellInfo const* spellInfo) override
         {
             if (spellInfo->Id == SPELL_CHAINS_DUMMY)
@@ -294,6 +450,17 @@ struct boss_kelthuzad : public BossAI
             }
         }
 
+        /**
+         * @brief 更新AI
+         * @param diff 距离上次更新的时间差（毫秒）
+         *
+         * 克尔苏加德的主循环逻辑：
+         * - 更新事件调度器
+         * - 管理寒冰箭冷却
+         * - 检测第三阶段转换（45%血量）
+         * - 执行各种技能事件
+         * - 施放寒冰箭或近战攻击
+         */
         void UpdateAI(uint32 diff) override
         {
             if (!UpdateVictim())
@@ -513,6 +680,13 @@ struct boss_kelthuzad : public BossAI
                 DoMeleeAttackIfReady();
         }
 
+        /**
+         * @brief 获取数据
+         * @param data 数据ID
+         * @return 数据值
+         *
+         * 用于获取憎恶死亡计数（成就判定）
+         */
         uint32 GetData(uint32 data) const override
         {
             if (data == DATA_ABOMINATION_DEATH_COUNT)
@@ -520,6 +694,14 @@ struct boss_kelthuzad : public BossAI
             return 0;
         }
 
+        /**
+         * @brief 执行动作
+         * @param action 动作ID
+         *
+         * 处理外部触发的动作：
+         * - ACTION_BEGIN_ENCOUNTER：开始战斗，进入第一阶段
+         * - ACTION_ABOMINATION_DIED：憎恶死亡计数增加
+         */
         void DoAction(int32 action) override
         {
             switch (action)
@@ -561,27 +743,45 @@ struct boss_kelthuzad : public BossAI
             }
         }
 
+        /**
+         * @brief 获取被魅惑玩家的AI
+         * @param player 被魅惑的玩家
+         * @return 特殊的魅惑玩家AI
+         *
+         * 当玩家被克尔苏加德之链控制时，使用特殊的AI使其优先攻击治疗
+         */
         PlayerAI* GetAIForCharmedPlayer(Player* player) override
         {
             return new KelThuzadCharmedPlayerAI(player);
         }
 
     private:
-        uint8 _skeletonCount;
-        uint8 _bansheeCount;
-        uint8 _abominationCount;
-        uint8 _abominationDeathCount;
-        uint32 _frostboltCooldown;
-        bool _phaseThree;
-        uint32 _guardianCount;
-        std::array<uint32, nGuardianSpawns> _guardianGroups;
+        uint8 _skeletonCount;       ///< 已召唤的骷髅数量
+        uint8 _bansheeCount;        ///< 已召唤的女妖数量
+        uint8 _abominationCount;    ///< 已召唤的憎恶数量
+        uint8 _abominationDeathCount; ///< 憎恶死亡计数（用于成就判定）
+        uint32 _frostboltCooldown;  ///< 寒冰箭冷却时间
+        bool _phaseThree;           ///< 是否已进入第三阶段
+        uint32 _guardianCount;      ///< 已召唤的冰冠守护者数量
+        std::array<uint32, nGuardianSpawns> _guardianGroups; ///< 冰冠守护者召唤组ID数组
 };
 
-static const float MINION_AGGRO_DISTANCE = 20.0f;
-// @hack the entire _movementTimer logic only exists because RandomMovementGenerator gets really confused due to the unique map geography of KT's room (it's placed on top of a copy of Winterspring).
-// As of the time of writing, RMG sometimes selects positions on the "floor" below the room, causing Abominations to path wildly through the room.
-// This custom movement code prevents this by simply ignoring z coord calculation (the floor of the minion coves is flat anyway).
-// Dev from the future that is reading this, if RMG has been fixed on the current core revision, please get rid of this hack. Thank you!
+static const float MINION_AGGRO_DISTANCE = 20.0f;  ///< 小怪的 agro 距离
+
+/**
+ * @struct npc_kelthuzad_minionAI
+ * @brief 克尔苏加德小怪基类AI
+ *
+ * 第一阶段小怪（骷髅、女妖、憎恶）的基类AI
+ *
+ * @hack 整个 _movementTimer 逻辑的存在是因为 RandomMovementGenerator
+ * 由于克尔苏加德房间独特的地图地理（放置在冬泉谷副本的上面）而变得混乱。
+ * 截至撰写本文时，RMG有时会选择房间下方"地板"上的位置，
+ * 导致憎恶在房间内疯狂巡逻。这个自定义移动代码通过简单地忽略z坐标计算来防止这种情况
+ * （小怪海湾的地板本来就是平的）。
+ * 来自未来的开发人员正在阅读本文，如果RMG已在当前核心版本上修复，
+ * 请删除此hack。谢谢！
+ */
 struct npc_kelthuzad_minionAI : public ScriptedAI
 {
     public:

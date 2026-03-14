@@ -15,6 +15,33 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file boss_sindragosa.cpp
+ * @brief 辛达苟萨BOSS战AI实现
+ *
+ * 本模块实现了冰冠城塞副本中"冰霜之翼大厅"最终BOSS辛达苟萨的完整战斗逻辑。
+ * 辛达苟萨是一条冰霜巨龙，是巫妖王最强大的仆从之一。
+ *
+ * 主要功能：
+ * - 三阶段战斗：地面阶段、空中阶段、P2阶段
+ * - 冰霜光环：持续伤害所有玩家
+ * - 魔法束缚：使施法者受到反冲伤害
+ * - 冰冻之握和刺骨之寒：拉拢并冻结玩家
+ * - 冰霜之墓：标记玩家并冻结
+ * - 空中阶段：施放霜炸弹
+ * - 秘法debuff：P2阶段堆叠伤害
+ *
+ * 相关生物：
+ * - 脊骨奔行者(Spinestalker)：小BOSS
+ * - 霜牙(Rimefang)：小BOSS
+ *
+ * 成就：
+ * - 全冻到死：在所有玩家都被冰冻的情况下击败BOSS
+ * - 冰霜灌注：暗影之锋任务线
+ *
+ * @see icecrown_citadel.h 副本实例脚本定义
+ */
+
 #include "CommonHelpers.h"
 #include "icecrown_citadel.h"
 #include "Containers.h"
@@ -34,21 +61,26 @@
 #include "SpellScript.h"
 #include "TemporarySummon.h"
 
+/**
+ * @enum Texts
+ * @brief BOSS台词和表情枚举
+ *
+ * 定义了辛达苟萨在战斗中的所有台词和表情ID
+ */
 enum Texts
 {
-    SAY_AGGRO                           = 0, // You are fools to have come to this place! The icy winds of Northrend will consume your souls!
-    SAY_UNCHAINED_MAGIC                 = 1, // Suffer, mortals, as your pathetic magic betrays you!
-    EMOTE_WARN_BLISTERING_COLD          = 2, // %s prepares to unleash a wave of blistering cold!
-    SAY_BLISTERING_COLD                 = 3, // Can you feel the cold hand of death upon your heart?
-    SAY_RESPITE_FOR_A_TORMENTED_SOUL    = 4, // Aaah! It burns! What sorcery is this?!
-    SAY_AIR_PHASE                       = 5, // Your incursion ends here! None shall survive!
-    SAY_PHASE_2                         = 6, // Now feel my master's limitless power and despair!
-    EMOTE_WARN_FROZEN_ORB               = 7, // %s fires a frozen orb towards $N!
-    SAY_KILL                            = 8, // Perish!
-                                             // A flaw of mortality...
-    SAY_BERSERK                         = 9, // Enough! I tire of these games!
-    SAY_DEATH                           = 10, // Free...at last...
-    EMOTE_BERSERK_RAID                  = 11
+    SAY_AGGRO                           = 0,    ///< 开怪台词：你们这些蠢货竟敢来到此地！诺森德的冰风将吞噬你们的灵魂！
+    SAY_UNCHAINED_MAGIC                 = 1,    ///< 魔法束缚台词：受苦吧，凡人，你们可悲的魔法将背叛你们！
+    EMOTE_WARN_BLISTERING_COLD          = 2,    ///< 刺骨之寒警告表情：%s准备释放一波刺骨之寒！
+    SAY_BLISTERING_COLD                 = 3,    ///< 刺骨之寒台词：你们能感觉到死亡冰冷的手握住你们的心脏吗？
+    SAY_RESPITE_FOR_A_TORMENTED_SOUL    = 4,    ///< 灵魂安息台词：啊！它在燃烧！这是什么魔法？！
+    SAY_AIR_PHASE                       = 5,    ///< 空中阶段台词：你们的入侵到此为止！没人能活下来！
+    SAY_PHASE_2                         = 6,    ///< P2阶段台词：现在感受我主人无限的力量并绝望吧！
+    EMOTE_WARN_FROZEN_ORB               = 7,    ///< 冰霜球警告表情：%s向$N发射了一个冰霜球！
+    SAY_KILL                            = 8,    ///< 击杀台词：毁灭吧！/ 凡人的缺陷...
+    SAY_BERSERK                         = 9,    ///< 狂暴台词：够了！我厌倦了这些游戏！
+    SAY_DEATH                           = 10,   ///< 死亡台词：终于...自由了...
+    EMOTE_BERSERK_RAID                  = 11    ///< 狂暴表情
 };
 
 enum Spells

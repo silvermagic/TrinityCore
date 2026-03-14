@@ -15,6 +15,31 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file boss_zuljin.cpp
+ * @brief 祖阿曼副本 - 祖尔金Boss脚本模块
+ *
+ * 本模块实现了祖尔金Boss的战斗逻辑，包括：
+ * - 五阶段形态转换（巨魔、熊、鹰、山猫、龙鹰）
+ * - 每种形态独特的技能组合
+ * - 灵魂虹吸机制
+ * - 狂暴机制
+ *
+ * 祖尔金是祖阿曼的最终Boss，是阿曼尼帝国的第一位也是最后一位国王。
+ * 战斗分为五个阶段，Boss会在每个阶段（每20%血量）变换一种动物神形态。
+ *
+ * 战斗阶段：
+ * - 阶段0（100%-80%）：巨魔形态 - 旋风斩、重伤投掷
+ * - 阶段1（80%-60%）：熊形态 - 蜷缩瘫痪、压制
+ * - 阶段2（60%-40%）：鹰形态 - 能量风暴、召唤旋风
+ * - 阶段3（40%-20%）：山猫形态 - 利爪狂怒、山猫冲锋
+ * - 阶段4（20%-0%）：龙鹰形态 - 火焰旋涡、火焰吐息、火柱
+ *
+ * 特殊机制：
+ * - Boss在每次变形时会吸取对应动物神的灵魂力量
+ * - 每个阶段Boss会获得该动物神的能力增益
+ */
+
 /* ScriptData
 SDName: Boss_ZulJin
 SD%Complete: 85%
@@ -29,70 +54,95 @@ EndScriptData */
 #include "TemporarySummon.h"
 #include "zulaman.h"
 
+/**
+ * @brief 对话和喊话枚举
+ *
+ * 定义祖尔金的各种对话ID
+ */
 enum Says
 {
-    YELL_INTRO                    = 0,
-    YELL_AGGRO                    = 1,
-    YELL_TRANSFORM_TO_BEAR        = 2,
-    YELL_TRANSFORM_TO_EAGLE       = 3,
-    YELL_TRANSFORM_TO_LYNX        = 4,
-    YELL_TRANSFORM_TO_DRAGONHAWK  = 5,
-    YELL_FIRE_BREATH              = 6,
-    YELL_BERSERK                  = 7,
-    YELL_KILL                     = 8,
-    YELL_DEATH                    = 9
+    YELL_INTRO                    = 0,  ///< 开场白
+    YELL_AGGRO                    = 1,  ///< 开战喊话
+    YELL_TRANSFORM_TO_BEAR        = 2,  ///< 变身为熊形态喊话
+    YELL_TRANSFORM_TO_EAGLE       = 3,  ///< 变身为鹰形态喊话
+    YELL_TRANSFORM_TO_LYNX        = 4,  ///< 变身为山猫形态喊话
+    YELL_TRANSFORM_TO_DRAGONHAWK  = 5,  ///< 变身为龙鹰形态喊话
+    YELL_FIRE_BREATH              = 6,  ///< 火焰吐息喊话
+    YELL_BERSERK                  = 7,  ///< 狂暴喊话
+    YELL_KILL                     = 8,  ///< 击杀玩家
+    YELL_DEATH                    = 9   ///< 死亡喊话
 };
 
+/**
+ * @brief 技能枚举
+ *
+ * 定义祖尔金使用的所有技能ID
+ */
 enum Spells
 {
-    // Troll Form
-    SPELL_WHIRLWIND               = 17207,
-    SPELL_GRIEVOUS_THROW          = 43093, // remove debuff after full healed
-    // Bear Form
-    SPELL_CREEPING_PARALYSIS      = 43095, // should cast on the whole raid
-    SPELL_OVERPOWER               = 43456, // use after melee attack dodged
-    // Eagle Form
-    SPELL_ENERGY_STORM            = 43983, // enemy area aura, trigger 42577
-    SPELL_ZAP_INFORM              = 42577,
-    SPELL_ZAP_DAMAGE              = 43137, // 1250 damage
-    SPELL_SUMMON_CYCLONE          = 43112, // summon four feather vortex
-    CREATURE_FEATHER_VORTEX       = 24136,
-    SPELL_CYCLONE_VISUAL          = 43119, // trigger 43147 visual
-    SPELL_CYCLONE_PASSIVE         = 43120, // trigger 43121 (4y aoe) every second
-    // Lynx Form
-    SPELL_CLAW_RAGE_HASTE         = 42583,
-    SPELL_CLAW_RAGE_TRIGGER       = 43149,
-    SPELL_CLAW_RAGE_DAMAGE        = 43150,
-    SPELL_LYNX_RUSH_HASTE         = 43152,
-    SPELL_LYNX_RUSH_DAMAGE        = 43153,
-    // Dragonhawk Form
-    SPELL_FLAME_WHIRL             = 43213, // trigger two spells
-    SPELL_FLAME_BREATH            = 43215,
-    SPELL_SUMMON_PILLAR           = 43216, // summon 24187
-    CREATURE_COLUMN_OF_FIRE       = 24187,
-    SPELL_PILLAR_TRIGGER          = 43218, // trigger 43217
-    // Cosmetic
-    SPELL_SPIRIT_AURA             = 42466,
-    SPELL_SIPHON_SOUL             = 43501,
-    // Transforms:
-    SPELL_SHAPE_OF_THE_BEAR       = 42594, // 15% dmg
-    SPELL_SHAPE_OF_THE_EAGLE      = 42606,
-    SPELL_SHAPE_OF_THE_LYNX       = 42607, // haste melee 30%
-    SPELL_SHAPE_OF_THE_DRAGONHAWK = 42608,
+    // Troll Form - 巨魔形态技能
+    SPELL_WHIRLWIND               = 17207,  ///< 旋风斩 - 近战范围AOE
+    SPELL_GRIEVOUS_THROW          = 43093,  ///< 重伤投掷 - 造成重伤，需要完全治愈才能移除
 
-    SPELL_BERSERK                 = 45078
+    // Bear Form - 熊形态技能
+    SPELL_CREEPING_PARALYSIS      = 43095,  ///< 蜷缩瘫痪 - 使目标瘫痪，持续数秒
+    SPELL_OVERPOWER               = 43456,  ///< 压制 - 在目标躲闪后使用，造成额外伤害
+
+    // Eagle Form - 鹰形态技能
+    SPELL_ENERGY_STORM            = 43983,  ///< 能量风暴 - 敌方区域光环，触发42577
+    SPELL_ZAP_INFORM              = 42577,  ///< 电击通知 - 触发电击伤害
+    SPELL_ZAP_DAMAGE              = 43137,  ///< 电击伤害 - 1250点伤害
+    SPELL_SUMMON_CYCLONE          = 43112,  ///< 召唤旋风 - 召唤四个羽毛旋风
+    CREATURE_FEATHER_VORTEX       = 24136,  ///< 羽毛旋风NPC ID
+    SPELL_CYCLONE_VISUAL          = 43119,  ///< 旋风视觉效果 - 触发43147视觉效果
+    SPELL_CYCLONE_PASSIVE         = 43120,  ///< 旋风被动 - 每秒触发43121（4码AOE）
+
+    // Lynx Form - 山猫形态技能
+    SPELL_CLAW_RAGE_HASTE         = 42583,  ///< 利爪狂怒急速 - 提高攻击速度
+    SPELL_CLAW_RAGE_TRIGGER       = 43149,  ///< 利爪狂怒触发
+    SPELL_CLAW_RAGE_DAMAGE        = 43150,  ///< 利爪狂怒伤害 - 持续攻击目标
+    SPELL_LYNX_RUSH_HASTE         = 43152,  ///< 山猫冲锋急速 - 提高移动速度
+    SPELL_LYNX_RUSH_DAMAGE        = 43153,  ///< 山猫冲锋伤害 - 快速攻击多个目标
+
+    // Dragonhawk Form - 龙鹰形态技能
+    SPELL_FLAME_WHIRL             = 43213,  ///< 火焰旋涡 - 触发两个法术
+    SPELL_FLAME_BREATH            = 43215,  ///< 火焰吐息 - 前方锥形火焰伤害
+    SPELL_SUMMON_PILLAR           = 43216,  ///< 召唤火柱 - 召唤24187
+    CREATURE_COLUMN_OF_FIRE       = 24187,  ///< 火柱NPC ID
+    SPELL_PILLAR_TRIGGER          = 43218,  ///< 火柱触发 - 触发43217
+
+    // Cosmetic - 视觉效果
+    SPELL_SPIRIT_AURA             = 42466,  ///< 灵魂光环 - 动物神身上的光环
+    SPELL_SIPHON_SOUL             = 43501,  ///< 虹吸灵魂 - 从动物神吸取灵魂
+
+    // Transforms - 变形技能
+    SPELL_SHAPE_OF_THE_BEAR       = 42594,  ///< 熊形态 - 增加15%伤害
+    SPELL_SHAPE_OF_THE_EAGLE      = 42606,  ///< 鹰形态
+    SPELL_SHAPE_OF_THE_LYNX       = 42607,  ///< 山猫形态 - 提高30%近战攻击速度
+    SPELL_SHAPE_OF_THE_DRAGONHAWK = 42608,  ///< 龙鹰形态
+
+    SPELL_BERSERK                 = 45078   ///< 狂暴 - 10分钟后进入狂暴
 };
 
+/**
+ * @brief 战斗阶段枚举
+ *
+ * 定义祖尔金战斗的各个阶段
+ */
 enum Phase
 {
-    PHASE_BEAR                    = 0,
-    PHASE_EAGLE                   = 1,
-    PHASE_LYNX                    = 2,
-    PHASE_DRAGONHAWK              = 3,
-    PHASE_TROLL                   = 4
+    PHASE_BEAR                    = 0,  ///< 熊形态阶段（80%-60%血量）
+    PHASE_EAGLE                   = 1,  ///< 鹰形态阶段（60%-40%血量）
+    PHASE_LYNX                    = 2,  ///< 山猫形态阶段（40%-20%血量）
+    PHASE_DRAGONHAWK              = 3,  ///< 龙鹰形态阶段（20%-0%血量）
+    PHASE_TROLL                   = 4   ///< 巨魔形态阶段（100%-80%血量）
 };
 
-//coords for going for changing form
+/**
+ * @brief 房间中心坐标
+ *
+ * Boss变形时传送的位置
+ */
 #define CENTER_X 120.148811f
 #define CENTER_Y 703.713684f
 #define CENTER_Z 45.111477f

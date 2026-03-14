@@ -15,6 +15,28 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file boss_xt002.cpp
+ * @brief XT-002 拆解者（XT-002 Deconstructor）Boss 战斗脚本模块
+ *
+ * 模块职责：
+ * 实现奥杜尔副本中 XT-002 拆解者 Boss 的完整战斗逻辑，包括：
+ * - XT-002 的主要战斗 AI 和技能系统
+ * - 心脏暴露阶段和硬直模式的机制
+ * - 震荡、灼热之光、重力炸弹等主要技能
+ * - 废料机器人、炸弹机器人和打桩机的召唤机制
+ * - 心脏伤害转换为 Boss 伤害的机制
+ * - Heartbreaker 和 Nerf Engineering 成就系统
+ *
+ * 战斗机制：
+ * - 普通模式：XT-002 定期施放震荡和重力炸弹
+ * - 灼热之光和重力炸弹会在地面生成火花和虚空区域
+ * - 每 25% 生命值，XT-002 暴露心脏，玩家可以攻击心脏
+ * - 心脏受到的伤害会转移到 Boss 身上（硬直模式）
+ * - 废料堆会定期生成小怪，需要玩家清理
+ * - 硬直模式：如果心脏被摧毁，Boss 进入硬直模式，伤害增加
+ */
+
 #include "ScriptMgr.h"
 #include "Containers.h"
 #include "InstanceScript.h"
@@ -31,73 +53,89 @@
 #include "Vehicle.h"
 #include "WorldPacket.h"
 
+/**
+ * @brief 法术 ID 枚举定义
+ *
+ * 定义 XT-002 战斗中使用的所有法术 ID
+ */
 enum Spells
 {
-    SPELL_TYMPANIC_TANTRUM                  = 62776,
-    SPELL_SEARING_LIGHT                     = 63018,
-    SPELL_SUMMON_LIFE_SPARK                 = 64210,
-    SPELL_SUMMON_VOID_ZONE                  = 64203,
-    SPELL_GRAVITY_BOMB                      = 63024,
-    SPELL_HEARTBREAK                        = 65737,
-    SPELL_STAND                             = 37752,
-    SPELL_SUBMERGE                          = 37751,
-    SPELL_ENRAGE                            = 26662,
-    SPELL_COOLDOWN_CREATURE_SPECIAL_2       = 64404,
-    SPELL_SCRAP_REPAIR                      = 62832,
+    // Boss 主要技能
+    SPELL_TYMPANIC_TANTRUM                  = 62776,  ///< 震荡 - 对所有玩家造成百分比伤害
+    SPELL_SEARING_LIGHT                     = 63018,  ///< 灼热之光 - 对目标及其周围造成神圣伤害
+    SPELL_SUMMON_LIFE_SPARK                 = 64210,  ///< 召唤生命火花
+    SPELL_SUMMON_VOID_ZONE                  = 64203,  ///< 召唤虚空区域
+    SPELL_GRAVITY_BOMB                      = 63024,  ///< 重力炸弹 - 对目标及其周围造成暗影伤害
+    SPELL_HEARTBREAK                        = 65737,  ///< 心碎 - 硬直模式下 Boss 的增益
+    SPELL_STAND                             = 37752,  ///< 站立
+    SPELL_SUBMERGE                          = 37751,  ///< 下潜 - 心脏暴露时 Boss 的状态
+    SPELL_ENRAGE                            = 26662,  ///< 狂暴 - 10 分钟后狂暴
+    SPELL_COOLDOWN_CREATURE_SPECIAL_2       = 64404,  ///< 生物特殊技能 2 冷却
+    SPELL_SCRAP_REPAIR                      = 62832,  ///< 废料修复 - 小怪修复 Boss
 
-    // XT-Toy Pile
-    SPELL_RECHARGE_PUMMELER                 = 62831,
-    SPELL_RECHARGE_SCRAPBOT                 = 62828,
-    SPELL_RECHARGE_BOOMBOT                  = 62835,
+    // XT-玩具堆
+    SPELL_RECHARGE_PUMMELER                 = 62831,  ///< 充能打桩机
+    SPELL_RECHARGE_SCRAPBOT                 = 62828,  ///< 充能废料机器人
+    SPELL_RECHARGE_BOOMBOT                  = 62835,  ///< 充能炸弹机器人
 
-    // Heart of the Deconstructor
-    SPELL_ENERGY_ORB                        = 62790,
-    SPELL_RIDE_VEHICLE_EXPOSED              = 63313,
-    SPELL_EXPOSED_HEART                     = 63849,
-    SPELL_HEART_RIDE_VEHICLE                = 63852,
-    SPELL_SCRAPBOT_RIDE_VEHICLE             = 47020,
-    SPELL_FULL_HEAL                         = 17683,
-    SPELL_HEART_OVERLOAD                    = 62789,
-    SPELL_HEART_LIGHTNING_TETHER            = 64799,
+    // 拆解者心脏
+    SPELL_ENERGY_ORB                        = 62790,  ///< 能量球
+    SPELL_RIDE_VEHICLE_EXPOSED              = 63313,  ///< 骑乘坐骑暴露
+    SPELL_EXPOSED_HEART                     = 63849,  ///< 暴露心脏
+    SPELL_HEART_RIDE_VEHICLE                = 63852,  ///< 心脏骑乘坐骑
+    SPELL_SCRAPBOT_RIDE_VEHICLE             = 47020,  ///< 废料机器人骑乘坐骑
+    SPELL_FULL_HEAL                         = 17683,  ///< 完全治疗
+    SPELL_HEART_OVERLOAD                    = 62789,  ///< 心脏过载
+    SPELL_HEART_LIGHTNING_TETHER            = 64799,  ///< 心脏闪电系绳
 
-    // Void Zone
-    SPELL_CONSUMPTION                       = 64209,
+    // 虚空区域
+    SPELL_CONSUMPTION                       = 64209,  ///< 消耗 - 虚空区域的持续伤害
 
-    // Life Spark
-    SPELL_ARCANE_POWER_STATE                = 49411,
-    SPELL_STATIC_CHARGED                    = 64227,
-    SPELL_SHOCK                             = 64230,
+    // 生命火花
+    SPELL_ARCANE_POWER_STATE                = 49411,  ///< 奥术能量状态
+    SPELL_STATIC_CHARGED                    = 64227,  ///< 静电充能
+    SPELL_SHOCK                             = 64230,  ///< 电击
 
-    // XM-024 Pummeller
-    SPELL_ARCING_SMASH                      = 8374,
-    SPELL_TRAMPLE                           = 5568,
-    SPELL_UPPERCUT                          = 10966,
+    // XM-024 打桩机
+    SPELL_ARCING_SMASH                      = 8374,   ///< 弧形斩
+    SPELL_TRAMPLE                           = 5568,   ///< 践踏
+    SPELL_UPPERCUT                          = 10966,  ///< 上勾拳
 
-    //Boombot
-    SPELL_321_BOOMBOT_AURA                  = 65032,
-    SPELL_BOOM                              = 62834,
+    // 炸弹机器人
+    SPELL_321_BOOMBOT_AURA                  = 65032,  ///< 321 炸弹机器人光环
+    SPELL_BOOM                              = 62834,  ///< 爆炸
 
-    // Achievement-related spells
-    SPELL_ACHIEVEMENT_CREDIT_NERF_SCRAPBOTS = 65037
+    // 成就相关法术
+    SPELL_ACHIEVEMENT_CREDIT_NERF_SCRAPBOTS = 65037   ///< Nerf Scrapbots 成就积分
 };
 
+/**
+ * @brief 事件 ID 枚举定义
+ *
+ * 定义战斗中使用的所有事件 ID，用于事件调度系统
+ */
 enum Events
 {
-    EVENT_TYMPANIC_TANTRUM = 1,
-    EVENT_PHASE_CHECK,
-    EVENT_SEARING_LIGHT,
-    EVENT_GRAVITY_BOMB,
-    EVENT_SUBMERGE,
-    EVENT_DISPOSE_HEART,
-    EVENT_ENRAGE,
-    EVENT_ENTER_HARD_MODE,
-    EVENT_RESUME_ATTACK
+    EVENT_TYMPANIC_TANTRUM = 1,     ///< 震荡事件
+    EVENT_PHASE_CHECK,              ///< 阶段检查
+    EVENT_SEARING_LIGHT,            ///< 灼热之光事件
+    EVENT_GRAVITY_BOMB,             ///< 重力炸弹事件
+    EVENT_SUBMERGE,                 ///< 下潜事件
+    EVENT_DISPOSE_HEART,            ///< 处理心脏事件
+    EVENT_ENRAGE,                   ///< 狂暴事件
+    EVENT_ENTER_HARD_MODE,          ///< 进入硬直模式事件
+    EVENT_RESUME_ATTACK             ///< 恢复攻击事件
 };
 
+/**
+ * @brief XT-002 阶段枚举定义
+ *
+ * 定义 XT-002 战斗的不同阶段
+ */
 enum XT002Phases
 {
-    PHASE_1 = 1,
-    PHASE_HEART
+    PHASE_1 = 1,       ///< 阶段 1 - 正常战斗阶段
+    PHASE_HEART        ///< 心脏阶段 - 心脏暴露，Boss 处于下潜状态
 };
 
 enum Actions

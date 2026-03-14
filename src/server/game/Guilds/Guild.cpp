@@ -1083,34 +1083,60 @@ Guild::~Guild()
     _DeleteBankItems(temp);
 }
 
-// Creates new guild with default data and saves it to database.
+/**
+ * @brief 创建新公会并保存到数据库
+ *
+ * 职责：
+ *   创建一个新的公会，初始化公会数据，设置默认公会等级，将会长添加为成员，
+ *   并将所有数据持久化到数据库。
+ *
+ * @param pLeader 公会会长玩家指针
+ * @param name 公会名称
+ *
+ * @return true 创建成功
+ * @return false 创建失败（公会名已存在或会话无效）
+ *
+ * 主要流程：
+ *   1. 检查公会名是否已存在
+ *   2. 验证会长的会话有效性
+ *   3. 生成公会ID并初始化公会基本属性
+ *   4. 将公会信息插入数据库
+ *   5. 创建默认公会等级
+ *   6. 将会长添加为公会成员
+ *   7. 触发公会创建脚本事件
+ */
 bool Guild::Create(Player* pLeader, std::string_view name)
 {
-    // Check if guild with such name already exists
+    // 检查是否已存在同名公会
     if (sGuildMgr->GetGuildByName(name))
         return false;
 
+    // 验证会长的会话有效性
     WorldSession* pLeaderSession = pLeader->GetSession();
     if (!pLeaderSession)
         return false;
 
-    m_id = sGuildMgr->GenerateGuildId();
-    m_leaderGuid = pLeader->GetGUID();
-    m_name = name;
-    m_info = "";
-    m_motd = "No message set.";
-    m_bankMoney = 0;
-    m_createdDate = GameTime::GetGameTime();
+    // 初始化公会基本属性
+    m_id = sGuildMgr->GenerateGuildId();           // 生成唯一公会ID
+    m_leaderGuid = pLeader->GetGUID();             // 设置会长GUID
+    m_name = name;                                  // 设置公会名称
+    m_info = "";                                    // 公会信息（初始为空）
+    m_motd = "No message set.";                    // 每日消息（默认消息）
+    m_bankMoney = 0;                                // 公会银行金币（初始为0）
+    m_createdDate = GameTime::GetGameTime();       // 创建时间
 
     TC_LOG_DEBUG("guild", "GUILD: creating guild [{}] for leader {} {}",
         m_name, pLeader->GetName(), m_leaderGuid.ToString());
 
+    // 开启数据库事务
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
 
+    // 删除可能存在的旧公会成员记录（清理脏数据）
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_GUILD_MEMBERS);
     stmt->setUInt32(0, m_id);
     trans->Append(stmt);
 
+    // 插入新的公会记录到数据库
     uint8 index = 0;
     stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_GUILD);
     stmt->setUInt32(  index, m_id);
@@ -1127,65 +1153,102 @@ bool Guild::Create(Player* pLeader, std::string_view name)
     stmt->setUInt64(++index, m_bankMoney);
     trans->Append(stmt);
 
-    _CreateDefaultGuildRanks(trans, pLeaderSession->GetSessionDbLocaleIndex()); // Create default ranks
-    bool ret = AddMember(trans, m_leaderGuid, GR_GUILDMASTER);                  // Add guildmaster
+    // 创建默认公会等级
+    _CreateDefaultGuildRanks(trans, pLeaderSession->GetSessionDbLocaleIndex());
 
+    // 将会长添加为公会成员（公会会长等级）
+    bool ret = AddMember(trans, m_leaderGuid, GR_GUILDMASTER);
+
+    // 提交数据库事务
     CharacterDatabase.CommitTransaction(trans);
 
+    // 触发公会创建脚本事件
     if (ret)
         sScriptMgr->OnGuildCreate(this, pLeader, m_name);
 
     return ret;
 }
 
-// Disbands guild and deletes all related data from database
+/**
+ * @brief 解散公会并删除所有相关数据
+ *
+ * 职责：
+ *   解散当前公会，移除所有成员，清理公会银行物品，
+ *   并从数据库中删除所有公会相关数据。
+ *
+ * 主要流程：
+ *   1. 触发公会解散脚本事件
+ *   2. 广播公会解散事件通知所有成员
+ *   3. 移除所有公会成员
+ *   4. 删除公会基本信息
+ *   5. 删除公会等级信息
+ *   6. 删除公会银行标签页
+ *   7. 删除公会银行物品并释放内存
+ *   8. 删除公会银行权限设置
+ *   9. 删除公会银行事件日志
+ *   10. 删除公会事件日志
+ *   11. 从公会管理器中移除公会
+ */
 void Guild::Disband()
 {
-    // Call scripts before guild data removed from database
+    // 在公会数据从数据库删除前调用脚本事件
     sScriptMgr->OnGuildDisband(this);
 
+    // 广播公会解散事件通知所有在线成员
     _BroadcastEvent(GE_DISBANDED, ObjectGuid::Empty);
 
+    // 开启数据库事务
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
-    // Remove all members
+
+    // 移除所有公会成员
     while (!m_members.empty())
     {
         auto itr = m_members.begin();
         DeleteMember(trans, itr->second.GetGUID(), true);
     }
 
+    // 删除公会基本信息
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_GUILD);
     stmt->setUInt32(0, m_id);
     trans->Append(stmt);
 
+    // 删除公会等级信息
     stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_GUILD_RANKS);
     stmt->setUInt32(0, m_id);
     trans->Append(stmt);
 
+    // 删除公会银行标签页
     stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_GUILD_BANK_TABS);
     stmt->setUInt32(0, m_id);
     trans->Append(stmt);
 
-    // Free bank tab used memory and delete items stored in them
+    // 释放公会银行标签页内存并删除存储的物品
     _DeleteBankItems(trans, true);
 
+    // 删除公会银行物品记录
     stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_GUILD_BANK_ITEMS);
     stmt->setUInt32(0, m_id);
     trans->Append(stmt);
 
+    // 删除公会银行权限设置
     stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_GUILD_BANK_RIGHTS);
     stmt->setUInt32(0, m_id);
     trans->Append(stmt);
 
+    // 删除公会银行事件日志
     stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_GUILD_BANK_EVENTLOGS);
     stmt->setUInt32(0, m_id);
     trans->Append(stmt);
 
+    // 删除公会事件日志
     stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_GUILD_EVENTLOGS);
     stmt->setUInt32(0, m_id);
     trans->Append(stmt);
 
+    // 提交数据库事务
     CharacterDatabase.CommitTransaction(trans);
+
+    // 从公会管理器中移除公会
     sGuildMgr->RemoveGuild(m_id);
 }
 
@@ -1219,27 +1282,64 @@ void Guild::OnPlayerStatusChange(Player* player, uint32 flag, bool state)
     }
 }
 
+/**
+ * @brief 设置公会名称
+ *
+ * 职责：
+ *   验证并更新公会名称。
+ *
+ * @param name 新的公会名称
+ *
+ * @return true 设置成功
+ * @return false 设置失败（名称无效或已被使用）
+ *
+ * 验证条件：
+ *   - 不能与当前名称相同
+ *   - 不能为空
+ *   - 长度不能超过24个字符
+ *   - 不能是保留名称
+ *   - 必须是有效的公会名称格式
+ */
 bool Guild::SetName(std::string_view name)
 {
+    // 验证名称有效性
     if (m_name == name || name.empty() || name.length() > 24 || sObjectMgr->IsReservedName(name) || !ObjectMgr::IsValidCharterName(name))
         return false;
 
+    // 更新公会名称
     m_name = name;
+
+    // 更新数据库中的公会名称
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_GUILD_NAME);
     stmt->setString(0, m_name);
     stmt->setUInt32(1, GetId());
     CharacterDatabase.Execute(stmt);
+
     return true;
 }
 
+/**
+ * @brief 处理公会名册查询请求
+ *
+ * 职责：
+ *   构建并发送公会名册数据包，包含所有成员和等级信息。
+ *
+ * @param session 请求玩家的会话
+ *
+ * 发送的数据包括：
+ *   - 公会等级信息（权限、银行权限等）
+ *   - 所有成员信息（GUID、等级、区域、等级、职业等）
+ *   - 公会消息和公会信息
+ */
 void Guild::HandleRoster(WorldSession* session)
 {
     WorldPackets::Guild::GuildRoster roster;
 
+    // 构建等级数据
     roster.RankData.reserve(m_ranks.size());
     for (RankInfo const& rank : m_ranks)
     {
-        WorldPackets::Guild::GuildRankData& rankData =  roster.RankData.emplace_back();
+        WorldPackets::Guild::GuildRankData& rankData = roster.RankData.emplace_back();
 
         rankData.Flags = rank.GetRights();
         rankData.WithdrawGoldLimit = rank.GetBankMoneyPerDay();
@@ -1250,7 +1350,10 @@ void Guild::HandleRoster(WorldSession* session)
         }
     }
 
+    // 检查是否有查看官员备注的权限
     bool sendOfficerNote = _HasRankRight(session->GetPlayer(), GR_RIGHT_VIEWOFFNOTE);
+
+    // 构建成员数据
     roster.MemberData.reserve(m_members.size());
     for (auto const& [guid, member] : m_members)
     {
@@ -1272,6 +1375,7 @@ void Guild::HandleRoster(WorldSession* session)
             memberData.OfficerNote = member.GetOfficerNote();
     }
 
+    // 设置公会消息和信息
     roster.WelcomeText = m_motd;
     roster.InfoText = m_info;
 
@@ -1279,63 +1383,114 @@ void Guild::HandleRoster(WorldSession* session)
     session->SendPacket(roster.Write());
 }
 
+/**
+ * @brief 处理公会信息查询请求
+ *
+ * 职责：
+ *   发送公会基本信息，包括公会名称、徽章样式和等级名称。
+ *
+ * @param session 请求玩家的会话
+ */
 void Guild::HandleQuery(WorldSession* session)
 {
     WorldPackets::Guild::QueryGuildInfoResponse response;
     response.GuildId = m_id;
 
+    // 设置公会徽章信息
     response.Info.EmblemStyle = m_emblemInfo.GetStyle();
     response.Info.EmblemColor = m_emblemInfo.GetColor();
     response.Info.BorderStyle = m_emblemInfo.GetBorderStyle();
     response.Info.BorderColor = m_emblemInfo.GetBorderColor();
     response.Info.BackgroundColor = m_emblemInfo.GetBackgroundColor();
 
+    // 设置等级名称
     for (uint8 i = 0; i < _GetRanksSize(); ++i)
         response.Info.Ranks[i] = m_ranks[i].GetName();
 
     response.Info.RankCount = _GetRanksSize();
-
     response.Info.GuildName = m_name;
 
     session->SendPacket(response.Write());
     TC_LOG_DEBUG("guild", "SMSG_GUILD_QUERY_RESPONSE [{}]", session->GetPlayerInfo());
 }
 
+/**
+ * @brief 处理设置每日消息请求
+ *
+ * 职责：
+ *   更新公会的每日消息（MOTD）。
+ *
+ * @param session 发起请求的玩家会话
+ * @param motd 新的每日消息内容
+ *
+ * 主要流程：
+ *   1. 检查是否与当前消息相同
+ *   2. 验证玩家是否有设置MOTD的权限
+ *   3. 更新MOTD并保存到数据库
+ *   4. 触发脚本事件
+ *   5. 广播MOTD更新通知
+ */
 void Guild::HandleSetMOTD(WorldSession* session, std::string_view motd)
 {
+    // 如果与当前消息相同，直接返回
     if (m_motd == motd)
         return;
 
-    // Player must have rights to set MOTD
+    // 玩家必须拥有设置MOTD的权限
     if (!_HasRankRight(session->GetPlayer(), GR_RIGHT_SETMOTD))
+    {
         SendCommandResult(session, GUILD_COMMAND_EDIT_MOTD, ERR_GUILD_PERMISSIONS);
+    }
     else
     {
+        // 更新MOTD
         m_motd = motd;
 
+        // 触发脚本事件
         sScriptMgr->OnGuildMOTDChanged(this, m_motd);
 
+        // 更新数据库
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_GUILD_MOTD);
         stmt->setString(0, m_motd);
         stmt->setUInt32(1, m_id);
         CharacterDatabase.Execute(stmt);
 
+        // 广播MOTD更新通知
         _BroadcastEvent(GE_MOTD, ObjectGuid::Empty, m_motd);
     }
 }
 
+/**
+ * @brief 处理设置公会信息请求
+ *
+ * 职责：
+ *   更新公会的信息描述。
+ *
+ * @param session 发起请求的玩家会话
+ * @param info 新的公会信息描述
+ *
+ * 主要流程：
+ *   1. 检查是否与当前信息相同
+ *   2. 验证玩家是否有修改公会信息的权限
+ *   3. 更新信息并保存到数据库
+ *   4. 触发脚本事件
+ */
 void Guild::HandleSetInfo(WorldSession* session, std::string_view info)
 {
+    // 如果与当前信息相同，直接返回
     if (m_info == info)
         return;
 
-    // Player must have rights to set guild's info
+    // 玩家必须拥有修改公会信息的权限
     if (_HasRankRight(session->GetPlayer(), GR_RIGHT_MODIFY_GUILD_INFO))
     {
+        // 更新公会信息
         m_info = info;
 
+        // 触发脚本事件
         sScriptMgr->OnGuildInfoChanged(this, m_info);
 
+        // 更新数据库
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_GUILD_INFO);
         stmt->setString(0, m_info);
         stmt->setUInt32(1, m_id);
@@ -1464,8 +1619,30 @@ void Guild::HandleBuyBankTab(WorldSession* session, uint8 tabId)
     SendPermissions(session); /// Hack to force client to update permissions
 }
 
+/**
+ * @brief 处理邀请玩家加入公会的请求
+ *
+ * 职责：
+ *   验证邀请者和被邀请者的资格，检查各种限制条件，
+ *   并向被邀请者发送公会邀请消息。
+ *
+ * @param session 发起邀请的玩家会话
+ * @param name 被邀请玩家的名称
+ *
+ * 主要流程：
+ *   1. 查找被邀请玩家（必须在线）
+ *   2. 检查被邀请者是否屏蔽了邀请者
+ *   3. 检查阵营限制（是否允许跨阵营邀请）
+ *   4. 检查被邀请者是否已在公会中
+ *   5. 检查被邀请者是否已被其他公会邀请
+ *   6. 检查邀请者是否有邀请权限
+ *   7. 设置被邀请者的公会邀请ID
+ *   8. 记录邀请事件日志
+ *   9. 发送公会邀请包给被邀请者
+ */
 void Guild::HandleInviteMember(WorldSession* session, std::string_view name)
 {
+    // 查找被邀请玩家（必须在线）
     Player* pInvitee = ObjectAccessor::FindPlayerByName(name);
     if (!pInvitee)
     {
@@ -1474,151 +1651,259 @@ void Guild::HandleInviteMember(WorldSession* session, std::string_view name)
     }
 
     Player* player = session->GetPlayer();
-    // Do not show invitations from ignored players
+
+    // 不向屏蔽了邀请者的玩家发送邀请
     if (pInvitee->GetSocial()->HasIgnore(player->GetGUID()))
         return;
 
+    // 检查阵营限制（如果配置不允许跨阵营交互）
     if (!sWorld->getBoolConfig(CONFIG_ALLOW_TWO_SIDE_INTERACTION_GUILD) && pInvitee->GetTeam() != player->GetTeam())
     {
         SendCommandResult(session, GUILD_COMMAND_INVITE, ERR_GUILD_NOT_ALLIED, name);
         return;
     }
-    // Invited player cannot be in another guild
+
+    // 被邀请玩家不能已在其他公会
     if (pInvitee->GetGuildId())
     {
         SendCommandResult(session, GUILD_COMMAND_INVITE, ERR_ALREADY_IN_GUILD_S, name);
         return;
     }
-    // Invited player cannot be invited
+
+    // 被邀请玩家不能已被其他公会邀请
     if (pInvitee->GetGuildIdInvited())
     {
         SendCommandResult(session, GUILD_COMMAND_INVITE, ERR_ALREADY_INVITED_TO_GUILD_S, name);
         return;
     }
-    // Inviting player must have rights to invite
+
+    // 邀请者必须拥有邀请权限
     if (!_HasRankRight(player, GR_RIGHT_INVITE))
     {
         SendCommandResult(session, GUILD_COMMAND_INVITE, ERR_GUILD_PERMISSIONS);
         return;
     }
 
+    // 发送邀请成功结果给邀请者
     SendCommandResult(session, GUILD_COMMAND_INVITE, ERR_GUILD_COMMAND_SUCCESS, name);
 
     TC_LOG_DEBUG("guild", "Player {} invited {} to join his Guild", player->GetName(), pInvitee->GetName());
 
+    // 设置被邀请者的公会邀请ID
     pInvitee->SetGuildIdInvited(m_id);
+
+    // 记录邀请事件日志
     _LogEvent(GUILD_EVENT_LOG_INVITE_PLAYER, player->GetGUID().GetCounter(), pInvitee->GetGUID().GetCounter());
 
+    // 构建并发送公会邀请包给被邀请者
     WorldPackets::Guild::GuildInvite invite;
-
     invite.InviterName = player->GetName();
     invite.GuildName = GetName();
-
     pInvitee->SendDirectMessage(invite.Write());
+
     TC_LOG_DEBUG("guild", "SMSG_GUILD_INVITE [{}]", pInvitee->GetName());
 }
 
+/**
+ * @brief 处理玩家接受公会邀请
+ *
+ * 职责：
+ *   验证玩家阵营后，将玩家添加到公会中。
+ *
+ * @param session 接受邀请的玩家会话
+ *
+ * 主要流程：
+ *   1. 检查阵营限制（是否允许跨阵营加入）
+ *   2. 将玩家添加为公会成员
+ */
 void Guild::HandleAcceptMember(WorldSession* session)
 {
     Player* player = session->GetPlayer();
+
+    // 检查阵营限制（如果配置不允许跨阵营交互）
     if (!sWorld->getBoolConfig(CONFIG_ALLOW_TWO_SIDE_INTERACTION_GUILD) &&
         player->GetTeam() != sCharacterCache->GetCharacterTeamByGuid(GetLeaderGUID()))
         return;
 
+    // 将玩家添加到公会（使用默认最低等级）
     CharacterDatabaseTransaction trans(nullptr);
     AddMember(trans, player->GetGUID());
 }
 
+/**
+ * @brief 处理玩家离开公会
+ *
+ * 职责：
+ *   处理玩家主动退出公会的请求，包括会长退出的特殊情况。
+ *
+ * @param session 离开公会的玩家会话
+ *
+ * 主要流程：
+ *   1. 移除玩家的公会日历事件和报名
+ *   2. 如果是会长离开：
+ *      a. 如果还有其他成员，拒绝会长离开
+ *      b. 如果是最后一名成员，解散公会
+ *   3. 如果是普通成员离开：
+ *      a. 从公会中删除成员
+ *      b. 记录离开事件日志
+ *      c. 广播离开事件通知其他成员
+ */
 void Guild::HandleLeaveMember(WorldSession* session)
 {
     Player* player = session->GetPlayer();
 
+    // 移除玩家的公会日历事件和报名
     sCalendarMgr->RemovePlayerGuildEventsAndSignups(player->GetGUID(), GetId());
 
-    // If leader is leaving
+    // 处理会长离开的特殊情况
     if (_IsLeader(player))
     {
         if (m_members.size() > 1)
-            // Leader cannot leave if he is not the last member
+        {
+            // 如果还有其他成员，会长不能离开
             SendCommandResult(session, GUILD_COMMAND_QUIT, ERR_GUILD_LEADER_LEAVE);
+        }
         else
         {
-            // Guild is disbanded if leader leaves.
+            // 如果是最后一名成员，会长离开时解散公会
             Disband();
         }
     }
     else
     {
+        // 普通成员离开：从公会中删除成员
         CharacterDatabaseTransaction trans(nullptr);
         DeleteMember(trans, player->GetGUID(), false, false);
 
+        // 记录离开公会事件日志
         _LogEvent(GUILD_EVENT_LOG_LEAVE_GUILD, player->GetGUID().GetCounter());
+
+        // 广播成员离开事件通知其他成员
         _BroadcastEvent(GE_LEFT, player->GetGUID(), player->GetName());
 
+        // 发送成功结果给玩家
         SendCommandResult(session, GUILD_COMMAND_QUIT, ERR_GUILD_COMMAND_SUCCESS, m_name);
     }
 }
 
+/**
+ * @brief 处理踢出公会成员
+ *
+ * 职责：
+ *   处理将公会成员从公会中踢出的请求，验证权限和等级限制。
+ *
+ * @param session 发起踢人操作的玩家会话
+ * @param name 被踢出成员的名称
+ *
+ * 主要流程：
+ *   1. 检查操作者是否有踢人权限
+ *   2. 检查被踢成员是否存在
+ *   3. 检查被踢成员是否为会长（会长不能被踢）
+ *   4. 检查操作者等级是否高于被踢成员
+ *   5. 从公会中删除成员
+ *   6. 记录踢人事件日志
+ *   7. 广播踢人事件通知
+ */
 void Guild::HandleRemoveMember(WorldSession* session, std::string_view name)
 {
     Player* player = session->GetPlayer();
-    // Player must have rights to remove members
+
+    // 操作者必须拥有踢人权限
     if (!_HasRankRight(player, GR_RIGHT_REMOVE))
+    {
         SendCommandResult(session, GUILD_COMMAND_REMOVE, ERR_GUILD_PERMISSIONS);
+    }
     else if (Member* member = GetMember(name))
     {
-        // Guild masters cannot be removed
+        // 公会会长不能被踢出
         if (member->IsRank(GR_GUILDMASTER))
+        {
             SendCommandResult(session, GUILD_COMMAND_REMOVE, ERR_GUILD_LEADER_LEAVE);
-        // Do not allow to remove player with the same rank or higher
+        }
         else
         {
+            // 不能踢出等级相同或更高的成员
             Member const* memberMe = GetMember(player->GetGUID());
             if (!memberMe || member->IsRankNotLower(memberMe->GetRankId()))
+            {
                 SendCommandResult(session, GUILD_COMMAND_REMOVE, ERR_GUILD_RANK_TOO_HIGH_S, name);
+            }
             else
             {
                 ObjectGuid guid = member->GetGUID();
 
-                // After call to DeleteMember pointer to member becomes invalid
+                // 注意：调用DeleteMember后，member指针将失效
                 CharacterDatabaseTransaction trans(nullptr);
                 DeleteMember(trans, guid, false, true);
+
+                // 记录踢人事件日志
                 _LogEvent(GUILD_EVENT_LOG_UNINVITE_PLAYER, player->GetGUID().GetCounter(), guid.GetCounter());
+
+                // 广播成员被踢出事件
                 _BroadcastEvent(GE_REMOVED, ObjectGuid::Empty, name, player->GetName());
             }
         }
     }
 }
 
+/**
+ * @brief 处理成员等级晋升或降级
+ *
+ * 职责：
+ *   处理公会成员等级的晋升或降级操作，验证权限和等级限制。
+ *
+ * @param session 发起操作的玩家会话
+ * @param name 目标成员名称
+ * @param demote true为降级，false为晋升
+ *
+ * 主要流程：
+ *   1. 检查操作者是否有晋升/降级权限
+ *   2. 检查目标成员是否存在
+ *   3. 检查是否对自己操作（不允许）
+ *   4. 降级时：
+ *      a. 检查目标成员等级是否低于操作者
+ *      b. 检查目标成员是否已达最低等级
+ *   5. 晋升时：
+ *      a. 检查目标成员等级是否可以晋升（不能超过操作者等级-1）
+ *   6. 更新成员等级
+ *   7. 记录事件日志
+ *   8. 广播晋升/降级事件
+ */
 void Guild::HandleUpdateMemberRank(WorldSession* session, std::string_view name, bool demote)
 {
     Player* player = session->GetPlayer();
     GuildCommandType type = demote ? GUILD_COMMAND_DEMOTE : GUILD_COMMAND_PROMOTE;
-    // Player must have rights to promote
+
+    // 操作者必须拥有晋升或降级权限
     if (!_HasRankRight(player, demote ? GR_RIGHT_DEMOTE : GR_RIGHT_PROMOTE))
+    {
         SendCommandResult(session, type, ERR_GUILD_PERMISSIONS);
-    // Promoted player must be a member of guild
+    }
+    // 目标成员必须存在于公会中
     else if (Member* member = GetMember(name))
     {
-        // Player cannot promote himself
+        // 玩家不能对自己进行晋升或降级操作
         if (member->IsSamePlayer(player->GetGUID()))
         {
             SendCommandResult(session, type, ERR_GUILD_NAME_INVALID);
             return;
         }
 
+        // 获取操作者的成员信息和等级
         Member const* memberMe = GetMember(player->GetGUID());
         ASSERT(memberMe);
         uint8 rankId = memberMe->GetRankId();
+
         if (demote)
         {
-            // Player can demote only lower rank members
+            // 降级：只能降级等级低于自己的成员
             if (member->IsRankNotLower(rankId))
             {
                 SendCommandResult(session, type, ERR_GUILD_RANK_TOO_HIGH_S, name);
                 return;
             }
-            // Lowest rank cannot be demoted
+
+            // 最低等级的成员不能再降级
             if (member->GetRankId() >= _GetLowestRankId())
             {
                 SendCommandResult(session, type, ERR_GUILD_RANK_TOO_LOW_S, name);
@@ -1627,8 +1912,8 @@ void Guild::HandleUpdateMemberRank(WorldSession* session, std::string_view name,
         }
         else
         {
-            // Allow to promote only to lower rank than member's rank
-            // member->GetRankId() + 1 is the highest rank that current player can promote to
+            // 晋升：只能晋升到比操作者等级低的等级
+            // member->GetRankId() + 1 是当前玩家可以晋升的最高等级
             if (member->IsRankNotLower(rankId + 1))
             {
                 SendCommandResult(session, type, ERR_GUILD_RANK_TOO_HIGH_S, name);
@@ -1636,11 +1921,20 @@ void Guild::HandleUpdateMemberRank(WorldSession* session, std::string_view name,
             }
         }
 
+        // 计算新等级（降级+1，晋升-1，因为等级ID越小等级越高）
         uint32 newRankId = member->GetRankId() + (demote ? 1 : -1);
+
+        // 更新成员等级
         CharacterDatabaseTransaction trans(nullptr);
         member->ChangeRank(trans, newRankId);
-        _LogEvent(demote ? GUILD_EVENT_LOG_DEMOTE_PLAYER : GUILD_EVENT_LOG_PROMOTE_PLAYER, player->GetGUID().GetCounter(), member->GetGUID().GetCounter(), newRankId);
-        _BroadcastEvent(demote ? GE_DEMOTION : GE_PROMOTION, ObjectGuid::Empty, player->GetName(), member->GetName(), _GetRankName(newRankId));
+
+        // 记录晋升/降级事件日志
+        _LogEvent(demote ? GUILD_EVENT_LOG_DEMOTE_PLAYER : GUILD_EVENT_LOG_PROMOTE_PLAYER,
+                  player->GetGUID().GetCounter(), member->GetGUID().GetCounter(), newRankId);
+
+        // 广播晋升/降级事件通知
+        _BroadcastEvent(demote ? GE_DEMOTION : GE_PROMOTION, ObjectGuid::Empty,
+                        player->GetName(), member->GetName(), _GetRankName(newRankId));
     }
 }
 
@@ -1912,42 +2206,95 @@ void Guild::SendLoginInfo(WorldSession* session)
 }
 
 // Loading methods
+/**
+ * @brief 从数据库加载公会信息
+ *
+ * 职责：
+ *   从数据库查询结果中加载公会的基本信息，包括ID、名称、会长、
+ *   公会徽章、消息、创建时间、银行金币和银行标签页数量。
+ *
+ * @param fields 数据库查询结果字段数组
+ *
+ * @return true 加载成功
+ * @return false 加载失败（本函数始终返回true）
+ *
+ * 加载的数据包括：
+ *   - 公会ID
+ *   - 公会名称
+ *   - 会长GUID
+ *   - 公会徽章信息（样式、颜色、边框等）
+ *   - 公会信息描述
+ *   - 每日消息
+ *   - 创建日期
+ *   - 银行金币数量
+ *   - 已购买的银行标签页数量
+ */
 bool Guild::LoadFromDB(Field* fields)
 {
-    m_id            = fields[0].GetUInt32();
-    m_name          = fields[1].GetString();
-    m_leaderGuid    = ObjectGuid(HighGuid::Player, fields[2].GetUInt32());
-    m_emblemInfo.LoadFromDB(fields);
-    m_info          = fields[8].GetString();
-    m_motd          = fields[9].GetString();
-    m_createdDate   = time_t(fields[10].GetUInt32());
-    m_bankMoney     = fields[11].GetUInt64();
+    // 加载公会基本属性
+    m_id            = fields[0].GetUInt32();                                    // 公会ID
+    m_name          = fields[1].GetString();                                    // 公会名称
+    m_leaderGuid    = ObjectGuid(HighGuid::Player, fields[2].GetUInt32());     // 会长GUID
+    m_emblemInfo.LoadFromDB(fields);                                            // 公会徽章信息
+    m_info          = fields[8].GetString();                                    // 公会信息描述
+    m_motd          = fields[9].GetString();                                    // 每日消息
+    m_createdDate   = time_t(fields[10].GetUInt32());                          // 创建日期
+    m_bankMoney     = fields[11].GetUInt64();                                   // 银行金币
 
+    // 加载银行标签页数量
     uint8 purchasedTabs = uint8(fields[12].GetUInt64());
     if (purchasedTabs > GUILD_BANK_MAX_TABS)
         purchasedTabs = GUILD_BANK_MAX_TABS;
 
+    // 初始化银行标签页
     m_bankTabs.clear();
     m_bankTabs.reserve(purchasedTabs);
     for (uint8 i = 0; i < purchasedTabs; ++i)
         m_bankTabs.emplace_back(m_id, i);
+
     return true;
 }
 
+/**
+ * @brief 从数据库加载公会等级信息
+ *
+ * 职责：
+ *   从数据库查询结果中加载公会等级信息，并添加到等级列表。
+ *
+ * @param fields 数据库查询结果字段数组
+ */
 void Guild::LoadRankFromDB(Field* fields)
 {
     RankInfo rankInfo(m_id);
-
     rankInfo.LoadFromDB(fields);
-
     m_ranks.push_back(rankInfo);
 }
 
+/**
+ * @brief 从数据库加载公会成员信息
+ *
+ * 职责：
+ *   从数据库查询结果中加载公会成员信息，包括玩家GUID、等级等数据。
+ *
+ * @param fields 数据库查询结果字段数组
+ *
+ * @return true 加载成功
+ * @return false 加载失败（成员已存在或数据无效）
+ *
+ * 主要流程：
+ *   1. 从字段中提取玩家GUID
+ *   2. 尝试将成员添加到成员列表
+ *   3. 加载成员详细数据
+ *   4. 如果加载失败，从数据库删除无效成员记录
+ *   5. 更新角色缓存中的公会ID
+ */
 bool Guild::LoadMemberFromDB(Field* fields)
 {
+    // 提取玩家GUID
     ObjectGuid::LowType lowguid = fields[1].GetUInt32();
     ObjectGuid playerGuid(HighGuid::Player, lowguid);
 
+    // 尝试将成员添加到成员映射表
     auto [memberIt, isNew] = m_members.try_emplace(lowguid, m_id, playerGuid, fields[2].GetUInt8());
     if (!isNew)
     {
@@ -1955,50 +2302,87 @@ bool Guild::LoadMemberFromDB(Field* fields)
         return false;
     }
 
+    // 加载成员详细数据
     Member& member = memberIt->second;
     if (!member.LoadFromDB(fields))
     {
+        // 如果加载失败，从数据库删除无效记录并从成员列表移除
         CharacterDatabaseTransaction trans(nullptr);
         _DeleteMemberFromDB(trans, lowguid);
         m_members.erase(memberIt);
         return false;
     }
 
+    // 更新角色缓存中的公会ID
     sCharacterCache->UpdateCharacterGuildId(playerGuid, GetId());
     return true;
 }
 
+/**
+ * @brief 从数据库加载公会银行权限信息
+ *
+ * 职责：
+ *   从数据库查询结果中加载公会银行的标签页权限设置。
+ *
+ * @param fields 数据库查询结果字段数组
+ */
 void Guild::LoadBankRightFromDB(Field* fields)
 {
-                                           // tabId              rights                slots
+    // 从字段中提取银行权限信息
+    // 字段格式：tabId, rankId, rights, slots
     GuildBankRightsAndSlots rightsAndSlots(fields[1].GetUInt8(), fields[3].GetUInt8(), fields[4].GetUInt32());
-                                  // rankId
     _SetRankBankTabRightsAndSlots(fields[2].GetUInt8(), rightsAndSlots, false);
 }
 
+/**
+ * @brief 从数据库加载公会事件日志
+ *
+ * 职责：
+ *   从数据库加载公会事件日志记录，如成员加入、离开、晋升等事件。
+ *
+ * @param fields 数据库查询结果字段数组
+ *
+ * @return true 加载成功
+ * @return false 加载失败（日志已满）
+ */
 bool Guild::LoadEventLogFromDB(Field* fields)
 {
     if (m_eventLog.CanInsert())
     {
         m_eventLog.LoadEvent(
-            m_id,                                       // guild id
-            fields[1].GetUInt32(),                      // guid
-            time_t(fields[6].GetUInt32()),              // timestamp
-            GuildEventLogTypes(fields[2].GetUInt8()),   // event type
-            fields[3].GetUInt32(),                      // player guid 1
-            fields[4].GetUInt32(),                      // player guid 2
-            fields[5].GetUInt8());                     // rank
+            m_id,                                       // 公会ID
+            fields[1].GetUInt32(),                      // 事件GUID
+            time_t(fields[6].GetUInt32()),              // 时间戳
+            GuildEventLogTypes(fields[2].GetUInt8()),   // 事件类型
+            fields[3].GetUInt32(),                      // 玩家GUID 1
+            fields[4].GetUInt32(),                      // 玩家GUID 2
+            fields[5].GetUInt8());                      // 等级
         return true;
     }
     return false;
 }
 
+/**
+ * @brief 从数据库加载公会银行事件日志
+ *
+ * 职责：
+ *   从数据库加载公会银行相关的事件日志，如存取款、物品操作等。
+ *
+ * @param fields 数据库查询结果字段数组
+ *
+ * @return true 加载成功
+ * @return false 加载失败
+ */
 bool Guild::LoadBankEventLogFromDB(Field* fields)
 {
+    // 获取标签页ID和是否为金币标签页
     uint8 dbTabId = fields[1].GetUInt8();
     bool isMoneyTab = (dbTabId == GUILD_BANK_MONEY_LOGS_TAB);
+
+    // 检查标签页ID是否有效
     if (dbTabId < _GetPurchasedTabsSize() || isMoneyTab)
     {
+        // 金币事件使用特殊标签页ID
         uint8 tabId = isMoneyTab ? uint8(GUILD_BANK_MAX_TABS) : dbTabId;
         LogHolder<BankEventLogEntry>& bankLog = m_bankEventLog[tabId];
         if (bankLog.CanInsert())
@@ -2183,28 +2567,59 @@ void Guild::MassInviteToEvent(WorldSession* session, uint32 minLevel, uint32 max
 }
 
 // Members handling
+/**
+ * @brief 添加新成员到公会
+ *
+ * 职责：
+ *   将指定玩家添加到公会中，设置成员等级，更新玩家公会信息，
+ *   记录事件日志并广播通知其他成员。
+ *
+ * @param trans 数据库事务对象
+ * @param guid 要添加的玩家GUID
+ * @param rankId 成员等级ID（可选，默认为最低等级）
+ *
+ * @return true 添加成功
+ * @return false 添加失败（玩家已在其他公会或玩家不存在）
+ *
+ * 主要流程：
+ *   1. 检查玩家是否已在公会中
+ *   2. 移除玩家的其他公会申请书签名
+ *   3. 如果未指定等级，分配最低等级
+ *   4. 将成员添加到成员列表
+ *   5. 如果玩家在线，设置玩家公会信息并发送登录信息
+ *   6. 如果玩家离线，从数据库加载玩家数据
+ *   7. 保存成员信息到数据库
+ *   8. 更新账号数量统计
+ *   9. 记录公会事件日志
+ *   10. 广播成员加入事件
+ *   11. 触发脚本事件
+ */
 bool Guild::AddMember(CharacterDatabaseTransaction trans, ObjectGuid guid, uint8 rankId)
 {
+    // 查找玩家（在线或离线）
     Player* player = ObjectAccessor::FindConnectedPlayer(guid);
-    // Player cannot be in guild
+
+    // 检查玩家是否已在公会中（在线玩家）
     if (player)
     {
         if (player->GetGuildId() != 0)
             return false;
     }
+    // 检查玩家是否已在公会中（离线玩家，通过缓存查询）
     else if (sCharacterCache->GetCharacterGuildIdByGuid(guid) != 0)
         return false;
 
-    // Remove all player signs from another petitions
-    // This will be prevent attempt to join many guilds and corrupt guild data integrity
+    // 移除玩家在其他公会申请书上的签名
+    // 这可以防止玩家同时加入多个公会，保证公会数据完整性
     Player::RemovePetitionsAndSigns(guid, GUILD_CHARTER_TYPE);
 
     ObjectGuid::LowType lowguid = guid.GetCounter();
 
-    // If rank was not passed, assign lowest possible rank
+    // 如果未指定等级，分配最低等级
     if (rankId == GUILD_RANK_NONE)
         rankId = _GetLowestRankId();
 
+    // 将成员添加到成员映射表中
     auto [memberIt, isNew] = m_members.try_emplace(lowguid, m_id, guid, rankId);
     if (!isNew)
     {
@@ -2214,27 +2629,37 @@ bool Guild::AddMember(CharacterDatabaseTransaction trans, ObjectGuid guid, uint8
 
     Member& member = memberIt->second;
     std::string name;
+
+    // 处理在线玩家
     if (player)
     {
+        // 设置玩家的公会相关信息
         player->SetInGuild(m_id);
         player->SetGuildIdInvited(0);
         player->SetRank(rankId);
+
+        // 设置成员统计数据
         member.SetStats(player);
+
+        // 发送公会登录信息给该玩家
         SendLoginInfo(player->GetSession());
+
         name = player->GetName();
     }
+    // 处理离线玩家
     else
     {
         member.ResetFlags();
 
         bool ok = false;
-        // Player must exist
+        // 从数据库加载玩家数据
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHAR_DATA_FOR_GUILD);
         stmt->setUInt32(0, lowguid);
         if (PreparedQueryResult result = CharacterDatabase.Query(stmt))
         {
             Field* fields = result->Fetch();
             name = fields[0].GetString();
+            // 设置成员统计数据（姓名、等级、等级、性别、区域、账户ID）
             member.SetStats(
                 name,
                 fields[1].GetUInt8(),
@@ -2245,70 +2670,116 @@ bool Guild::AddMember(CharacterDatabaseTransaction trans, ObjectGuid guid, uint8
 
             ok = member.CheckStats();
         }
+        // 如果数据无效，移除成员并返回失败
         if (!ok)
         {
             m_members.erase(memberIt);
             return false;
         }
+        // 更新角色缓存中的公会ID
         sCharacterCache->UpdateCharacterGuildId(guid, GetId());
     }
 
+    // 保存成员信息到数据库
     member.SaveToDB(trans);
 
+    // 更新公会账号数量统计
     _UpdateAccountsNumber();
+
+    // 记录加入公会事件日志
     _LogEvent(GUILD_EVENT_LOG_JOIN_GUILD, lowguid);
+
+    // 广播成员加入事件通知其他成员
     _BroadcastEvent(GE_JOINED, guid, name);
 
-    // Call scripts if member was succesfully added (and stored to database)
+    // 成员成功添加后触发脚本事件
     sScriptMgr->OnGuildAddMember(this, player, rankId);
 
     return true;
 }
 
+/**
+ * @brief 删除公会成员
+ *
+ * 职责：
+ *   从公会中移除指定成员，处理会长转移逻辑，更新玩家公会信息，
+ *   并从数据库中删除成员记录。
+ *
+ * @param trans 数据库事务对象
+ * @param guid 要删除的玩家GUID
+ * @param isDisbanding 是否正在解散公会（默认false）
+ * @param isKicked 是否是被踢出公会（默认false）
+ *
+ * @return true 公会被解散（删除会长后无其他成员或公会变为空）
+ * @return false 成功删除成员，公会继续存在
+ *
+ * 主要流程：
+ *   1. 如果删除的是会长且不是解散操作，则需要转移会长
+ *      a. 找到等级最高（等级ID最小）的成员作为新会长
+ *      b. 如果没有其他成员，解散公会
+ *      c. 设置新会长并广播会长变更事件
+ *   2. 触发成员移除脚本事件
+ *   3. 从成员列表中移除成员
+ *   4. 更新玩家的公会信息（在线玩家直接更新，离线玩家更新缓存）
+ *   5. 从数据库删除成员记录
+ *   6. 更新账号数量统计
+ *   7. 如果公会变空，解散公会
+ */
 bool Guild::DeleteMember(CharacterDatabaseTransaction trans, ObjectGuid guid, bool isDisbanding, bool isKicked)
 {
     ObjectGuid::LowType lowguid = guid.GetCounter();
     Player* player = ObjectAccessor::FindConnectedPlayer(guid);
 
-    // Guild master can be deleted when loading guild and guid doesn't exist in characters table
-    // or when he is removed from guild by gm command
+    // 处理会长被删除的特殊情况
+    // 会长可能在以下情况被删除：
+    // 1. 加载公会时会长GUID在角色表中不存在
+    // 2. 通过GM命令将会长从公会中移除
     if (m_leaderGuid == guid && !isDisbanding)
     {
         Member* oldLeader = nullptr;
         Member* newLeader = nullptr;
+
+        // 遍历所有成员，寻找旧会长和新会长
         for (auto& [guid, member] : m_members)
         {
             if (guid == lowguid)
                 oldLeader = &member;
+            // 选择等级最高（等级ID最小）的成员作为新会长
             else if (!newLeader || newLeader->GetRankId() > member.GetRankId())
                 newLeader = &member;
         }
 
+        // 如果没有其他成员，解散公会
         if (!newLeader)
         {
             Disband();
             return true;
         }
 
+        // 设置新会长
         _SetLeaderGUID(*newLeader);
 
-        // If player not online data in data field will be loaded from guild tabs no need to update it !!
+        // 如果新会长在线，更新其等级为公会会长
         if (Player* newLeaderPlayer = newLeader->FindPlayer())
             newLeaderPlayer->SetRank(GR_GUILDMASTER);
 
-        // If leader does not exist (at guild loading with deleted leader) do not send broadcasts
+        // 如果旧会长存在（加载时会长已删除的情况可能不存在），广播会长变更事件
         if (oldLeader)
         {
             _BroadcastEvent(GE_LEADER_CHANGED, ObjectGuid::Empty, oldLeader->GetName(), newLeader->GetName());
             _BroadcastEvent(GE_LEFT, guid, oldLeader->GetName());
         }
     }
-    // Call script on remove before member is actually removed from guild (and database)
+
+    // 在成员实际从公会移除前触发脚本事件
     sScriptMgr->OnGuildRemoveMember(this, player, isDisbanding, isKicked);
 
+    // 从成员列表中移除成员
     m_members.erase(lowguid);
 
-    // If player not online data in data field will be loaded from guild tabs no need to update it !!
+    // 更新玩家的公会信息
+    // 在线玩家：直接更新玩家对象的公会ID和等级
+    // 离线玩家：更新角色缓存中的公会ID
     if (player)
     {
         player->SetInGuild(0);
@@ -2317,10 +2788,14 @@ bool Guild::DeleteMember(CharacterDatabaseTransaction trans, ObjectGuid guid, bo
     else
         sCharacterCache->UpdateCharacterGuildId(guid, 0);
 
+    // 从数据库删除成员记录
     _DeleteMemberFromDB(trans, lowguid);
+
+    // 如果不是解散操作，更新账号数量统计
     if (!isDisbanding)
         _UpdateAccountsNumber();
 
+    // 如果公会变为空，解散公会
     if (m_members.empty())
     {
         Disband();
@@ -2431,40 +2906,82 @@ void Guild::_CreateNewBankTab()
     CharacterDatabase.CommitTransaction(trans);
 }
 
+/**
+ * @brief 创建默认公会等级
+ *
+ * 职责：
+ *   创建公会默认的等级结构，包括会长、官员、老兵、成员和新手等级，
+ *   并设置相应的权限。
+ *
+ * @param trans 数据库事务对象
+ * @param loc 语言区域设置，用于本地化等级名称
+ *
+ * 默认等级结构：
+ *   1. 公会会长 (Guild Master) - 所有权限
+ *   2. 官员 (Officer) - 所有权限
+ *   3. 老兵 (Veteran) - 公会频道听和说权限
+ *   4. 成员 (Member) - 公会频道听和说权限
+ *   5. 新手 (Initiate) - 公会频道听和说权限
+ */
 void Guild::_CreateDefaultGuildRanks(CharacterDatabaseTransaction trans, LocaleConstant loc)
 {
     ASSERT(trans);
 
+    // 删除公会现有等级记录
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_GUILD_RANKS);
     stmt->setUInt32(0, m_id);
     trans->Append(stmt);
 
+    // 删除公会银行权限记录
     stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_GUILD_BANK_RIGHTS);
     stmt->setUInt32(0, m_id);
     trans->Append(stmt);
 
-    _CreateRank(trans, sObjectMgr->GetTrinityString(LANG_GUILD_MASTER,   loc), GR_RIGHT_ALL);
-    _CreateRank(trans, sObjectMgr->GetTrinityString(LANG_GUILD_OFFICER,  loc), GR_RIGHT_ALL);
-    _CreateRank(trans, sObjectMgr->GetTrinityString(LANG_GUILD_VETERAN,  loc), GR_RIGHT_GCHATLISTEN | GR_RIGHT_GCHATSPEAK);
-    _CreateRank(trans, sObjectMgr->GetTrinityString(LANG_GUILD_MEMBER,   loc), GR_RIGHT_GCHATLISTEN | GR_RIGHT_GCHATSPEAK);
-    _CreateRank(trans, sObjectMgr->GetTrinityString(LANG_GUILD_INITIATE, loc), GR_RIGHT_GCHATLISTEN | GR_RIGHT_GCHATSPEAK);
+    // 创建默认等级（按等级ID从小到大顺序创建）
+    _CreateRank(trans, sObjectMgr->GetTrinityString(LANG_GUILD_MASTER,   loc), GR_RIGHT_ALL);                                          // 公会会长 - 所有权限
+    _CreateRank(trans, sObjectMgr->GetTrinityString(LANG_GUILD_OFFICER,  loc), GR_RIGHT_ALL);                                          // 官员 - 所有权限
+    _CreateRank(trans, sObjectMgr->GetTrinityString(LANG_GUILD_VETERAN,  loc), GR_RIGHT_GCHATLISTEN | GR_RIGHT_GCHATSPEAK);           // 老兵 - 公会频道权限
+    _CreateRank(trans, sObjectMgr->GetTrinityString(LANG_GUILD_MEMBER,   loc), GR_RIGHT_GCHATLISTEN | GR_RIGHT_GCHATSPEAK);           // 成员 - 公会频道权限
+    _CreateRank(trans, sObjectMgr->GetTrinityString(LANG_GUILD_INITIATE, loc), GR_RIGHT_GCHATLISTEN | GR_RIGHT_GCHATSPEAK);           // 新手 - 公会频道权限
 }
 
+/**
+ * @brief 创建新的公会等级
+ *
+ * 职责：
+ *   创建一个新的公会等级，设置等级名称和权限，并保存到数据库。
+ *
+ * @param trans 数据库事务对象
+ * @param name 等级名称
+ * @param rights 等级权限标志位
+ *
+ * @return true 创建成功
+ * @return false 创建失败（已达最大等级数量限制）
+ *
+ * 注意：
+ *   - 等级ID按顺序分配（0, 1, 2, ...），0 表示公会会长
+ *   - 新等级会自动创建银行标签页权限记录
+ */
 bool Guild::_CreateRank(CharacterDatabaseTransaction trans, std::string_view name, uint32 rights)
 {
     uint8 newRankId = _GetRanksSize();
     if (newRankId >= GUILD_RANKS_MAX_COUNT)
         return false;
 
-    // Ranks represent sequence 0, 1, 2, ... where 0 means guildmaster
+    // 创建等级信息对象
+    // 等级ID按顺序递增：0=会长, 1=官员, 2=老兵, ...
     RankInfo info(m_id, newRankId, name, rights, 0);
     m_ranks.push_back(info);
 
+    // 处理事务
     bool const isInTransaction = bool(trans);
     if (!isInTransaction)
         trans = CharacterDatabase.BeginTransaction();
 
+    // 为新等级创建银行标签页权限
     info.CreateMissingTabsIfNeeded(_GetPurchasedTabsSize(), trans);
+
+    // 保存等级信息到数据库
     info.SaveToDB(trans);
 
     if (!isInTransaction)
@@ -2473,11 +2990,19 @@ bool Guild::_CreateRank(CharacterDatabaseTransaction trans, std::string_view nam
     return true;
 }
 
-// Updates the number of accounts that are in the guild
-// Player may have many characters in the guild, but with the same account
+/**
+ * @brief 更新公会账号数量统计
+ *
+ * 职责：
+ *   统计公会中不同账号的数量（玩家可能有多个角色在同一公会）。
+ *
+ * 说明：
+ *   一个账号可能有多个角色在同一公会中，但账号数只计一次。
+ *   使用集合确保每个账号ID唯一。
+ */
 void Guild::_UpdateAccountsNumber()
 {
-    // We use a set to be sure each element will be unique
+    // 使用集合确保账号ID唯一
     std::unordered_set<uint32> accountsIdSet;
     for (auto const& [guid, member] : m_members)
         accountsIdSet.insert(member.GetAccountId());
@@ -2485,51 +3010,109 @@ void Guild::_UpdateAccountsNumber()
     m_accountsNumber = accountsIdSet.size();
 }
 
-// Detects if player is the guild master.
-// Check both leader guid and player's rank (otherwise multiple feature with
-// multiple guild masters won't work)
+/**
+ * @brief 检查玩家是否为公会会长
+ *
+ * 职责：
+ *   判断指定玩家是否为公会会长。
+ *
+ * @param player 要检查的玩家指针
+ *
+ * @return true 是公会会长
+ * @return false 不是公会会长
+ *
+ * 说明：
+ *   同时检查会长GUID和玩家等级（以支持多个公会会长的特性）
+ */
 bool Guild::_IsLeader(Player* player) const
 {
+    // 检查玩家GUID是否与会长的GUID匹配
     if (player->GetGUID() == m_leaderGuid)
         return true;
+
+    // 检查玩家等级是否为公会会长等级
     if (Member const* member = GetMember(player->GetGUID()))
         return member->IsRank(GR_GUILDMASTER);
+
     return false;
 }
 
+/**
+ * @brief 删除公会银行物品
+ *
+ * 职责：
+ *   删除所有公会银行标签页中的物品，并可选是否从数据库删除。
+ *
+ * @param trans 数据库事务对象
+ * @param removeItemsFromDB 是否从数据库删除物品记录
+ */
 void Guild::_DeleteBankItems(CharacterDatabaseTransaction trans, bool removeItemsFromDB)
 {
+    // 删除每个银行标签页中的物品
     for (uint8 tabId = 0; tabId < _GetPurchasedTabsSize(); ++tabId)
         m_bankTabs[tabId].Delete(trans, removeItemsFromDB);
 
+    // 清空银行标签页列表
     m_bankTabs.clear();
 }
 
+/**
+ * @brief 修改公会银行金币
+ *
+ * 职责：
+ *   增加或减少公会银行的金币数量。
+ *
+ * @param trans 数据库事务对象
+ * @param amount 金币数量
+ * @param add true为增加，false为减少
+ *
+ * @return true 操作成功
+ * @return false 操作失败（金币不足）
+ */
 bool Guild::_ModifyBankMoney(CharacterDatabaseTransaction trans, uint64 amount, bool add)
 {
     if (add)
+    {
+        // 增加金币
         m_bankMoney += amount;
+    }
     else
     {
-        // Check if there is enough money in bank.
+        // 减少金币前检查余额是否充足
         if (m_bankMoney < amount)
             return false;
         m_bankMoney -= amount;
     }
 
+    // 更新数据库中的公会银行金币
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_GUILD_BANK_MONEY);
     stmt->setUInt64(0, m_bankMoney);
     stmt->setUInt32(1, m_id);
     trans->Append(stmt);
+
     return true;
 }
 
+/**
+ * @brief 设置公会会长GUID
+ *
+ * 职责：
+ *   更新公会会长为指定成员，并将其等级设置为公会会长。
+ *
+ * @param pLeader 新会长的成员引用
+ */
 void Guild::_SetLeaderGUID(Member& pLeader)
 {
+    // 开启数据库事务
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+
+    // 更新会长GUID
     m_leaderGuid = pLeader.GetGUID();
+
+    // 将新会长等级设置为公会会长
     pLeader.ChangeRank(trans, GR_GUILDMASTER);
 
+    // 更新数据库中的会长信息
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_GUILD_LEADER);
     stmt->setUInt32(0, m_leaderGuid.GetCounter());
     stmt->setUInt32(1, m_id);

@@ -15,6 +15,19 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file BattlegroundMgr.cpp
+ * @brief 战场管理器实现文件
+ *
+ * 实现了战场管理器的所有核心功能，包括：
+ * - 战场实例的创建、更新和销毁
+ * - 战场模板的加载和管理
+ * - 战场队列的更新调度
+ * - 战场节日和奖励管理
+ * - 竞技场点数自动分配
+ * - 战场大师NPC的管理
+ */
+
 #include "ArenaTeamMgr.h"
 #include "BattlegroundMgr.h"
 #include "BattlegroundAV.h"
@@ -47,6 +60,12 @@
 #include "World.h"
 #include "WorldPacket.h"
 
+/**
+ * @brief 检查是否为竞技场
+ * @return 是竞技场返回true
+ *
+ * 通过战场大师条目的实例类型判断是否为竞技场
+ */
 bool BattlegroundTemplate::IsArena() const
 {
     return BattlemasterEntry->InstanceType == MAP_ARENA;
@@ -56,52 +75,88 @@ bool BattlegroundTemplate::IsArena() const
 /***            BATTLEGROUND MANAGER                   ***/
 /*********************************************************/
 
+/**
+ * @brief 构造函数
+ *
+ * 初始化战场管理器的成员变量，包括竞技场更新计时器、自动分配计时器等
+ */
 BattlegroundMgr::BattlegroundMgr() :
     m_NextRatedArenaUpdate(sWorld->getIntConfig(CONFIG_ARENA_RATED_UPDATE_TIMER)),
     m_NextAutoDistributionTime(0),
     m_AutoDistributionTimeChecker(0), m_UpdateTimer(0), m_ArenaTesting(false), m_Testing(false)
 { }
 
+/**
+ * @brief 析构函数
+ *
+ * 清理所有战场实例
+ */
 BattlegroundMgr::~BattlegroundMgr()
 {
     DeleteAllBattlegrounds();
 }
 
+/**
+ * @brief 删除所有战场
+ *
+ * 清空战场数据存储，释放所有战场实例
+ */
 void BattlegroundMgr::DeleteAllBattlegrounds()
 {
     bgDataStore.clear();
 }
 
+/**
+ * @brief 获取单例实例
+ * @return 战场管理器实例指针
+ *
+ * 使用静态局部变量实现线程安全的单例模式
+ */
 BattlegroundMgr* BattlegroundMgr::instance()
 {
     static BattlegroundMgr instance;
     return &instance;
 }
 
-// used to update running battlegrounds, and delete finished ones
+/**
+ * @brief 更新战场管理器
+ * @param diff 距离上次更新的时间间隔（毫秒）
+ *
+ * 主更新循环，定期执行以下操作：
+ * 1. 更新所有运行中的战场实例
+ * 2. 删除已结束的战场
+ * 3. 更新战场队列事件
+ * 4. 处理队列更新调度
+ * 5. 强制更新评级竞技场队列（如果配置）
+ * 6. 自动分配竞技场点数（如果配置）
+ */
 void BattlegroundMgr::Update(uint32 diff)
 {
+    // 累积更新计时器，达到更新间隔后执行更新
     m_UpdateTimer += diff;
     if (m_UpdateTimer > BATTLEGROUND_OBJECTIVE_UPDATE_INTERVAL)
     {
+        // 遍历所有战场类型的数据存储
         for (BattlegroundDataContainer::iterator itr1 = bgDataStore.begin(); itr1 != bgDataStore.end(); ++itr1)
         {
             BattlegroundContainer& bgs = itr1->second.m_Battlegrounds;
             BattlegroundContainer::iterator itrDelete = bgs.begin();
-            // first one is template and should not be deleted
+            // 第一个是模板，不应该被删除
             for (BattlegroundContainer::iterator itr = ++itrDelete; itr != bgs.end();)
             {
                 itrDelete = itr++;
                 Battleground* bg = itrDelete->second.get();
 
+                // 更新战场实例
                 bg->Update(m_UpdateTimer);
                 if (bg->ToBeDeleted())
                 {
+                    // 从客户端ID集合中移除
                     BattlegroundClientIdsContainer& clients = itr1->second.m_ClientBattlegroundIds[bg->GetBracketId()];
                     if (!clients.empty())
                         clients.erase(bg->GetClientInstanceID());
 
-                    // move out unique_ptr to delete after erasing
+                    // 移动unique_ptr以便在删除后释放
                     Trinity::unique_trackable_ptr<Battleground> bgPtr = std::move(itrDelete->second);
 
                     bgs.erase(itrDelete);
@@ -112,34 +167,35 @@ void BattlegroundMgr::Update(uint32 diff)
         m_UpdateTimer = 0;
     }
 
-    // update events timer
+    // 更新所有队列的事件计时器
     for (int qtype = BATTLEGROUND_QUEUE_NONE; qtype < MAX_BATTLEGROUND_QUEUE_TYPES; ++qtype)
         m_BattlegroundQueues[qtype].UpdateEvents(diff);
 
-    // update scheduled queues
+    // 处理调度的队列更新
     if (!m_QueueUpdateScheduler.empty())
     {
         std::vector<uint64> scheduled;
         std::swap(scheduled, m_QueueUpdateScheduler);
 
+        // 解码调度ID并执行队列更新
         for (uint8 i = 0; i < scheduled.size(); i++)
         {
-            uint32 arenaMMRating = scheduled[i] >> 32;
-            uint8 arenaType = scheduled[i] >> 24 & 255;
-            BattlegroundQueueTypeId bgQueueTypeId = BattlegroundQueueTypeId(scheduled[i] >> 16 & 255);
-            BattlegroundTypeId bgTypeId = BattlegroundTypeId((scheduled[i] >> 8) & 255);
-            BattlegroundBracketId bracket_id = BattlegroundBracketId(scheduled[i] & 255);
+            uint32 arenaMMRating = scheduled[i] >> 32;                       // 高32位：竞技场匹配等级
+            uint8 arenaType = scheduled[i] >> 24 & 255;                      // 24-31位：竞技场类型
+            BattlegroundQueueTypeId bgQueueTypeId = BattlegroundQueueTypeId(scheduled[i] >> 16 & 255); // 16-23位：队列类型ID
+            BattlegroundTypeId bgTypeId = BattlegroundTypeId((scheduled[i] >> 8) & 255);                // 8-15位：战场类型ID
+            BattlegroundBracketId bracket_id = BattlegroundBracketId(scheduled[i] & 255);               // 0-7位：分段ID
             m_BattlegroundQueues[bgQueueTypeId].BattlegroundQueueUpdate(diff, bgTypeId, bracket_id, arenaType, arenaMMRating > 0, arenaMMRating);
         }
     }
 
-    // if rating difference counts, maybe force-update queues
+    // 如果配置了评级差距限制，可能需要强制更新队列
     if (sWorld->getIntConfig(CONFIG_ARENA_MAX_RATING_DIFFERENCE) && sWorld->getIntConfig(CONFIG_ARENA_RATED_UPDATE_TIMER))
     {
-        // it's time to force update
+        // 到了强制更新的时间
         if (m_NextRatedArenaUpdate < diff)
         {
-            // forced update for rated arenas (scan all, but skipped non rated)
+            // 强制更新所有评级竞技场队列
             TC_LOG_TRACE("bg.arena", "BattlegroundMgr: UPDATING ARENA QUEUES");
             for (int qtype = BATTLEGROUND_QUEUE_2v2; qtype <= BATTLEGROUND_QUEUE_5v5; ++qtype)
                 for (int bracket = BG_BRACKET_ID_FIRST; bracket < MAX_BATTLEGROUND_BRACKETS; ++bracket)
@@ -153,71 +209,93 @@ void BattlegroundMgr::Update(uint32 diff)
             m_NextRatedArenaUpdate -= diff;
     }
 
+    // 自动分配竞技场点数
     if (sWorld->getBoolConfig(CONFIG_ARENA_AUTO_DISTRIBUTE_POINTS))
     {
         if (m_AutoDistributionTimeChecker < diff)
         {
+            // 检查是否到了分配时间
             if (GameTime::GetGameTime() > m_NextAutoDistributionTime)
             {
+                // 分配竞技场点数
                 sArenaTeamMgr->DistributeArenaPoints();
 
+                // 计算下次分配时间
                 time_t arenaDistributionTime = sWorld->getWorldState(WS_ARENA_DISTRIBUTION_TIME) == 0 ? m_NextAutoDistributionTime : time_t(sWorld->getWorldState(WS_ARENA_DISTRIBUTION_TIME));
                 m_NextAutoDistributionTime = arenaDistributionTime + BATTLEGROUND_ARENA_POINT_DISTRIBUTION_DAY * sWorld->getIntConfig(CONFIG_ARENA_AUTO_DISTRIBUTE_INTERVAL_DAYS);
                 sWorld->setWorldState(WS_ARENA_DISTRIBUTION_TIME, uint64(m_NextAutoDistributionTime));
             }
-            m_AutoDistributionTimeChecker = 600000; // check 10 minutes
+            m_AutoDistributionTimeChecker = 600000; // 每10分钟检查一次
         }
         else
             m_AutoDistributionTimeChecker -= diff;
     }
 }
 
+/**
+ * @brief 构建战场状态数据包
+ * @param data 数据包指针
+ * @param bg 战场指针
+ * @param QueueSlot 队列槽位（0-1，玩家最多同时在2个队列中）
+ * @param StatusID 状态ID
+ * @param Time1 时间参数1（含义根据状态变化）
+ * @param Time2 时间参数2（含义根据状态变化）
+ * @param arenatype 竞技场类型
+ * @param arenaFaction 竞技场阵营
+ *
+ * 根据战场状态构建不同格式的状态数据包：
+ * - STATUS_WAIT_QUEUE：队列等待中，Time1=平均等待时间，Time2=已等待时间
+ * - STATUS_WAIT_JOIN：已邀请加入，Time1=移除时间
+ * - STATUS_IN_PROGRESS：进行中，Time1=自动离开时间，Time2=已运行时间
+ */
 void BattlegroundMgr::BuildBattlegroundStatusPacket(WorldPacket* data, Battleground* bg, uint8 QueueSlot, uint8 StatusID, uint32 Time1, uint32 Time2, uint8 arenatype, uint32 arenaFaction)
 {
-    // we can be in 2 queues in same time...
+    // 玩家最多可以同时在2个队列中
 
     if (StatusID == 0 || !bg)
     {
+        // 构建空状态包
         data->Initialize(SMSG_BATTLEFIELD_STATUS, 4+8);
-        *data << uint32(QueueSlot);                         // queue id (0...1)
+        *data << uint32(QueueSlot);                         // 队列ID（0...1）
         *data << uint64(0);
         return;
     }
 
+    // 构建完整的状态包
     data->Initialize(SMSG_BATTLEFIELD_STATUS, (4+8+1+1+4+1+4+4+4));
-    *data << uint32(QueueSlot);                             // queue id (0...1) - player can be in 2 queues in time
-    // The following segment is read as uint64 in client but can be appended as their original type.
+    *data << uint32(QueueSlot);                             // 队列ID（0...1）
+    // 以下字段在客户端作为uint64读取，但可以按原始类型追加
     *data << uint8(arenatype);
     TC_LOG_DEBUG("network", "BattlegroundMgr::BuildBattlegroundStatusPacket: arenatype = {} for bg instanceID {}, TypeID {}.", arenatype, bg->GetClientInstanceID(), bg->GetTypeID());
-    *data << uint8(bg->isArena() ? 0xE : 0x0);
-    *data << uint32(bg->GetTypeID());
-    *data << uint16(0x1F90);
-    // End of uint64 segment, decomposed this way for simplicity
-    *data << uint8(bg->GetMinLevel());
-    *data << uint8(bg->GetMaxLevel());
-    *data << uint32(bg->GetClientInstanceID());
-    // alliance/horde for BG and skirmish/rated for Arenas
-    // following displays the minimap-icon 0 = faction icon 1 = arenaicon
-    *data << uint8(bg->isRated());                              // 1 for rated match, 0 for bg or non rated match
+    *data << uint8(bg->isArena() ? 0xE : 0x0);              // 竞技场标志
+    *data << uint32(bg->GetTypeID());                       // 战场类型ID
+    *data << uint16(0x1F90);                                // 未知常量
+    // uint64段结束
+    *data << uint8(bg->GetMinLevel());                      // 最低等级
+    *data << uint8(bg->GetMaxLevel());                      // 最高等级
+    *data << uint32(bg->GetClientInstanceID());             // 客户端实例ID
+    // 联盟/部落（战场）或练习/评级（竞技场）
+    // 控制小地图图标显示：0=阵营图标，1=竞技场图标
+    *data << uint8(bg->isRated());                          // 1=评级比赛，0=战场或非评级比赛
 
-    *data << uint32(StatusID);                                  // status
+    *data << uint32(StatusID);                              // 状态ID
     switch (StatusID)
     {
-        case STATUS_WAIT_QUEUE:                                 // status_in_queue
-            *data << uint32(Time1);                             // average wait time, milliseconds
-            *data << uint32(Time2);                             // time in queue, updated every minute!, milliseconds
+        case STATUS_WAIT_QUEUE:                             // 在队列中等待
+            *data << uint32(Time1);                         // 平均等待时间（毫秒）
+            *data << uint32(Time2);                         // 队列中的时间（每分钟更新，毫秒）
             break;
-        case STATUS_WAIT_JOIN:                                  // status_invite
-            *data << uint32(bg->GetMapId());                    // map id
-            *data << uint64(0);                                 // 3.3.5, unknown
-            *data << uint32(Time1);                             // time to remove from queue, milliseconds
+        case STATUS_WAIT_JOIN:                              // 等待加入
+            *data << uint32(bg->GetMapId());                // 地图ID
+            *data << uint64(0);                             // 3.3.5版本，未知字段
+            *data << uint32(Time1);                         // 移除队列的时间（毫秒）
             break;
-        case STATUS_IN_PROGRESS:                                // status_in_progress
-            *data << uint32(bg->GetMapId());                    // map id
-            *data << uint64(0);                                 // 3.3.5, unknown
-            *data << uint32(Time1);                             // time to bg auto leave, 0 at bg start, 120000 after bg end, milliseconds
-            *data << uint32(Time2);                             // time from bg start, milliseconds
-            *data << uint8(arenaFaction == ALLIANCE ? 1 : 0);   // arenafaction (0 for horde, 1 for alliance)
+        case STATUS_IN_PROGRESS:                            // 进行中
+            *data << uint32(bg->GetMapId());                // 地图ID
+            *data << uint64(0);                             // 3.3.5版本，未知字段
+            *data << uint32(Time1);                         // 自动离开战场的时间（开始时为0，结束后为120000，毫秒）
+            *data << uint32(Time2);                         // 战场开始以来的时间（毫秒）
+            *data << uint8(arenaFaction == ALLIANCE ? 1 : 0); // 竞技场阵营（0=部落，1=联盟）
             break;
         default:
             TC_LOG_ERROR("bg.battleground", "Unknown BG status!");
@@ -336,12 +414,29 @@ uint32 BattlegroundMgr::CreateClientVisibleInstanceId(BattlegroundTypeId bgTypeI
     return lastId;
 }
 
-// create a new battleground that will really be used to play
+/**
+ * @brief 创建新战场
+ * @param originalBgTypeId 原始战场类型ID（可能是随机战场）
+ * @param bracketEntry PvP难度条目
+ * @param arenaType 竞技场类型（2v2/3v3/5v5）
+ * @param isRated 是否为评级比赛
+ * @return 新创建的战场指针，失败返回nullptr
+ *
+ * 创建一个实际用于游戏的新战场实例。
+ * 对于随机战场，会根据权重随机选择一个具体战场类型。
+ * 流程：
+ * 1. 获取随机战场类型（如果不是随机战场则返回原类型）
+ * 2. 获取战场模板
+ * 3. 根据战场类型创建对应的战场实例
+ * 4. 设置战场的各项属性（分段、实例ID、状态等）
+ * 5. 对于竞技场，设置正确的玩家数量
+ */
 Battleground* BattlegroundMgr::CreateNewBattleground(BattlegroundTypeId originalBgTypeId, PvPDifficultyEntry const* bracketEntry, uint8 arenaType, bool isRated)
 {
+    // 如果是随机战场，根据权重随机选择一个具体战场类型
     BattlegroundTypeId bgTypeId = GetRandomBG(originalBgTypeId);
 
-    // get the template BG
+    // 获取战场模板
     Battleground* bg_template = GetBattlegroundTemplate(bgTypeId);
 
     if (!bg_template)
@@ -351,7 +446,7 @@ Battleground* BattlegroundMgr::CreateNewBattleground(BattlegroundTypeId original
     }
 
     Battleground* bg = nullptr;
-    // create a copy of the BG template
+    // 根据战场类型创建对应的战场实例副本
     switch (bgTypeId)
     {
         case BATTLEGROUND_AV:
@@ -393,20 +488,22 @@ Battleground* BattlegroundMgr::CreateNewBattleground(BattlegroundTypeId original
             return nullptr;
     }
 
+    // 判断是否为随机战场
     bool isRandom = bgTypeId != originalBgTypeId && !bg->isArena();
 
+    // 设置战场的基本属性
     bg->SetBracket(bracketEntry);
     bg->SetInstanceID(sMapMgr->GenerateInstanceId());
     bg->SetClientInstanceID(CreateClientVisibleInstanceId(originalBgTypeId, bracketEntry->GetBracketId()));
-    bg->Reset();                     // reset the new bg (set status to status_wait_queue from status_none)
-    bg->SetStatus(STATUS_WAIT_JOIN); // start the joining of the bg
+    bg->Reset();                     // 重置新战场（将状态从STATUS_NONE设置为STATUS_WAIT_QUEUE）
+    bg->SetStatus(STATUS_WAIT_JOIN); // 开始战场的加入阶段
     bg->SetArenaType(arenaType);
     bg->SetTypeID(originalBgTypeId);
     bg->SetRandomTypeID(bgTypeId);
     bg->SetRated(isRated);
     bg->SetRandom(isRandom);
 
-    // Set up correct min/max player counts for scoreboards
+    // 为竞技场设置正确的最小/最大玩家数量（用于计分板）
     if (bg->isArena())
     {
         uint32 maxPlayersPerTeam = 0;
@@ -504,6 +601,18 @@ bool BattlegroundMgr::CreateBattleground(BattlegroundTemplate const* bgTemplate)
     return true;
 }
 
+/**
+ * @brief 加载战场模板
+ *
+ * 从数据库加载所有战场模板配置，包括：
+ * - 玩家数量限制
+ * - 等级范围
+ * - 起始位置
+ * - 选择权重
+ * - 脚本名称
+ *
+ * 加载后会创建对应的战场模板实例
+ */
 void BattlegroundMgr::LoadBattlegroundTemplates()
 {
     uint32 oldMSTime = getMSTime();
@@ -511,6 +620,7 @@ void BattlegroundMgr::LoadBattlegroundTemplates()
     _battlegroundMapTemplates.clear();
     _battlegroundTemplates.clear();
 
+    // 查询数据库中的战场模板表
     //                                               0   1                  2                  3       4       5                 6               7              8            9             10      11
     QueryResult result = WorldDatabase.Query("SELECT ID, MinPlayersPerTeam, MaxPlayersPerTeam, MinLvl, MaxLvl, AllianceStartLoc, AllianceStartO, HordeStartLoc, HordeStartO, StartMaxDist, Weight, ScriptName FROM battleground_template");
     if (!result)
@@ -527,10 +637,11 @@ void BattlegroundMgr::LoadBattlegroundTemplates()
 
         BattlegroundTypeId bgTypeId = BattlegroundTypeId(fields[0].GetUInt32());
 
+        // 跳过被禁用的战场
         if (DisableMgr::IsDisabledFor(DISABLE_TYPE_BATTLEGROUND, bgTypeId, nullptr))
             continue;
 
-        // can be overwrite by values from DB
+        // 从BattlemasterList.dbc获取战场大师条目（数据库值可能会覆盖）
         BattlemasterListEntry const* bl = sBattlemasterListStore.LookupEntry(bgTypeId);
         if (!bl)
         {
@@ -538,6 +649,7 @@ void BattlegroundMgr::LoadBattlegroundTemplates()
             continue;
         }
 
+        // 填充战场模板结构
         BattlegroundTemplate bgTemplate;
         bgTemplate.Id                = bgTypeId;
         bgTemplate.MinPlayersPerTeam = fields[1].GetUInt16();
@@ -545,11 +657,12 @@ void BattlegroundMgr::LoadBattlegroundTemplates()
         bgTemplate.MinLevel          = fields[3].GetUInt8();
         bgTemplate.MaxLevel          = fields[4].GetUInt8();
         float dist                   = fields[9].GetFloat();
-        bgTemplate.MaxStartDistSq    = dist * dist;
+        bgTemplate.MaxStartDistSq    = dist * dist;              // 存储平方值以避免sqrt运算
         bgTemplate.Weight            = fields[10].GetUInt8();
         bgTemplate.ScriptId          = sObjectMgr->GetScriptId(fields[11].GetString());
         bgTemplate.BattlemasterEntry = bl;
 
+        // 验证玩家数量配置
         if (bgTemplate.MaxPlayersPerTeam == 0 || bgTemplate.MinPlayersPerTeam > bgTemplate.MaxPlayersPerTeam)
         {
             TC_LOG_ERROR("sql.sql", "Table `battleground_template` for id {} contains bad values for MinPlayersPerTeam ({}) and MaxPlayersPerTeam({}).",
@@ -557,6 +670,7 @@ void BattlegroundMgr::LoadBattlegroundTemplates()
             continue;
         }
 
+        // 验证等级范围配置
         if (bgTemplate.MinLevel == 0 || bgTemplate.MaxLevel == 0 || bgTemplate.MinLevel > bgTemplate.MaxLevel)
         {
             TC_LOG_ERROR("sql.sql", "Table `battleground_template` for id {} contains bad values for MinLevel ({}) and MaxLevel ({}).",
@@ -564,8 +678,10 @@ void BattlegroundMgr::LoadBattlegroundTemplates()
             continue;
         }
 
+        // 加载起始位置（竞技场和随机战场不需要）
         if (bgTemplate.Id != BATTLEGROUND_AA && bgTemplate.Id != BATTLEGROUND_RB)
         {
+            // 加载联盟起始位置
             uint32 startId = fields[5].GetUInt32();
             if (WorldSafeLocsEntry const* start = sWorldSafeLocsStore.LookupEntry(startId))
             {
@@ -577,6 +693,7 @@ void BattlegroundMgr::LoadBattlegroundTemplates()
                 continue;
             }
 
+            // 加载部落起始位置
             startId = fields[7].GetUInt32();
             if (WorldSafeLocsEntry const* start = sWorldSafeLocsStore.LookupEntry(startId))
             {
@@ -589,12 +706,15 @@ void BattlegroundMgr::LoadBattlegroundTemplates()
             }
         }
 
+        // 创建战场实例
         if (!CreateBattleground(&bgTemplate))
             continue;
 
+        // 保存模板到映射表
         _battlegroundTemplates[bgTypeId] = bgTemplate;
 
-        if (bgTemplate.BattlemasterEntry->MapID[1] == -1) // in this case we have only one mapId
+        // 如果只有一个地图ID，建立地图ID到模板的反向映射
+        if (bgTemplate.BattlemasterEntry->MapID[1] == -1)
             _battlegroundMapTemplates[bgTemplate.BattlemasterEntry->MapID[0]] = &_battlegroundTemplates[bgTypeId];
 
         ++count;

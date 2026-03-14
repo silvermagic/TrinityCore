@@ -15,6 +15,22 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file AchievementMgr.cpp
+ * @brief 成就系统管理模块实现
+ *
+ * 本文件实现了成就系统的核心功能，包括：
+ * - 成就进度跟踪与更新
+ * - 成就完成检测与通知
+ * - 成就奖励发放
+ * - 计时成就管理
+ * - 数据持久化
+ * - 全局成就数据加载与管理
+ *
+ * 成就系统是魔兽世界中的重要游戏机制，用于记录玩家的各种成就
+ * 包括击杀Boss、完成任务、收集物品、探索地图、PVP成就等
+ */
+
 #include "AchievementMgr.h"
 #include "ArenaTeamMgr.h"
 #include "Battleground.h"
@@ -46,45 +62,58 @@
 #include "WorldSession.h"
 #include "WowTime.h"
 
+/**
+ * @brief 验证成就条件数据是否有效
+ *
+ * 检查条件数据的类型是否正确，以及相关值是否在有效范围内
+ * 这在加载achievement_criteria_data表时被调用
+ *
+ * @param criteria 成就条件定义条目
+ * @return 数据有效返回true，否则返回false
+ */
 bool AchievementCriteriaData::IsValid(AchievementCriteriaEntry const* criteria)
 {
+    // 检查数据类型是否在有效范围内
     if (dataType >= MAX_ACHIEVEMENT_CRITERIA_DATA_TYPE)
     {
         TC_LOG_ERROR("sql.sql", "Table `achievement_criteria_data` for criteria (Entry: {}) contains a wrong data type ({}), ignored.", criteria->ID, dataType);
         return false;
     }
 
+    // 验证条件类型是否支持附加数据
+    // 只有特定类型的条件才支持数据库配置的附加条件
     switch (criteria->Type)
     {
-        case ACHIEVEMENT_CRITERIA_TYPE_KILL_CREATURE:
-        case ACHIEVEMENT_CRITERIA_TYPE_KILL_CREATURE_TYPE:
-        case ACHIEVEMENT_CRITERIA_TYPE_WIN_BG:
-        case ACHIEVEMENT_CRITERIA_TYPE_DEATH_IN_DUNGEON:
-        case ACHIEVEMENT_CRITERIA_TYPE_FALL_WITHOUT_DYING:
-        case ACHIEVEMENT_CRITERIA_TYPE_COMPLETE_QUEST:          // only hardcoded list
-        case ACHIEVEMENT_CRITERIA_TYPE_CAST_SPELL:
-        case ACHIEVEMENT_CRITERIA_TYPE_WIN_RATED_ARENA:
-        case ACHIEVEMENT_CRITERIA_TYPE_DO_EMOTE:
-        case ACHIEVEMENT_CRITERIA_TYPE_SPECIAL_PVP_KILL:
-        case ACHIEVEMENT_CRITERIA_TYPE_WIN_DUEL:
-        case ACHIEVEMENT_CRITERIA_TYPE_LOOT_TYPE:
-        case ACHIEVEMENT_CRITERIA_TYPE_CAST_SPELL2:
-        case ACHIEVEMENT_CRITERIA_TYPE_BE_SPELL_TARGET:
-        case ACHIEVEMENT_CRITERIA_TYPE_BE_SPELL_TARGET2:
-        case ACHIEVEMENT_CRITERIA_TYPE_EQUIP_EPIC_ITEM:
-        case ACHIEVEMENT_CRITERIA_TYPE_ROLL_NEED_ON_LOOT:
-        case ACHIEVEMENT_CRITERIA_TYPE_ROLL_GREED_ON_LOOT:
-        case ACHIEVEMENT_CRITERIA_TYPE_BG_OBJECTIVE_CAPTURE:
-        case ACHIEVEMENT_CRITERIA_TYPE_HONORABLE_KILL:
-        case ACHIEVEMENT_CRITERIA_TYPE_COMPLETE_DAILY_QUEST:    // only Children's Week achievements
-        case ACHIEVEMENT_CRITERIA_TYPE_USE_ITEM:                // only Children's Week achievements
-        case ACHIEVEMENT_CRITERIA_TYPE_GET_KILLING_BLOWS:
-        case ACHIEVEMENT_CRITERIA_TYPE_REACH_LEVEL:
-        case ACHIEVEMENT_CRITERIA_TYPE_ON_LOGIN:
-        case ACHIEVEMENT_CRITERIA_TYPE_LOOT_EPIC_ITEM:
-        case ACHIEVEMENT_CRITERIA_TYPE_RECEIVE_EPIC_ITEM:
+        case ACHIEVEMENT_CRITERIA_TYPE_KILL_CREATURE:           // 击杀生物
+        case ACHIEVEMENT_CRITERIA_TYPE_KILL_CREATURE_TYPE:      // 击杀生物类型
+        case ACHIEVEMENT_CRITERIA_TYPE_WIN_BG:                  // 赢得战场
+        case ACHIEVEMENT_CRITERIA_TYPE_DEATH_IN_DUNGEON:        // 副本死亡
+        case ACHIEVEMENT_CRITERIA_TYPE_FALL_WITHOUT_DYING:      // 坠落不死
+        case ACHIEVEMENT_CRITERIA_TYPE_COMPLETE_QUEST:          // 完成任务（仅限硬编码列表）
+        case ACHIEVEMENT_CRITERIA_TYPE_CAST_SPELL:              // 施放法术
+        case ACHIEVEMENT_CRITERIA_TYPE_WIN_RATED_ARENA:         // 赢得竞技场
+        case ACHIEVEMENT_CRITERIA_TYPE_DO_EMOTE:                // 表情动作
+        case ACHIEVEMENT_CRITERIA_TYPE_SPECIAL_PVP_KILL:        // 特殊PVP击杀
+        case ACHIEVEMENT_CRITERIA_TYPE_WIN_DUEL:                // 赢得决斗
+        case ACHIEVEMENT_CRITERIA_TYPE_LOOT_TYPE:               // 拾取类型
+        case ACHIEVEMENT_CRITERIA_TYPE_CAST_SPELL2:             // 施放法术2
+        case ACHIEVEMENT_CRITERIA_TYPE_BE_SPELL_TARGET:         // 成为法术目标
+        case ACHIEVEMENT_CRITERIA_TYPE_BE_SPELL_TARGET2:        // 成为法术目标2
+        case ACHIEVEMENT_CRITERIA_TYPE_EQUIP_EPIC_ITEM:         // 装备史诗物品
+        case ACHIEVEMENT_CRITERIA_TYPE_ROLL_NEED_ON_LOOT:       // 需求掷骰
+        case ACHIEVEMENT_CRITERIA_TYPE_ROLL_GREED_ON_LOOT:      // 贪婪掷骰
+        case ACHIEVEMENT_CRITERIA_TYPE_BG_OBJECTIVE_CAPTURE:    // 战场目标占领
+        case ACHIEVEMENT_CRITERIA_TYPE_HONORABLE_KILL:          // 荣誉击杀
+        case ACHIEVEMENT_CRITERIA_TYPE_COMPLETE_DAILY_QUEST:    // 完成日常任务（仅儿童周成就）
+        case ACHIEVEMENT_CRITERIA_TYPE_USE_ITEM:                // 使用物品（仅儿童周成就）
+        case ACHIEVEMENT_CRITERIA_TYPE_GET_KILLING_BLOWS:       // 获得击杀
+        case ACHIEVEMENT_CRITERIA_TYPE_REACH_LEVEL:             // 达到等级
+        case ACHIEVEMENT_CRITERIA_TYPE_ON_LOGIN:                // 登录时
+        case ACHIEVEMENT_CRITERIA_TYPE_LOOT_EPIC_ITEM:          // 拾取史诗物品
+        case ACHIEVEMENT_CRITERIA_TYPE_RECEIVE_EPIC_ITEM:       // 获得史诗物品
             break;
         default:
+            // 其他类型的条件只支持脚本类型数据
             if (dataType != ACHIEVEMENT_CRITERIA_DATA_TYPE_SCRIPT)
             {
                 TC_LOG_ERROR("sql.sql", "Table `achievement_criteria_data` contains data for a non-supported criteria type (Entry: {} Type: {}), ignored.", criteria->ID, criteria->Type);
@@ -93,13 +122,14 @@ bool AchievementCriteriaData::IsValid(AchievementCriteriaEntry const* criteria)
             break;
     }
 
+    // 根据数据类型进行具体验证
     switch (dataType)
     {
-        case ACHIEVEMENT_CRITERIA_DATA_TYPE_NONE:
-        case ACHIEVEMENT_CRITERIA_DATA_TYPE_INSTANCE_SCRIPT:
-        case ACHIEVEMENT_CRITERIA_DATA_TYPE_NTH_BIRTHDAY:
+        case ACHIEVEMENT_CRITERIA_DATA_TYPE_NONE:            // 无附加条件
+        case ACHIEVEMENT_CRITERIA_DATA_TYPE_INSTANCE_SCRIPT: // 副本脚本（无需验证）
+        case ACHIEVEMENT_CRITERIA_DATA_TYPE_NTH_BIRTHDAY:    // 周年纪念（无需验证）
             return true;
-        case ACHIEVEMENT_CRITERIA_DATA_TYPE_T_CREATURE:
+        case ACHIEVEMENT_CRITERIA_DATA_TYPE_T_CREATURE:      // 目标生物验证
             if (!creature.id || !sObjectMgr->GetCreatureTemplate(creature.id))
             {
                 TC_LOG_ERROR("sql.sql", "Table `achievement_criteria_data` (Entry: {} Type: {}) for data type ACHIEVEMENT_CRITERIA_DATA_TYPE_CREATURE ({}) contains a non-existing creature id in value1 ({}), ignored.",
@@ -107,13 +137,15 @@ bool AchievementCriteriaData::IsValid(AchievementCriteriaEntry const* criteria)
                 return false;
             }
             return true;
-        case ACHIEVEMENT_CRITERIA_DATA_TYPE_T_PLAYER_CLASS_RACE:
+        case ACHIEVEMENT_CRITERIA_DATA_TYPE_T_PLAYER_CLASS_RACE: // 目标职业/种族验证
+            // 验证职业ID是否有效
             if (classRace.class_id && ((1 << (classRace.class_id-1)) & CLASSMASK_ALL_PLAYABLE) == 0)
             {
                 TC_LOG_ERROR("sql.sql", "Table `achievement_criteria_data` (Entry: {} Type: {}) for data type ACHIEVEMENT_CRITERIA_DATA_TYPE_T_PLAYER_CLASS_RACE ({}) contains a non-existing class in value1 ({}), ignored.",
                     criteria->ID, criteria->Type, dataType, classRace.class_id);
                 return false;
             }
+            // 验证种族ID是否有效
             if (classRace.race_id && ((1 << (classRace.race_id-1)) & RACEMASK_ALL_PLAYABLE) == 0)
             {
                 TC_LOG_ERROR("sql.sql", "Table `achievement_criteria_data` (Entry: {} Type: {}) for data type ACHIEVEMENT_CRITERIA_DATA_TYPE_T_PLAYER_CLASS_RACE ({}) contains a non-existing race in value2 ({}), ignored.",
@@ -121,7 +153,8 @@ bool AchievementCriteriaData::IsValid(AchievementCriteriaEntry const* criteria)
                 return false;
             }
             return true;
-        case ACHIEVEMENT_CRITERIA_DATA_TYPE_T_PLAYER_LESS_HEALTH:
+        case ACHIEVEMENT_CRITERIA_DATA_TYPE_T_PLAYER_LESS_HEALTH: // 目标玩家血量百分比验证
+            // 血量百分比必须在1-100之间
             if (health.percent < 1 || health.percent > 100)
             {
                 TC_LOG_ERROR("sql.sql", "Table `achievement_criteria_data` (Entry: {} Type: {}) for data type ACHIEVEMENT_CRITERIA_DATA_TYPE_PLAYER_LESS_HEALTH ({}) contains a wrong percent value in value1 ({}), ignored.",
@@ -294,8 +327,22 @@ bool AchievementCriteriaData::IsValid(AchievementCriteriaEntry const* criteria)
     }
 }
 
+/**
+ * @brief 检查成就条件数据是否满足要求
+ *
+ * 这是成就系统的核心条件检查函数
+ * 根据不同的数据类型，检查玩家、目标、环境等是否满足特定条件
+ *
+ * @param criteria_id 条件ID
+ * @param source 源玩家（触发条件的玩家）
+ * @param target 目标对象（如被击杀的生物、被治疗的玩家等）
+ * @param miscvalue1 杂项值1（根据条件类型有不同含义）
+ * @param miscvalue2 杂项值2（根据条件类型有不同含义）
+ * @return 条件满足返回true，否则返回false
+ */
 bool AchievementCriteriaData::Meets(uint32 criteria_id, Player const* source, WorldObject const* target, uint32 miscvalue1 /*= 0*/, uint32 miscvalue2 /* = 0*/) const
 {
+    // 根据数据类型进行条件判断
     switch (dataType)
     {
         case ACHIEVEMENT_CRITERIA_DATA_TYPE_NONE:
@@ -468,8 +515,20 @@ bool AchievementCriteriaData::Meets(uint32 criteria_id, Player const* source, Wo
     return false;
 }
 
+/**
+ * @brief 检查条件数据集中的所有条件是否都满足
+ *
+ * 遍历数据集中的所有条件数据，只要有一个不满足就返回false
+ *
+ * @param source 源玩家
+ * @param target 目标对象
+ * @param miscvalue1 杂项值1
+ * @param miscvalue2 杂项值2
+ * @return 所有条件都满足返回true，否则返回false
+ */
 bool AchievementCriteriaDataSet::Meets(Player const* source, WorldObject const* target, uint32 miscvalue1 /*= 0*/, uint32 miscvalue2 /* = 0*/) const
 {
+    // 遍历所有条件数据，必须全部满足
     for (AchievementCriteriaData const& criteriadata : storage)
         if (!criteriadata.Meets(criteria_id, source, target, miscvalue1, miscvalue2))
             return false;
@@ -477,15 +536,29 @@ bool AchievementCriteriaDataSet::Meets(Player const* source, WorldObject const* 
     return true;
 }
 
+/**
+ * @brief AchievementMgr构造函数
+ * @param player 关联的玩家对象
+ */
 AchievementMgr::AchievementMgr(Player* player)
 {
     m_player = player;
 }
 
+/**
+ * @brief AchievementMgr析构函数
+ */
 AchievementMgr::~AchievementMgr() { }
 
+/**
+ * @brief 重置所有成就数据
+ *
+ * 清空所有已完成成就和进度，通知客户端，并重新检查所有条件
+ * 这是一个完整的成就重置操作
+ */
 void AchievementMgr::Reset()
 {
+    // 向客户端发送删除已完成成就的通知
     for (std::pair<uint32 const, CompletedAchievementData> const& completedAchievement : m_completedAchievements)
     {
         WorldPacket data(SMSG_ACHIEVEMENT_DELETED, 4);
@@ -493,6 +566,7 @@ void AchievementMgr::Reset()
         m_player->SendDirectMessage(&data);
     }
 
+    // 向客户端发送删除条件进度的通知
     for (std::pair<uint32 const, CriteriaProgress> const& criteriaprogress : m_criteriaProgress)
     {
         WorldPacket data(SMSG_CRITERIA_DELETED, 4);
@@ -500,48 +574,69 @@ void AchievementMgr::Reset()
         m_player->SendDirectMessage(&data);
     }
 
+    // 清空内存数据
     m_completedAchievements.clear();
     m_criteriaProgress.clear();
+    // 从数据库删除成就数据
     DeleteFromDB(m_player->GetGUID());
 
-    // re-fill data
+    // 重新检查所有成就条件，填充可能已完成的数据
     CheckAllAchievementCriteria();
 }
 
+/**
+ * @brief 重置特定条件的成就进度
+ * @param condition 条件类型
+ * @param value 条件值
+ * @param evenIfCriteriaComplete 是否重置已完成的条件
+ *
+ * 当特定事件发生时（如更改阵营），需要重置相关的成就进度
+ */
 void AchievementMgr::ResetAchievementCriteria(AchievementCriteriaCondition condition, uint32 value, bool evenIfCriteriaComplete)
 {
     TC_LOG_DEBUG("achievement", "AchievementMgr::ResetAchievementCriteria({}, {}, {})", condition, value, evenIfCriteriaComplete);
 
-    // Disable for GameMasters with GM-mode enabled or for players that don't have the related RBAC permission
+    // GM模式或没有成就权限的玩家不处理
     if (m_player->IsGameMaster() || m_player->GetSession()->HasPermission(rbac::RBAC_PERM_CANNOT_EARN_ACHIEVEMENTS))
         return;
 
+    // 获取符合条件的成就条件列表
     AchievementCriteriaEntryList const* achievementCriteriaList = sAchievementMgr->GetAchievementCriteriaByCondition(condition, value);
     if (!achievementCriteriaList)
         return;
 
+    // 遍历并重置符合条件的进度
     for (AchievementCriteriaEntry const* achievementCriteria : *achievementCriteriaList)
     {
         AchievementEntry const* achievement = sAchievementMgr->GetAchievement(achievementCriteria->AchievementID);
         if (!achievement)
             continue;
 
-        // don't update already completed criteria if not forced or achievement already complete
+        // 如果条件已完成但未强制重置，或成就已完成，则跳过
         if ((IsCompletedCriteria(achievementCriteria, achievement) && !evenIfCriteriaComplete) || HasAchieved(achievement->ID))
             continue;
 
+        // 移除条件进度
         RemoveCriteriaProgress(achievementCriteria);
     }
 }
 
+/**
+ * @brief 从数据库删除玩家的成就数据
+ * @param guid 玩家的GUID
+ *
+ * 静态函数，用于删除角色时清理成就数据
+ */
 void AchievementMgr::DeleteFromDB(ObjectGuid guid)
 {
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
 
+    // 删除已完成成就记录
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHAR_ACHIEVEMENT);
     stmt->setUInt32(0, guid.GetCounter());
     trans->Append(stmt);
 
+    // 删除条件进度记录
     stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHAR_ACHIEVEMENT_PROGRESS);
     stmt->setUInt32(0, guid.GetCounter());
     trans->Append(stmt);
@@ -549,42 +644,58 @@ void AchievementMgr::DeleteFromDB(ObjectGuid guid)
     CharacterDatabase.CommitTransaction(trans);
 }
 
+/**
+ * @brief 保存成就数据到数据库
+ * @param trans 数据库事务
+ *
+ * 保存所有已修改的成就数据到数据库
+ * 包括已完成的成就和条件进度
+ */
 void AchievementMgr::SaveToDB(CharacterDatabaseTransaction trans)
 {
+    // 保存已完成的成就
     if (!m_completedAchievements.empty())
     {
         for (std::pair<uint32 const, CompletedAchievementData>& completedAchievement : m_completedAchievements)
         {
+            // 只保存已修改的数据
             if (!completedAchievement.second.changed)
                 continue;
 
+            // 先删除旧记录
             CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHAR_ACHIEVEMENT_BY_ACHIEVEMENT);
             stmt->setUInt16(0, completedAchievement.first);
             stmt->setUInt32(1, GetPlayer()->GetGUID().GetCounter());
             trans->Append(stmt);
 
+            // 插入新记录
             stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_CHAR_ACHIEVEMENT);
             stmt->setUInt32(0, GetPlayer()->GetGUID().GetCounter());
             stmt->setUInt16(1, completedAchievement.first);
             stmt->setUInt32(2, uint32(completedAchievement.second.date));
             trans->Append(stmt);
 
+            // 标记为已保存
             completedAchievement.second.changed = false;
         }
     }
 
+    // 保存条件进度
     if (!m_criteriaProgress.empty())
     {
         for (std::pair<uint32 const, CriteriaProgress>& criteriaProgres : m_criteriaProgress)
         {
+            // 只保存已修改的数据
             if (!criteriaProgres.second.changed)
                 continue;
 
+            // 先删除旧记录
             CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHAR_ACHIEVEMENT_PROGRESS_BY_CRITERIA);
             stmt->setUInt32(0, GetPlayer()->GetGUID().GetCounter());
             stmt->setUInt16(1, criteriaProgres.first);
             trans->Append(stmt);
 
+            // 只有进度不为0时才插入
             if (criteriaProgres.second.counter)
             {
                 stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_CHAR_ACHIEVEMENT_PROGRESS);
@@ -595,13 +706,23 @@ void AchievementMgr::SaveToDB(CharacterDatabaseTransaction trans)
                 trans->Append(stmt);
             }
 
+            // 标记为已保存
             criteriaProgres.second.changed = false;
         }
     }
 }
 
+/**
+ * @brief 从数据库加载成就数据
+ * @param achievementResult 已完成成就的查询结果
+ * @param criteriaResult 条件进度的查询结果
+ *
+ * 在玩家登录时调用，加载玩家的成就数据
+ * 同时处理称号奖励的回溯授予
+ */
 void AchievementMgr::LoadFromDB(PreparedQueryResult achievementResult, PreparedQueryResult criteriaResult)
 {
+    // 加载已完成的成就
     if (achievementResult)
     {
         do
@@ -609,16 +730,18 @@ void AchievementMgr::LoadFromDB(PreparedQueryResult achievementResult, PreparedQ
             Field* fields = achievementResult->Fetch();
             uint32 achievementid = fields[0].GetUInt16();
 
-            // must not happen: cleanup at server startup in sAchievementMgr->LoadCompletedAchievements()
+            // 验证成就是否存在（服务器启动时会清理无效数据）
             AchievementEntry const* achievement = sAchievementMgr->GetAchievement(achievementid);
             if (!achievement)
                 continue;
 
+            // 存储已完成成就数据
             CompletedAchievementData& ca = m_completedAchievements[achievementid];
             ca.date = time_t(fields[1].GetUInt32());
             ca.changed = false;
 
-            // title achievement rewards are retroactive
+            // 回溯授予称号奖励
+            // 某些成就在成就系统之前就存在，玩家可能已完成但未获得称号
             if (AchievementReward const* reward = sAchievementMgr->GetAchievementReward(achievement))
                 if (uint32 titleId = reward->TitleId[Player::TeamForRace(GetPlayer()->GetRace()) == ALLIANCE ? 0 : 1])
                     if (CharTitlesEntry const* titleEntry = sCharTitlesStore.LookupEntry(titleId))
@@ -627,6 +750,7 @@ void AchievementMgr::LoadFromDB(PreparedQueryResult achievementResult, PreparedQ
         } while (achievementResult->NextRow());
     }
 
+    // 加载条件进度
     if (criteriaResult)
     {
         do
@@ -636,10 +760,11 @@ void AchievementMgr::LoadFromDB(PreparedQueryResult achievementResult, PreparedQ
             uint32 counter = fields[1].GetUInt32();
             time_t date    = time_t(fields[2].GetUInt32());
 
+            // 验证条件是否存在
             AchievementCriteriaEntry const* criteria = sAchievementMgr->GetAchievementCriteria(id);
             if (!criteria)
             {
-                // Removing non-existing criteria data for all characters
+                // 删除不存在的条件数据
                 TC_LOG_ERROR("achievement", "Non-existing achievement criteria {} data has been removed from the table `character_achievement_progress`.", id);
 
                 CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_INVALID_ACHIEV_PROGRESS_CRITERIA);
@@ -651,9 +776,11 @@ void AchievementMgr::LoadFromDB(PreparedQueryResult achievementResult, PreparedQ
                 continue;
             }
 
+            // 如果是计时成就且已超时，则不加载
             if (criteria->StartTimer && time_t(date + criteria->StartTimer) < GameTime::GetGameTime())
                 continue;
 
+            // 存储条件进度
             CriteriaProgress& progress = m_criteriaProgress[id];
             progress.counter = counter;
             progress.date    = date;
@@ -662,6 +789,13 @@ void AchievementMgr::LoadFromDB(PreparedQueryResult achievementResult, PreparedQ
     }
 }
 
+/**
+ * @brief 发送成就完成通知
+ * @param achievement 成就定义条目
+ *
+ * 向周围玩家、公会成员和全服广播成就完成消息
+ * 服务器首杀成就会有特殊处理
+ */
 void AchievementMgr::SendAchievementEarned(AchievementEntry const* achievement) const
 {
     if (GetPlayer()->GetSession()->PlayerLoading())
@@ -733,44 +867,58 @@ void AchievementMgr::SendCriteriaUpdate(AchievementCriteriaEntry const* entry, C
     WorldPacket data(SMSG_CRITERIA_UPDATE, 8 + 4 + 8);
     data << uint32(entry->ID);
 
-    // the counter is packed like a packed Guid
+    // 计数器使用压缩格式发送（类似压缩GUID）
     data.appendPackGUID(progress->counter);
 
     data << GetPlayer()->GetPackGUID();
     if (!entry->StartTimer)
         data << uint32(0);
     else
-        data << uint32(timedCompleted ? 1 : 0); // this are some flags, 1 is for keeping the counter at 0 in client
+        data << uint32(timedCompleted ? 1 : 0); // 标志位，1表示在客户端保持计数器为0
     data << date;
-    data << uint32(timeElapsed);    // time elapsed in seconds
-    data << uint32(0);              // unk
+    data << uint32(timeElapsed);    // 已经过的时间（秒）
+    data << uint32(0);              // 未知字段
     GetPlayer()->SendDirectMessage(&data);
 }
 
 /**
- * called at player login. The player might have fulfilled some achievements when the achievement system wasn't working yet
+ * @brief 检查所有成就条件
+ *
+ * 在玩家登录时调用，检查所有可能已完成的成就
+ * 用于处理成就系统禁用期间可能错过的成就
  */
 void AchievementMgr::CheckAllAchievementCriteria()
 {
-    // suppress sending packets
+    // 抑制发送数据包，静默检查所有条件类型
     for (uint32 i = 0; i < ACHIEVEMENT_CRITERIA_TYPE_TOTAL; ++i)
         UpdateAchievementCriteria(AchievementCriteriaTypes(i));
 }
 
+/// 竞技场槽位对应的成就ID数组
 static const uint32 achievIdByArenaSlot[MAX_ARENA_SLOT] = { 1057, 1107, 1108 };
 
 /**
- * this function will be called whenever the user might have done a criteria relevant action
+ * @brief 更新成就条件进度
+ * @param type 条件类型
+ * @param miscValue1 杂项值1（根据条件类型有不同含义）
+ * @param miscValue2 杂项值2（根据条件类型有不同含义）
+ * @param ref 相关的世界对象引用
+ *
+ * 这是成就系统的核心函数，在玩家执行相关动作时被调用
+ * 例如：击杀生物、完成任务、获得物品等
+ *
+ * @note 此函数会被频繁调用，性能敏感
  */
 void AchievementMgr::UpdateAchievementCriteria(AchievementCriteriaTypes type, uint32 miscValue1 /*= 0*/, uint32 miscValue2 /*= 0*/, WorldObject* ref /*= nullptr*/)
 {
+    // 验证条件类型是否有效
     if (type >= ACHIEVEMENT_CRITERIA_TYPE_TOTAL)
     {
         TC_LOG_DEBUG("achievement", "UpdateAchievementCriteria: Wrong criteria type {}", type);
         return;
     }
 
-    // Disable for GameMasters with GM-mode enabled or for players that don't have the related RBAC permission
+    // GM模式或没有成就权限的玩家不处理
     if (m_player->IsGameMaster() || m_player->GetSession()->HasPermission(rbac::RBAC_PERM_CANNOT_EARN_ACHIEVEMENTS))
     {
         TC_LOG_DEBUG("achievement", "UpdateAchievementCriteria: [Player {} {}] {}, {} ({}), {}, {}"
@@ -781,6 +929,7 @@ void AchievementMgr::UpdateAchievementCriteria(AchievementCriteriaTypes type, ui
     TC_LOG_DEBUG("achievement", "UpdateAchievementCriteria: {}, {} ({}), {}, {}"
         , m_player->GetGUID().ToString(), AchievementGlobalMgr::GetCriteriaTypeString(type), type, miscValue1, miscValue2);
 
+    // 获取符合条件的成就条件列表
     AchievementCriteriaEntryList const& achievementCriteriaList = sAchievementMgr->GetAchievementCriteriaByType(type, miscValue1);
     for (AchievementCriteriaEntry const* achievementCriteria : achievementCriteriaList)
     {
@@ -1507,56 +1656,73 @@ void AchievementMgr::RemoveTimedAchievement(AchievementCriteriaTimedTypes type, 
     }
 }
 
+/**
+ * @brief 完成指定成就
+ * @param achievement 成就定义条目
+ *
+ * 处理成就完成逻辑：
+ * - 发送通知消息
+ * - 记录完成时间
+ * - 发放奖励（称号、物品等）
+ * - 触发关联成就检查
+ */
 void AchievementMgr::CompletedAchievement(AchievementEntry const* achievement)
 {
-    // Disable for GameMasters with GM-mode enabled or for players that don't have the related RBAC permission
+    // GM模式或没有成就权限的玩家不能完成成就
     if (m_player->IsGameMaster() || m_player->GetSession()->HasPermission(rbac::RBAC_PERM_CANNOT_EARN_ACHIEVEMENTS))
         return;
 
+    // 计数器类型成就或已完成的成就不再处理
     if (achievement->Flags & ACHIEVEMENT_FLAG_COUNTER || HasAchieved(achievement->ID))
         return;
 
     TC_LOG_INFO("achievement", "AchievementMgr::CompletedAchievement({}). Player: {} {}",
         achievement->ID, m_player->GetName(), m_player->GetGUID().ToString());
 
+    // 发送成就完成通知
     SendAchievementEarned(achievement);
+
+    // 记录完成数据
     CompletedAchievementData& ca = m_completedAchievements[achievement->ID];
     ca.date = GameTime::GetGameTime();
     ca.changed = true;
 
+    // 服务器首杀成就需要全局标记
     if (achievement->Flags & (ACHIEVEMENT_FLAG_REALM_FIRST_REACH | ACHIEVEMENT_FLAG_REALM_FIRST_KILL))
         sAchievementMgr->SetRealmCompleted(achievement);
 
+    // 触发"完成成就"类型的条件更新
     UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_COMPLETE_ACHIEVEMENT, achievement->ID);
+    // 触发"获得成就点数"类型的条件更新
     UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_EARN_ACHIEVEMENT_POINTS, achievement->Points);
 
-    // reward items and titles if any
+    // 处理奖励
     AchievementReward const* reward = sAchievementMgr->GetAchievementReward(achievement);
 
-    // no rewards
+    // 无奖励则直接返回
     if (!reward)
         return;
 
-    // titles
-    //! Currently there's only one achievement that deals with gender-specific titles.
-    //! Since no common attributes were found, (not even in titleRewardFlags field)
-    //! we explicitly check by ID. Maybe in the future we could move the achievement_reward
-    //! condition fields to the condition system.
+    // 授予称号
+    // 目前只有一个成就(1793)涉及性别特定称号
+    // 由于没有找到通用属性，这里通过ID显式检查
+    // 未来可能将条件字段移至条件系统
     if (uint32 titleId = reward->TitleId[achievement->ID == 1793 ? GetPlayer()->GetNativeGender() : (GetPlayer()->GetTeam() == ALLIANCE ? 0 : 1)])
         if (CharTitlesEntry const* titleEntry = sCharTitlesStore.LookupEntry(titleId))
             GetPlayer()->SetTitle(titleEntry);
 
-    // mail
+    // 发送奖励邮件
     if (reward->SenderCreatureId)
     {
         MailDraft draft(reward->MailTemplateId);
 
+        // 如果没有使用邮件模板，则使用自定义主题和正文
         if (!reward->MailTemplateId)
         {
-            // subject and text
             std::string subject = reward->Subject;
             std::string text = reward->Body;
 
+            // 处理本地化文本
             LocaleConstant localeConstant = GetPlayer()->GetSession()->GetSessionDbLocaleIndex();
             if (localeConstant != LOCALE_enUS)
             {
@@ -1572,16 +1738,18 @@ void AchievementMgr::CompletedAchievement(AchievementEntry const* achievement)
 
         CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
 
+        // 创建奖励物品
         Item* item = reward->ItemId ? Item::CreateItem(reward->ItemId, 1, GetPlayer()) : nullptr;
         if (item)
         {
-            // save new item before send
-            item->SaveToDB(trans);                               // save for prevent lost at next mail load, if send fail then item will deleted
+            // 发送前先保存物品，防止邮件加载时丢失
+            // 如果发送失败，物品将被删除
+            item->SaveToDB(trans);
 
-            // item
             draft.AddItem(item);
         }
 
+        // 发送邮件
         draft.SendMailTo(trans, GetPlayer(), MailSender(MAIL_CREATURE, reward->SenderCreatureId));
         CharacterDatabase.CommitTransaction(trans);
     }
@@ -2311,6 +2479,13 @@ bool AchievementGlobalMgr::IsRealmCompleted(AchievementEntry const* achievement)
     return true;
 }
 
+/**
+ * @brief 设置服务器首杀成就已完成
+ * @param achievement 成就定义条目
+ *
+ * 标记服务器首杀成就为已完成状态
+ * 防止其他玩家获得同一首杀成就
+ */
 void AchievementGlobalMgr::SetRealmCompleted(AchievementEntry const* achievement)
 {
     if (IsRealmCompleted(achievement))
@@ -2320,6 +2495,17 @@ void AchievementGlobalMgr::SetRealmCompleted(AchievementEntry const* achievement
 }
 
 //==========================================================
+/**
+ * @brief 加载成就条件列表
+ *
+ * 从DBC加载成就条件定义，并建立各种索引用于快速查找：
+ * - 按类型索引
+ * - 按成就ID索引
+ * - 按杂项值索引（优化特定类型条件查找）
+ * - 按计时类型索引
+ *
+ * 在服务器启动时调用
+ */
 void AchievementGlobalMgr::LoadAchievementCriteriaList()
 {
     uint32 oldMSTime = getMSTime();
@@ -2337,6 +2523,7 @@ void AchievementGlobalMgr::LoadAchievementCriteriaList()
         if (!criteria)
             continue;
 
+        // 验证关联的成就是否存在
         if (!GetAchievement(criteria->AchievementID))
         {
             TC_LOG_DEBUG("server.loading", "Achievement {} referenced by criteria {} doesn't exist, criteria not loaded.", criteria->AchievementID, criteria->ID);
@@ -2346,14 +2533,19 @@ void AchievementGlobalMgr::LoadAchievementCriteriaList()
         ASSERT(criteria->Type < ACHIEVEMENT_CRITERIA_TYPE_TOTAL, "ACHIEVEMENT_CRITERIA_TYPE_TOTAL must be greater than or equal to %u but is currently equal to %u",
             criteria->Type + 1, ACHIEVEMENT_CRITERIA_TYPE_TOTAL);
 
+        // 按类型索引
         m_AchievementCriteriasByType[criteria->Type].push_back(criteria);
+        // 按成就ID索引
         m_AchievementCriteriaListByAchievement[criteria->AchievementID].push_back(criteria);
+
+        // 按杂项值索引（用于优化查找性能）
         if (IsAchievementCriteriaTypeStoredByMiscValue(AchievementCriteriaTypes(criteria->Type)))
         {
             if (criteria->Type != ACHIEVEMENT_CRITERIA_TYPE_EXPLORE_AREA)
                 m_AchievementCriteriasByMiscValue[criteria->Type][criteria->Asset.ID].push_back(criteria);
             else
             {
+                // 探索区域类型需要特殊处理：一个条件可能对应多个区域
                 WorldMapOverlayEntry const* worldOverlayEntry = sWorldMapOverlayStore.LookupEntry(criteria->Asset.WorldMapOverlayID);
                 if (!worldOverlayEntry)
                     break;
@@ -2362,6 +2554,7 @@ void AchievementGlobalMgr::LoadAchievementCriteriaList()
                 {
                     if (worldOverlayEntry->AreaID[j])
                     {
+                        // 避免重复添加同一区域
                         bool valid = true;
                         for (uint8 i = 0; i < j; ++i)
                             if (worldOverlayEntry->AreaID[j] == worldOverlayEntry->AreaID[i])
@@ -2373,6 +2566,7 @@ void AchievementGlobalMgr::LoadAchievementCriteriaList()
             }
         }
 
+        // 按附加条件索引
         for (uint32 i = 0; i < MAX_CRITERIA_REQUIREMENTS; ++i)
         {
             if (criteria->AdditionalRequirements[i].Type != ACHIEVEMENT_CRITERIA_CONDITION_NONE)
@@ -2381,6 +2575,7 @@ void AchievementGlobalMgr::LoadAchievementCriteriaList()
                     "ACHIEVEMENT_CRITERIA_CONDITION_MAX must be greater than or equal to %u but is currently equal to %u",
                     criteria->AdditionalRequirements[i].Type + 1, ACHIEVEMENT_CRITERIA_CONDITION_MAX);
 
+                // 避免重复添加相同条件
                 if (i == 0
                     || criteria->AdditionalRequirements[i].Type != criteria->AdditionalRequirements[i - 1].Type
                     || criteria->AdditionalRequirements[i].Asset != criteria->AdditionalRequirements[i - 1].Asset)
@@ -2388,6 +2583,7 @@ void AchievementGlobalMgr::LoadAchievementCriteriaList()
             }
         }
 
+        // 按计时类型索引
         if (criteria->StartTimer)
         {
             ASSERT(criteria->StartEvent < ACHIEVEMENT_TIMED_TYPE_MAX, "ACHIEVEMENT_TIMED_TYPE_MAX must be greater than or equal to %u but is currently equal to %u",
@@ -2401,6 +2597,12 @@ void AchievementGlobalMgr::LoadAchievementCriteriaList()
     TC_LOG_INFO("server.loading", ">> Loaded {} achievement criteria in {} ms.", loaded, GetMSTimeDiffToNow(oldMSTime));
 }
 
+/**
+ * @brief 加载成就引用列表
+ *
+ * 建立成就之间的引用关系索引
+ * 用于处理"完成另一个成就作为条件"的成就
+ */
 void AchievementGlobalMgr::LoadAchievementReferenceList()
 {
     uint32 oldMSTime = getMSTime();
@@ -2564,13 +2766,19 @@ void AchievementGlobalMgr::LoadAchievementCriteriaData()
     TC_LOG_INFO("server.loading", ">> Loaded {} additional achievement criteria data in {} ms", count, GetMSTimeDiffToNow(oldMSTime));
 }
 
+/**
+ * @brief 加载已完成的成就
+ *
+ * 从数据库加载服务器上已完成的成就，用于服务器首杀成就的检测
+ * 同时初始化所有服务器首杀成就的条目，使多线程访问更安全
+ */
 void AchievementGlobalMgr::LoadCompletedAchievements()
 {
     uint32 oldMSTime = getMSTime();
 
-    // Populate _allCompletedAchievements with all realm first achievement ids to make multithreaded access safer
-    // while it will not prevent races, it will prevent crashes that happen because std::unordered_map key was added
-    // instead the only potential race will happen on value associated with the key
+    // 预先填充所有服务器首杀成就ID，使多线程访问更安全
+    // 虽然不能完全防止竞争，但可以防止因std::unordered_map添加键导致的崩溃
+    // 唯一可能的竞争发生在与键关联的值上
     for (uint32 i = 0; i < sAchievementStore.GetNumRows(); ++i)
         if (AchievementEntry const* achievement = sAchievementStore.LookupEntry(i))
             if (achievement->Flags & (ACHIEVEMENT_FLAG_REALM_FIRST_REACH | ACHIEVEMENT_FLAG_REALM_FIRST_KILL))
@@ -2609,11 +2817,17 @@ void AchievementGlobalMgr::LoadCompletedAchievements()
     TC_LOG_INFO("server.loading", ">> Loaded {} realm first completed achievements in {} ms.", (unsigned long)_allCompletedAchievements.size(), GetMSTimeDiffToNow(oldMSTime));
 }
 
+/**
+ * @brief 加载成就奖励配置
+ *
+ * 从数据库加载成就奖励（物品、称号、邮件等）
+ * 包括数据验证和错误报告
+ */
 void AchievementGlobalMgr::LoadRewards()
 {
     uint32 oldMSTime = getMSTime();
 
-    m_achievementRewards.clear();                           // need for reload case
+    m_achievementRewards.clear();                           // 重载时需要清空
 
     //                                               0   1       2       3       4       5        6     7
     QueryResult result = WorldDatabase.Query("SELECT ID, TitleA, TitleH, ItemID, Sender, Subject, Body, MailTemplateID FROM achievement_reward");
@@ -2636,24 +2850,26 @@ void AchievementGlobalMgr::LoadRewards()
         }
 
         AchievementReward reward;
-        reward.TitleId[0]       = fields[1].GetUInt32();
-        reward.TitleId[1]       = fields[2].GetUInt32();
-        reward.ItemId           = fields[3].GetUInt32();
-        reward.SenderCreatureId = fields[4].GetUInt32();
-        reward.Subject          = fields[5].GetString();
-        reward.Body             = fields[6].GetString();
-        reward.MailTemplateId   = fields[7].GetUInt32();
+        reward.TitleId[0]       = fields[1].GetUInt32();   // 联盟称号
+        reward.TitleId[1]       = fields[2].GetUInt32();   // 部落称号
+        reward.ItemId           = fields[3].GetUInt32();   // 奖励物品
+        reward.SenderCreatureId = fields[4].GetUInt32();   // 邮件发送者
+        reward.Subject          = fields[5].GetString();   // 邮件主题
+        reward.Body             = fields[6].GetString();   // 邮件正文
+        reward.MailTemplateId   = fields[7].GetUInt32();   // 邮件模板ID
 
-        // must be title or mail at least
+        // 必须至少有称号或邮件奖励
         if (!reward.TitleId[0] && !reward.TitleId[1] && !reward.SenderCreatureId)
         {
             TC_LOG_ERROR("sql.sql", "Table `achievement_reward` (ID: {}) does not contain title or item reward data. Ignored.", id);
             continue;
         }
 
+        // 两个阵营都可完成的成就，如果只有一个阵营有称号奖励则报错
         if (achievement->Faction == ACHIEVEMENT_FACTION_ANY && (!reward.TitleId[0] ^ !reward.TitleId[1]))
             TC_LOG_ERROR("sql.sql", "Table `achievement_reward` (ID: {}) contains the title (A: {} H: {}) for only one team.", id, reward.TitleId[0], reward.TitleId[1]);
 
+        // 验证联盟称号
         if (reward.TitleId[0])
         {
             CharTitlesEntry const* titleEntry = sCharTitlesStore.LookupEntry(reward.TitleId[0]);
@@ -2664,6 +2880,7 @@ void AchievementGlobalMgr::LoadRewards()
             }
         }
 
+        // 验证部落称号
         if (reward.TitleId[1])
         {
             CharTitlesEntry const* titleEntry = sCharTitlesStore.LookupEntry(reward.TitleId[1]);
@@ -2674,9 +2891,10 @@ void AchievementGlobalMgr::LoadRewards()
             }
         }
 
-        //check mail data before item for report including wrong item case
+        // 检查邮件数据
         if (reward.SenderCreatureId)
         {
+            // 验证发送者生物是否存在
             if (!sObjectMgr->GetCreatureTemplate(reward.SenderCreatureId))
             {
                 TC_LOG_ERROR("sql.sql", "Table `achievement_reward` (ID: {}) contains an invalid creature ID {} as sender, mail reward skipped.", id, reward.SenderCreatureId);
@@ -2685,6 +2903,7 @@ void AchievementGlobalMgr::LoadRewards()
         }
         else
         {
+            // 没有发送者但有邮件相关数据，报错
             if (reward.ItemId)
                 TC_LOG_ERROR("sql.sql", "Table `achievement_reward` (ID: {}) does not have sender data, but contains an item reward. Item will not be rewarded.", id);
 
@@ -2709,6 +2928,7 @@ void AchievementGlobalMgr::LoadRewards()
                 TC_LOG_ERROR("sql.sql", "Table `achievement_reward` (ID: {}) is using MailTemplate ({}) and mail subject/text.", id, reward.MailTemplateId);
         }
 
+        // 验证奖励物品
         if (reward.ItemId)
         {
             if (!sObjectMgr->GetItemTemplate(reward.ItemId))
@@ -2724,11 +2944,17 @@ void AchievementGlobalMgr::LoadRewards()
     TC_LOG_INFO("server.loading", ">> Loaded {} achievement rewards in {} ms.", uint32(m_achievementRewards.size()), GetMSTimeDiffToNow(oldMSTime));
 }
 
+/**
+ * @brief 加载成就奖励本地化文本
+ *
+ * 从数据库加载多语言的奖励邮件文本
+ * 支持不同语言版本的邮件主题和正文
+ */
 void AchievementGlobalMgr::LoadRewardLocales()
 {
     uint32 oldMSTime = getMSTime();
 
-    m_achievementRewardLocales.clear();                       // need for reload case
+    m_achievementRewardLocales.clear();                       // 重载时需要清空
 
     //                                               0   1       2        3
     QueryResult result = WorldDatabase.Query("SELECT ID, Locale, Subject, Body FROM achievement_reward_locale");
@@ -2750,12 +2976,14 @@ void AchievementGlobalMgr::LoadRewardLocales()
         if (locale == LOCALE_enUS)
             continue;
 
+        // 验证关联的奖励是否存在
         if (m_achievementRewards.find(id) == m_achievementRewards.end())
         {
             TC_LOG_ERROR("sql.sql", "Table `achievement_reward_locale` (ID: {}) contains locale strings for a non-existing achievement reward.", id);
             continue;
         }
 
+        // 存储本地化文本
         AchievementRewardLocale& data = m_achievementRewardLocales[id];
         ObjectMgr::AddLocaleString(fields[2].GetString(), locale, data.Subject);
         ObjectMgr::AddLocaleString(fields[3].GetString(), locale, data.Text);
@@ -2764,11 +2992,21 @@ void AchievementGlobalMgr::LoadRewardLocales()
     TC_LOG_INFO("server.loading", ">> Loaded {} achievement reward locale strings in {} ms.", uint32(m_achievementRewardLocales.size()), GetMSTimeDiffToNow(oldMSTime));
 }
 
+/**
+ * @brief 根据ID获取成就定义
+ * @param achievementId 成就ID
+ * @return 成就定义指针，不存在返回nullptr
+ */
 AchievementEntry const* AchievementGlobalMgr::GetAchievement(uint32 achievementId) const
 {
     return sAchievementStore.LookupEntry(achievementId);
 }
 
+/**
+ * @brief 根据ID获取条件定义
+ * @param criteriaId 条件ID
+ * @return 条件定义指针，不存在返回nullptr
+ */
 AchievementCriteriaEntry const* AchievementGlobalMgr::GetAchievementCriteria(uint32 criteriaId) const
 {
     return sAchievementCriteriaStore.LookupEntry(criteriaId);

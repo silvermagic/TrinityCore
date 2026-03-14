@@ -15,6 +15,25 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file BattlegroundSA.cpp
+ * @brief 远古海滩战场实现
+ *
+ * 本文件实现了远古海滩战场的核心游戏逻辑，包括：
+ * - 双轮制攻防战
+ * - 大门摧毁和墓地占领系统
+ * - 攻城器械和防御炮塔管理
+ * - 泰坦遗迹激活和胜负判定
+ *
+ * 关键流程：
+ * 1. 战场初始化：创建所有游戏对象和生物
+ * 2. 热身阶段：玩家准备，船只出发
+ * 3. 第一轮：随机阵营进攻，限时10分钟
+ * 4. 交换阶段：交换攻防，重置战场
+ * 5. 第二轮：另一方进攻，限时根据第一轮时间调整
+ * 6. 结算：比较两轮用时，判定胜负
+ */
+
 #include "BattlegroundSA.h"
 #include "DBCStores.h"
 #include "GameObject.h"
@@ -29,34 +48,57 @@
 #include "WorldPacket.h"
 #include "WorldStatePackets.h"
 
+/**
+ * @brief 构建目标数据块
+ * @param data 数据包
+ *
+ * 将远古海滩特有的得分数据序列化到数据包中：
+ * - 摧毁攻城器械数量
+ * - 摧毁大门数量
+ */
 void BattlegroundSAScore::BuildObjectivesBlock(WorldPacket& data)
 {
-    data << uint32(2); // Objectives Count
-    data << uint32(DemolishersDestroyed);
-    data << uint32(GatesDestroyed);
+    data << uint32(2); // 目标数量
+    data << uint32(DemolishersDestroyed);  // 摧毁的攻城器械数
+    data << uint32(GatesDestroyed);         // 摧毁的大门数
 }
 
+/**
+ * @brief 构造函数
+ *
+ * 初始化远古海滩战场的成员变量：
+ * - 设置开始消息（由Kanrethad NPC处理）
+ * - 分配游戏对象和生物容器
+ * - 初始化状态变量
+ * - 随机选择初始攻击方
+ */
 BattlegroundSA::BattlegroundSA()
 {
-    StartMessageIds[BG_STARTING_EVENT_FOURTH] = 0; // handle by Kanrethad
+    // 第四个开始事件由Kanrethad NPC处理
+    StartMessageIds[BG_STARTING_EVENT_FOURTH] = 0;
 
+    // 分配游戏对象和生物容器大小
     BgObjects.resize(BG_SA_MAXOBJ);
     BgCreatures.resize(AsUnderlyingType(BG_SA_MAXNPC) + AsUnderlyingType(BG_SA_MAX_GY));
+
+    // 初始化状态变量
     TimerEnabled = false;
     UpdateWaitTimer = 0;
     SignaledRoundTwo = false;
     SignaledRoundTwoHalfMin = false;
     InitSecondRound = false;
     _gateDestroyed = false;
-    Attackers = TEAM_ALLIANCE;
+    Attackers = TEAM_ALLIANCE;  // 默认联盟为攻击方（Reset时随机）
     TotalTime = 0;
     EndRoundTimer = 0;
     ShipsStarted = false;
     Status = BG_SA_NOT_STARTED;
 
+    // 初始化所有大门状态为完好
     for (uint8 i = 0; i < MAX_GATES; ++i)
         GateStatus[i] = BG_SA_GATE_OK;
 
+    // 初始化两轮得分和载具存活状态
     for (uint8 i = 0; i < 2; i++)
     {
         RoundScores[i].winner = TEAM_ALLIANCE;
@@ -64,9 +106,7 @@ BattlegroundSA::BattlegroundSA()
         _allVehiclesAlive[i] = true;
     }
 
-    //! This is here to prevent an uninitialised variable warning
-    //! The warning only occurs when SetUpBattleGround fails though.
-    //! In the future this function should be called BEFORE sending initial worldstates.
+    // 初始化墓地状态数组（防止未初始化警告）
     memset(&GraveyardStatus, 0, sizeof(GraveyardStatus));
 }
 

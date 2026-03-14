@@ -15,7 +15,21 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-/*
+/**
+ * @file spell_mage.cpp
+ * @brief 法师法术脚本模块
+ *
+ * 本模块实现法师职业相关法术的脚本逻辑，包括：
+ * - 奥术系：奥术飞弹、奥术潜能、法力护盾、专注魔法等
+ * - 火焰系：点燃、燃烧、炎爆术、活体炸弹、冲击波等
+ * - 冰霜系：寒冰屏障、冰霜新星、冰盾、冰冷效果、霜火之箭等
+ *
+ * 法术脚本主要处理：
+ * - 法术触发和连锁效果
+ * - 天赋和雕文的特殊处理
+ * - 吸收盾的计算和触发
+ * - 套装效果的额外处理
+ *
  * Scripts for spells with SPELLFAMILY_MAGE and SPELLFAMILY_GENERIC spells used by mage players.
  * Ordered alphabetically using scriptname.
  * Scriptnames of files in this file should be prefixed with "spell_mage_".
@@ -30,60 +44,88 @@
 #include "SpellMgr.h"
 #include "SpellScript.h"
 
+/**
+ * @brief 法师法术ID枚举
+ *
+ * 定义法师法术脚本使用的各种法术ID
+ */
 enum MageSpells
 {
-    SPELL_MAGE_BLAZING_SPEED                     = 31643,
-    SPELL_MAGE_BURNOUT                           = 44450,
-    SPELL_MAGE_COLD_SNAP                         = 11958,
-    SPELL_MAGE_FOCUS_MAGIC_PROC                  = 54648,
-    SPELL_MAGE_FROST_WARDING_R1                  = 11189,
-    SPELL_MAGE_FROST_WARDING_TRIGGERED           = 57776,
-    SPELL_MAGE_INCANTERS_ABSORBTION_R1           = 44394,
-    SPELL_MAGE_INCANTERS_ABSORBTION_TRIGGERED    = 44413,
-    SPELL_MAGE_IGNITE                            = 12654,
-    SPELL_MAGE_MASTER_OF_ELEMENTS_ENERGIZE       = 29077,
-    SPELL_MAGE_SQUIRREL_FORM                     = 32813,
-    SPELL_MAGE_GIRAFFE_FORM                      = 32816,
-    SPELL_MAGE_SERPENT_FORM                      = 32817,
-    SPELL_MAGE_DRAGONHAWK_FORM                   = 32818,
-    SPELL_MAGE_WORGEN_FORM                       = 32819,
-    SPELL_MAGE_SHEEP_FORM                        = 32820,
-    SPELL_MAGE_GLYPH_OF_ETERNAL_WATER            = 70937,
-    SPELL_MAGE_SHATTERED_BARRIER                 = 55080,
-    SPELL_MAGE_SUMMON_WATER_ELEMENTAL_PERMANENT  = 70908,
-    SPELL_MAGE_SUMMON_WATER_ELEMENTAL_TEMPORARY  = 70907,
-    SPELL_MAGE_GLYPH_OF_BLAST_WAVE               = 62126,
-    SPELL_MAGE_CHILLED                           = 12484,
-    SPELL_MAGE_MANA_SURGE                        = 37445,
-    SPELL_MAGE_MAGIC_ABSORPTION_MANA             = 29442,
-    SPELL_MAGE_ARCANE_POTENCY_RANK_1             = 57529,
-    SPELL_MAGE_ARCANE_POTENCY_RANK_2             = 57531,
-    SPELL_MAGE_HOT_STREAK_PROC                   = 48108,
-    SPELL_MAGE_ARCANE_SURGE                      = 37436,
-    SPELL_MAGE_COMBUSTION                        = 11129,
-    SPELL_MAGE_COMBUSTION_PROC                   = 28682,
-    SPELL_MAGE_EMPOWERED_FIRE_PROC               = 67545,
-    SPELL_MAGE_T10_2P_BONUS                      = 70752,
-    SPELL_MAGE_T10_2P_BONUS_EFFECT               = 70753,
-    SPELL_MAGE_T8_4P_BONUS                       = 64869,
-    SPELL_MAGE_MISSILE_BARRAGE                   = 44401,
-    SPELL_MAGE_FINGERS_OF_FROST_AURASTATE_AURA   = 44544,
-    SPELL_MAGE_PERMAFROST_AURA                   = 68391,
-    SPELL_MAGE_ARCANE_MISSILES_R1                = 5143
+    SPELL_MAGE_BLAZING_SPEED                     = 31643,  ///< 炽烈疾速 - 被攻击时触发移动速度提升
+    SPELL_MAGE_BURNOUT                           = 44450,  ///< 燃尽 - 法术暴击后恢复法力
+    SPELL_MAGE_COLD_SNAP                         = 11958,  ///< 寒冰护体 - 重置冰霜系法术冷却
+    SPELL_MAGE_FOCUS_MAGIC_PROC                  = 54648,  ///< 专注魔法触发 - 目标暴击时施法者获得暴击加成
+    SPELL_MAGE_FROST_WARDING_R1                  = 11189,  ///< 冰霜导能等级1 - 提升冰霜护盾效果
+    SPELL_MAGE_FROST_WARDING_TRIGGERED           = 57776,  ///< 冰霜导能触发 - 吸收伤害并恢复法力
+    SPELL_MAGE_INCANTERS_ABSORBTION_R1           = 44394,  ///< 吸收导能等级1 - 吸收伤害时获得法术强度
+    SPELL_MAGE_INCANTERS_ABSORBTION_TRIGGERED    = 44413,  ///< 吸收导能触发 - 法术强度提升效果
+    SPELL_MAGE_IGNITE                            = 12654,  ///< 点燃 - 火焰法术暴击后的持续伤害
+    SPELL_MAGE_MASTER_OF_ELEMENTS_ENERGIZE       = 29077,  ///< 元素大师充能 - 法术暴击后恢复法力
+    SPELL_MAGE_SQUIRREL_FORM                     = 32813,  ///< 松鼠形态 - 变形视觉效果
+    SPELL_MAGE_GIRAFFE_FORM                      = 32816,  ///< 长颈鹿形态 - 变形视觉效果
+    SPELL_MAGE_SERPENT_FORM                      = 32817,  ///< 蛇形态 - 变形视觉效果
+    SPELL_MAGE_DRAGONHAWK_FORM                   = 32818,  ///< 龙鹰形态 - 变形视觉效果
+    SPELL_MAGE_WORGEN_FORM                       = 32819,  ///< 狼人形态 - 变形视觉效果
+    SPELL_MAGE_SHEEP_FORM                        = 32820,  ///< 绵羊形态 - 变形视觉效果
+    SPELL_MAGE_GLYPH_OF_ETERNAL_WATER            = 70937,  ///< 永恒之水雕文 - 水元素永久存在
+    SPELL_MAGE_SHATTERED_BARRIER                 = 55080,  ///< 破碎屏障 - 冰盾破碎时冰冻周围敌人
+    SPELL_MAGE_SUMMON_WATER_ELEMENTAL_PERMANENT  = 70908,  ///< 召唤永久水元素
+    SPELL_MAGE_SUMMON_WATER_ELEMENTAL_TEMPORARY  = 70907,  ///< 召唤临时水元素
+    SPELL_MAGE_GLYPH_OF_BLAST_WAVE               = 62126,  ///< 冲击波雕文 - 移除击退效果
+    SPELL_MAGE_CHILLED                           = 12484,  ///< 冰冷效果 - 冰霜法术减速效果
+    SPELL_MAGE_MANA_SURGE                        = 37445,  ///< 法力涌动 - 使用法力宝石后的增益
+    SPELL_MAGE_MAGIC_ABSORPTION_MANA             = 29442,  ///< 魔法吸收法力 - 抵抗法术后恢复法力
+    SPELL_MAGE_ARCANE_POTENCY_RANK_1             = 57529,  ///< 奥术潜能等级1 - 清爽/气定神闲后的暴击增益
+    SPELL_MAGE_ARCANE_POTENCY_RANK_2             = 57531,  ///< 奥术潜能等级2 - 清爽/气定神闲后的暴击增益
+    SPELL_MAGE_HOT_STREAK_PROC                   = 48108,  ///< 热连击触发 - 下一个炎爆术瞬发
+    SPELL_MAGE_ARCANE_SURGE                      = 37436,  ///< 奥术涌动 - 法力护盾吸收后获得法术强度
+    SPELL_MAGE_COMBUSTION                        = 11129,  ///< 燃烧 - 增加火焰法术暴击
+    SPELL_MAGE_COMBUSTION_PROC                   = 28682,  ///< 燃烧触发 - 非暴击时叠加暴击buff
+    SPELL_MAGE_EMPOWERED_FIRE_PROC               = 67545,  ///< 强化火焰触发 - 点燃触发时恢复法力
+    SPELL_MAGE_T10_2P_BONUS                      = 70752,  ///< T10 2件套奖励
+    SPELL_MAGE_T10_2P_BONUS_EFFECT               = 70753,  ///< T10 2件套效果 - 法术强度增益
+    SPELL_MAGE_T8_4P_BONUS                       = 64869,  ///< T8 4件套奖励 - 降低触发消耗
+    SPELL_MAGE_MISSILE_BARRAGE                   = 44401,  ///< 飞弹弹幕 - 奥术飞弹瞬发
+    SPELL_MAGE_FINGERS_OF_FROST_AURASTATE_AURA   = 44544,  ///< 冰霜之指状态光环 - 允许对目标施放冰霜法术
+    SPELL_MAGE_PERMAFROST_AURA                   = 68391,  ///< 永冻土光环 - 霜火之箭的减速效果
+    SPELL_MAGE_ARCANE_MISSILES_R1                = 5143    ///< 奥术飞弹等级1
 };
 
+/**
+ * @brief 法师法术图标ID枚举
+ *
+ * 用于过滤特定法术，因为某些法术共享家族标志
+ */
 enum MageSpellIcons
 {
-    SPELL_ICON_MAGE_SHATTERED_BARRIER = 2945,
-    SPELL_ICON_MAGE_PRESENCE_OF_MIND  = 139,
-    SPELL_ICON_MAGE_CLEARCASTING      = 212,
-    SPELL_ICON_MAGE_LIVING_BOMB       = 3000
+    SPELL_ICON_MAGE_SHATTERED_BARRIER = 2945,  ///< 破碎屏障图标ID
+    SPELL_ICON_MAGE_PRESENCE_OF_MIND  = 139,   ///< 气定神闲图标ID
+    SPELL_ICON_MAGE_CLEARCASTING      = 212,   ///< 清爽图标ID
+    SPELL_ICON_MAGE_LIVING_BOMB       = 3000   ///< 活体炸弹图标ID
 };
 
+/**
+ * @brief 吸收导能基础光环脚本
+ *
+ * 这是一个基类AuraScript，用于处理吸收导能天赋的效果。
+ * 当法师吸收伤害时，根据天赋等级获得法术强度增益。
+ *
+ * 被以下法术继承使用：
+ * - 火焰/冰霜防护结界
+ * - 冰盾
+ * - 法力护盾
+ */
 // Incanter's Absorbtion
 class spell_mage_incanters_absorbtion_base_AuraScript : public AuraScript
 {
     public:
+        /**
+         * @brief 验证法术信息
+         * @param spellInfo 法术信息（未使用）
+         * @return 验证是否成功
+         *
+         * 功能：验证吸收导能相关的法术ID是否有效
+         */
         bool Validate(SpellInfo const* /*spellInfo*/) override
         {
             return ValidateSpellInfo(
@@ -93,12 +135,29 @@ class spell_mage_incanters_absorbtion_base_AuraScript : public AuraScript
             });
         }
 
+        /**
+         * @brief 触发吸收导能效果
+         * @param aurEff 光环效果
+         * @param dmgInfo 伤害信息（未使用）
+         * @param absorbAmount 吸收量
+         *
+         * 调用时机：每次成功吸收伤害后
+         *
+         * 功能：
+         * 1. 检查目标是否有吸收导能天赋
+         * 2. 根据吸收量计算法术强度增益
+         * 3. 施放吸收导能触发法术
+         *
+         * 性能注意：每次吸收伤害时调用，应保持高效
+         */
         void Trigger(AuraEffect* aurEff, DamageInfo& /*dmgInfo*/, uint32& absorbAmount)
         {
             Unit* target = GetTarget();
 
+            // 检查是否有吸收导能天赋
             if (AuraEffect* talentAurEff = target->GetAuraEffectOfRankedSpell(SPELL_MAGE_INCANTERS_ABSORBTION_R1, EFFECT_0))
             {
+                // 根据吸收量计算法术强度增益
                 int32 bp = CalculatePct(absorbAmount, talentAurEff->GetAmount());
                 CastSpellExtraArgs args(aurEff);
                 args.AddSpellBP0(bp);
@@ -107,43 +166,95 @@ class spell_mage_incanters_absorbtion_base_AuraScript : public AuraScript
         }
 };
 
+/**
+ * @brief 奥术飞弹法术脚本 (-5143)
+ *
+ * AuraScript实现，处理奥术飞弹的各种效果。
+ * 主要处理T10 2件套奖励的触发逻辑。
+ *
+ * 特殊行为：
+ * - 正常施放时不触发T10效果
+ * - 通过飞弹弹幕触发的瞬发奥术飞弹才会触发T10效果
+ * - T10效果在法术结束时施放
+ */
 // -5143 - Arcane Missiles
 class spell_mage_arcane_missiles : public AuraScript
 {
     PrepareAuraScript(spell_mage_arcane_missiles);
 
+    /**
+     * @brief 验证法术信息
+     * @param spellInfo 法术信息（未使用）
+     * @return 验证是否成功
+     *
+     * 功能：验证T10套装相关法术ID是否有效
+     */
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
         return ValidateSpellInfo({ SPELL_MAGE_T10_2P_BONUS, SPELL_MAGE_T10_2P_BONUS_EFFECT });
     }
 
+    /**
+     * @brief 光环移除时的回调
+     * @param aurEff 光环效果
+     * @param mode 处理模式
+     *
+     * 调用时机：奥术飞弹施放完成时
+     *
+     * 功能：如果有T10套装且允许触发，施放T10 2件套效果
+     */
     void OnRemove(AuraEffect const* aurEff, AuraEffectHandleModes /*mode*/)
     {
         Unit* target = GetTarget();
+        // 检查是否有T10套装且允许触发
         if (target->HasAura(SPELL_MAGE_T10_2P_BONUS) && _canProcT10)
             target->CastSpell(nullptr, SPELL_MAGE_T10_2P_BONUS_EFFECT, aurEff);
     }
 
+    /**
+     * @brief 注册效果处理函数
+     */
     void Register() override
     {
         AfterEffectRemove += AuraEffectRemoveFn(spell_mage_arcane_missiles::OnRemove, EFFECT_1, SPELL_AURA_PERIODIC_TRIGGER_SPELL, AURA_EFFECT_HANDLE_REAL);
     }
 
 private:
-    bool _canProcT10 = false;
+    bool _canProcT10 = false;  ///< 是否允许触发T10效果，默认为false
 
 public:
+    /**
+     * @brief 允许T10效果触发
+     *
+     * 调用时机：由飞弹弹幕脚本调用，表示这是瞬发奥术飞弹
+     */
     void AllowT10Proc()
     {
         _canProcT10 = true;
     }
 };
 
+/**
+ * @brief 奥术潜能天赋光环脚本 (-31571)
+ *
+ * AuraScript实现，处理奥术潜能天赋效果。
+ * 当法师处于清爽或气定神闲状态时，下一个法术获得暴击几率加成。
+ *
+ * 触发条件：施放法术时处于清爽或气定神闲状态
+ * 由于家族标志与其他法术共享，使用图标ID进行过滤
+ */
 // -31571 - Arcane Potency
 class spell_mage_arcane_potency : public AuraScript
 {
     PrepareAuraScript(spell_mage_arcane_potency);
 
+    /**
+     * @brief 验证法术信息
+     * @param spellInfo 法术信息（未使用）
+     * @return 验证是否成功
+     *
+     * 功能：验证奥术潜能等级1和2的法术ID是否有效
+     */
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
         return ValidateSpellInfo(
@@ -153,9 +264,19 @@ class spell_mage_arcane_potency : public AuraScript
         });
     }
 
+    /**
+     * @brief 检查是否可以触发
+     * @param eventInfo 触发事件信息
+     * @return 是否可以触发
+     *
+     * 调用时机：每次触发事件时
+     *
+     * 功能：过滤只有清爽或气定神闲才能触发此效果
+     * 由于家族标志与冰冻之脑/飞弹弹幕共享，使用图标ID进行过滤
+     */
     bool CheckProc(ProcEventInfo& eventInfo)
     {
-        // due to family mask sharing with brain freeze/missile barrage proc, we need to filter out by icon id
+        // 由于家族标志与冰冻之脑/飞弹弹幕共享，需要通过图标ID过滤
         SpellInfo const* spellInfo = eventInfo.GetSpellInfo();
         if (!spellInfo || (spellInfo->SpellIconID != SPELL_ICON_MAGE_CLEARCASTING && spellInfo->SpellIconID != SPELL_ICON_MAGE_PRESENCE_OF_MIND))
             return false;
@@ -163,16 +284,32 @@ class spell_mage_arcane_potency : public AuraScript
         return true;
     }
 
+    /**
+     * @brief 处理触发效果
+     * @param aurEff 光环效果
+     * @param eventInfo 触发事件信息
+     *
+     * 调用时机：施放法术时处于清爽或气定神闲状态
+     *
+     * 功能：根据天赋等级施放对应的暴击加成法术
+     * - 等级1：施放 SPELL_MAGE_ARCANE_POTENCY_RANK_1
+     * - 等级2：施放 SPELL_MAGE_ARCANE_POTENCY_RANK_2
+     */
     void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
     {
+        // 根据天赋等级选择触发法术
         static uint32 const triggerSpell[2] = { SPELL_MAGE_ARCANE_POTENCY_RANK_1, SPELL_MAGE_ARCANE_POTENCY_RANK_2 };
 
         PreventDefaultAction();
         Unit* caster = eventInfo.GetActor();
+        // 获取对应等级的法术ID
         uint32 spellId = triggerSpell[GetSpellInfo()->GetRank() - 1];
         caster->CastSpell(caster, spellId, aurEff);
     }
 
+    /**
+     * @brief 注册效果处理函数
+     */
     void Register() override
     {
         DoCheckProc += AuraCheckProcFn(spell_mage_arcane_potency::CheckProc);
@@ -1174,6 +1311,13 @@ class spell_mage_summon_water_elemental : public SpellScript
     }
 };
 
+/**
+ * @brief 注册法师法术脚本
+ *
+ * 调用时机：服务器启动时由脚本加载器调用
+ *
+ * 功能：注册所有法师法术脚本到脚本系统
+ */
 void AddSC_mage_spell_scripts()
 {
     RegisterSpellScript(spell_mage_arcane_potency);

@@ -15,6 +15,61 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file World.h
+ * @ingroup world
+ *
+ * @brief 世界管理器头文件
+ *
+ * 本文件定义了 World 类及其相关的枚举和结构体，这是 TrinityCore 服务器的核心管理器。
+ *
+ * @模块职责：
+ * 1. 管理所有玩家会话（WorldSession）
+ * 2. 处理世界更新循环（Update 循环）
+ * 3. 管理服务器配置和倍率设置
+ * 4. 处理服务器关闭和重启逻辑
+ * 5. 管理定时任务（拍卖行更新、尸体清理、游戏事件等）
+ * 6. 处理全局消息广播
+ * 7. 初始化游戏世界（加载 DBC、数据库数据等）
+ *
+ * @主要组件：
+ * - ServerMessageType: 服务器消息类型枚举
+ * - ShutdownMask: 关闭服务器选项标志
+ * - ShutdownExitCode: 服务器退出代码
+ * - WorldTimers: 世界定时任务类型
+ * - WorldBoolConfigs: 布尔配置项枚举
+ * - WorldFloatConfigs: 浮点数配置项枚举
+ * - WorldIntConfigs: 整数配置项枚举
+ * - Rates: 服务器倍率枚举
+ * - CliCommandHolder: CLI 命令持有者
+ * - CharacterInfo: 角色信息结构体
+ * - World: 世界管理器主类
+ *
+ * @设计模式：
+ * - 单例模式：通过 instance() 方法获取唯一实例
+ * - 观察者模式：通过脚本系统通知事件
+ *
+ * @线程安全：
+ * - 大部分方法只在主世界更新线程中调用
+ * - 部分方法使用互斥锁保护（如 GUID 警告系统）
+ * - 异步队列用于跨线程通信（如会话添加、CLI 命令）
+ *
+ * @使用示例：
+ * @code
+ * // 获取世界管理器实例
+ * World* world = sWorld;
+ *
+ * // 发送全局消息
+ * world->SendGlobalMessage(&packet);
+ *
+ * // 获取配置值
+ * uint32 maxLevel = world->getIntConfig(CONFIG_MAX_PLAYER_LEVEL);
+ * @endcode
+ *
+ * @see World.cpp 实现文件
+ * @see WorldSession 会话类
+ */
+
 /// \addtogroup world The World
 /// @{
 /// \file
@@ -41,50 +96,77 @@ class WorldSession;
 class WorldSocket;
 struct Realm;
 
-// ServerMessages.dbc
+// ============================================================================
+// 服务器消息类型枚举
+// ============================================================================
+// 职责：定义服务器发送给客户端的系统消息类型
+// 来源：ServerMessages.dbc
+// ============================================================================
 enum ServerMessageType
 {
-    SERVER_MSG_SHUTDOWN_TIME      = 1,
-    SERVER_MSG_RESTART_TIME       = 2,
-    SERVER_MSG_STRING             = 3,
-    SERVER_MSG_SHUTDOWN_CANCELLED = 4,
-    SERVER_MSG_RESTART_CANCELLED  = 5
+    SERVER_MSG_SHUTDOWN_TIME      = 1,  // 服务器关闭倒计时
+    SERVER_MSG_RESTART_TIME       = 2,  // 服务器重启倒计时
+    SERVER_MSG_STRING             = 3,  // 自定义字符串消息
+    SERVER_MSG_SHUTDOWN_CANCELLED = 4,  // 关闭已取消
+    SERVER_MSG_RESTART_CANCELLED  = 5   // 重启已取消
 };
 
+// ============================================================================
+// 关闭服务器掩码枚举
+// ============================================================================
+// 职责：定义服务器关闭时的选项标志
+// ============================================================================
 enum ShutdownMask : uint32
 {
-    SHUTDOWN_MASK_RESTART = 1,
-    SHUTDOWN_MASK_IDLE    = 2,
-    SHUTDOWN_MASK_FORCE   = 4
+    SHUTDOWN_MASK_RESTART = 1,  // 重启服务器
+    SHUTDOWN_MASK_IDLE    = 2,  // 空闲时关闭
+    SHUTDOWN_MASK_FORCE   = 4   // 强制关闭
 };
 
+// ============================================================================
+// 关闭服务器退出码枚举
+// ============================================================================
+// 职责：定义服务器关闭时的退出代码
+// ============================================================================
 enum ShutdownExitCode : uint32
 {
-    SHUTDOWN_EXIT_CODE = 0,
-    ERROR_EXIT_CODE    = 1,
-    RESTART_EXIT_CODE  = 2
+    SHUTDOWN_EXIT_CODE = 0,  // 正常关闭
+    ERROR_EXIT_CODE    = 1,  // 错误退出
+    RESTART_EXIT_CODE  = 2   // 重启退出
 };
 
+// ============================================================================
+// 世界定时器枚举
+// ============================================================================
+// 职责：定义世界级别的定时任务类型
+// 用途：管理拍卖行、运行时间、尸体清理、游戏事件等定期任务
+// ============================================================================
 /// Timers for different object refresh rates
 enum WorldTimers
 {
-    WUPDATE_AUCTIONS,
-    WUPDATE_AUCTIONS_PENDING,
-    WUPDATE_UPTIME,
-    WUPDATE_CORPSES,
-    WUPDATE_EVENTS,
-    WUPDATE_CLEANDB,
-    WUPDATE_AUTOBROADCAST,
-    WUPDATE_MAILBOXQUEUE,
-    WUPDATE_DELETECHARS,
-    WUPDATE_AHBOT,
-    WUPDATE_PINGDB,
-    WUPDATE_CHECK_FILECHANGES,
-    WUPDATE_WHO_LIST,
-    WUPDATE_CHANNEL_SAVE,
-    WUPDATE_COUNT
+    WUPDATE_AUCTIONS,            // 拍卖行更新
+    WUPDATE_AUCTIONS_PENDING,    // 待处理拍卖更新
+    WUPDATE_UPTIME,              // 运行时间更新
+    WUPDATE_CORPSES,             // 尸体清理更新
+    WUPDATE_EVENTS,              // 游戏事件更新
+    WUPDATE_CLEANDB,             // 数据库清理更新
+    WUPDATE_AUTOBROADCAST,       // 自动广播更新
+    WUPDATE_MAILBOXQUEUE,        // 邮箱队列更新
+    WUPDATE_DELETECHARS,         // 删除角色更新
+    WUPDATE_AHBOT,               // 拍卖行机器人更新
+    WUPDATE_PINGDB,              // 数据库心跳更新
+    WUPDATE_CHECK_FILECHANGES,   // 文件变更检查更新
+    WUPDATE_WHO_LIST,            // 在线玩家列表更新
+    WUPDATE_CHANNEL_SAVE,        // 频道保存更新
+    WUPDATE_COUNT                // 定时器总数
 };
 
+// ============================================================================
+// 世界布尔配置枚举
+// ============================================================================
+// 职责：定义世界服务器的布尔类型配置项
+// 用途：控制服务器各项功能的开关状态
+// ============================================================================
 /// Configuration elements
 enum WorldBoolConfigs : uint32
 {
@@ -181,6 +263,12 @@ enum WorldBoolConfigs : uint32
     BOOL_CONFIG_VALUE_COUNT
 };
 
+// ============================================================================
+// 世界浮点数配置枚举
+// ============================================================================
+// 职责：定义世界服务器的浮点数类型配置项
+// 用途：存储距离、范围、倍率等需要精度的数值配置
+// ============================================================================
 enum WorldFloatConfigs : uint32
 {
     CONFIG_GROUP_XP_DISTANCE = 0,
@@ -206,6 +294,12 @@ enum WorldFloatConfigs : uint32
     FLOAT_CONFIG_VALUE_COUNT
 };
 
+// ============================================================================
+// 世界整数配置枚举
+// ============================================================================
+// 职责：定义世界服务器的整数类型配置项
+// 用途：存储端口、等级、时间间隔、数量等配置
+// ============================================================================
 enum WorldIntConfigs : uint32
 {
     CONFIG_COMPRESSION = 0,
@@ -402,6 +496,12 @@ enum WorldIntConfigs : uint32
     INT_CONFIG_VALUE_COUNT
 };
 
+// ============================================================================
+// 服务器倍率枚举
+// ============================================================================
+// 职责：定义服务器各种倍率配置项
+// 用途：控制经验、金币、物品掉落、声望等倍率
+// ============================================================================
 /// Server rates
 enum Rates
 {
@@ -473,6 +573,12 @@ enum Rates
     MAX_RATES
 };
 
+// ============================================================================
+// 计费计划标志枚举
+// ============================================================================
+// 职责：定义用于 SMSG_AUTH_RESPONSE 数据包的计费标志
+// 用途：标识玩家的会话类型（免费试用、订阅等）
+// ============================================================================
 /// Can be used in SMSG_AUTH_RESPONSE packet
 enum BillingPlanFlags
 {
@@ -487,6 +593,12 @@ enum BillingPlanFlags
     SESSION_ENABLE_CAIS     = 0x80
 };
 
+// ============================================================================
+// 领域区域枚举
+// ============================================================================
+// 职责：定义服务器的区域设置类型
+// 用途：根据区域设置字符命名规则和语言支持
+// ============================================================================
 enum RealmZone
 {
     REALM_ZONE_UNKNOWN       = 0,                           // any language
@@ -529,16 +641,22 @@ enum RealmZone
     REALM_ZONE_CN5_8         = 37                           // basic-Latin at create, any at login
 };
 
+// ============================================================================
+// CLI命令持有者结构体
+// ============================================================================
+// 职责：存储用于延迟执行的CLI命令
+// 用途：在多线程环境中安全地传递控制台命令
+// ============================================================================
 /// Storage class for commands issued for delayed execution
 struct TC_GAME_API CliCommandHolder
 {
-    using Print = void(*)(void*, std::string_view);
-    using CommandFinished = void(*)(void*, bool success);
+    using Print = void(*)(void*, std::string_view);             // 打印函数类型
+    using CommandFinished = void(*)(void*, bool success);       // 命令完成回调类型
 
-    void* m_callbackArg;
-    char* m_command;
-    Print m_print;
-    CommandFinished m_commandFinished;
+    void* m_callbackArg;            // 回调参数
+    char* m_command;                // 命令字符串
+    Print m_print;                  // 打印回调函数
+    CommandFinished m_commandFinished;  // 命令完成回调
 
     CliCommandHolder(void* callbackArg, char const* command, Print zprint, CommandFinished commandFinished);
     ~CliCommandHolder();
@@ -548,45 +666,81 @@ private:
     CliCommandHolder& operator=(CliCommandHolder const& right) = delete;
 };
 
+// ============================================================================
+// 会话映射类型定义
+// ============================================================================
 typedef std::unordered_map<uint32, WorldSession*> SessionMap;
 
+// ============================================================================
+// 角色信息结构体
+// ============================================================================
+// 职责：存储角色的基本信息
+// 用途：用于快速查询角色信息而无需加载完整角色数据
+// ============================================================================
 struct CharacterInfo
 {
-    std::string Name;
-    uint32 AccountId;
-    uint8 Class;
-    uint8 Race;
-    uint8 Sex;
-    uint8 Level;
-    ObjectGuid::LowType GuildId;
-    uint32 ArenaTeamId[3];
+    std::string Name;                   // 角色名称
+    uint32 AccountId;                   // 账号ID
+    uint8 Class;                        // 职业
+    uint8 Race;                         // 种族
+    uint8 Sex;                          // 性别
+    uint8 Level;                        // 等级
+    ObjectGuid::LowType GuildId;        // 公会ID
+    uint32 ArenaTeamId[3];              // 竞技场队伍ID（2v2, 3v3, 5v5）
 };
 
+// ============================================================================
+// 世界管理器类
+// ============================================================================
+// 职责：管理游戏世界的全局状态和核心功能
+// 功能：
+//   - 管理所有玩家会话
+//   - 处理世界更新循环
+//   - 管理服务器配置和倍率
+//   - 处理服务器关闭和重启
+//   - 管理定时任务（拍卖行、尸体清理等）
+//   - 处理全局消息广播
+// ============================================================================
 /// The World
 class TC_GAME_API World
 {
     public:
+        // ====================================================================
+        // 单例模式
+        // ====================================================================
+        /// 获取世界实例（单例模式）
         static World* instance();
 
-        static std::atomic<uint32> m_worldLoopCounter;
+        static std::atomic<uint32> m_worldLoopCounter;  // 世界循环计数器
 
+        // ====================================================================
+        // 会话管理
+        // ====================================================================
+        /// 根据ID查找会话
         WorldSession* FindSession(uint32 id) const;
+        /// 添加会话
         void AddSession(WorldSession* s);
+        /// 发送自动广播
         void SendAutoBroadcast();
+        /// 移除会话
         bool RemoveSession(uint32 id);
-        /// Get the number of current active sessions
+        /// 获取当前活跃会话数量并更新计数器
         void UpdateMaxSessionCounters();
+        /// 获取所有会话映射
         SessionMap const& GetAllSessions() const { return m_sessions; }
+        /// 获取活跃和排队中的会话总数
         uint32 GetActiveAndQueuedSessionCount() const { return m_sessions.size(); }
+        /// 获取活跃会话数量
         uint32 GetActiveSessionCount() const { return m_sessions.size() - m_QueuedPlayer.size(); }
+        /// 获取排队中的会话数量
         uint32 GetQueuedSessionCount() const { return m_QueuedPlayer.size(); }
-        /// Get the maximum number of parallel sessions on the server since last reboot
+        /// 获取自上次重启以来服务器最大并行会话数
         uint32 GetMaxQueuedSessionCount() const { return m_maxQueuedSessionCount; }
         uint32 GetMaxActiveSessionCount() const { return m_maxActiveSessionCount; }
-        /// Get number of players
+        /// 获取玩家数量
         inline uint32 GetPlayerCount() const { return m_PlayerCount; }
         inline uint32 GetMaxPlayerCount() const { return m_MaxPlayerCount; }
-        /// Increase/Decrease number of players
+        /// 增加/减少玩家数量
         inline void IncreasePlayerCount()
         {
             m_PlayerCount++;
@@ -594,301 +748,488 @@ class TC_GAME_API World
         }
         inline void DecreasePlayerCount() { m_PlayerCount--; }
 
+        /// 在指定区域查找玩家
         Player* FindPlayerInZone(uint32 zone);
 
-        /// Deny clients?
+        // ====================================================================
+        // 服务器状态控制
+        // ====================================================================
+        /// 服务器是否已关闭（拒绝客户端连接）
         bool IsClosed() const;
-
-        /// Close world
+        /// 设置服务器关闭状态
         void SetClosed(bool val);
 
-        /// Security level limitations
+        // ====================================================================
+        // 安全等级限制
+        // ====================================================================
+        /// 获取玩家安全等级限制
         AccountTypes GetPlayerSecurityLimit() const { return m_allowedSecurityLevel; }
+        /// 设置玩家安全等级限制
         void SetPlayerSecurityLimit(AccountTypes sec);
+        /// 从数据库加载允许的安全等级
         void LoadDBAllowedSecurityLevel();
 
-        /// Active session server limit
+        // ====================================================================
+        // 玩家数量限制
+        // ====================================================================
+        /// 设置玩家数量限制
         void SetPlayerAmountLimit(uint32 limit) { m_playerLimit = limit; }
         uint32 GetPlayerAmountLimit() const { return m_playerLimit; }
 
-        //player Queue
+        // ====================================================================
+        // 玩家队列管理
+        // ====================================================================
         typedef std::list<WorldSession*> Queue;
+        /// 添加玩家到队列
         void AddQueuedPlayer(WorldSession*);
+        /// 从队列移除玩家
         bool RemoveQueuedPlayer(WorldSession* session);
+        /// 获取玩家在队列中的位置
         int32 GetQueuePos(WorldSession*);
+        /// 检查是否最近断开连接
         bool HasRecentlyDisconnected(WorldSession*);
 
-        /// @todo Actions on m_allowMovement still to be implemented
-        /// Is movement allowed?
+        // ====================================================================
+        // 移动控制
+        // ====================================================================
+        /// 是否允许移动
         bool getAllowMovement() const { return m_allowMovement; }
-        /// Allow/Disallow object movements
+        /// 设置是否允许移动
         void SetAllowMovement(bool allow) { m_allowMovement = allow; }
 
-        /// Set the string for new characters (first login)
+        // ====================================================================
+        // 新角色设置
+        // ====================================================================
+        /// 设置新角色欢迎字符串（首次登录显示）
         void SetNewCharString(std::string const& str) { m_newCharString = str; }
-        /// Get the string for new characters (first login)
+        /// 获取新角色欢迎字符串
         std::string const& GetNewCharString() const { return m_newCharString; }
 
+        // ====================================================================
+        // 语言和本地化
+        // ====================================================================
+        /// 获取默认DBC语言
         LocaleConstant GetDefaultDbcLocale() const { return m_defaultDbcLocale; }
 
-        /// Get the path where data (dbc, maps) are stored on disk
+        /// 获取数据文件存储路径（dbc、maps等）
         std::string const& GetDataPath() const { return m_dataPath; }
 
-        /// Next daily quests and random bg reset time
+        // ====================================================================
+        // 任务重置时间
+        // ====================================================================
+        /// 获取下次日常任务重置时间
         time_t GetNextDailyQuestsResetTime() const { return m_NextDailyQuestReset; }
+        /// 获取下次周常任务重置时间
         time_t GetNextWeeklyQuestsResetTime() const { return m_NextWeeklyQuestReset; }
+        /// 获取下次随机战场重置时间
         time_t GetNextRandomBGResetTime() const { return m_NextRandomBGReset; }
 
-        /// Get the maximum skill level a player can reach
+        /// 获取玩家可达到的最大技能等级
         uint16 GetConfigMaxSkillValue() const
         {
             uint16 lvl = uint16(getIntConfig(CONFIG_MAX_PLAYER_LEVEL));
             return lvl > 60 ? 300 + ((lvl - 60) * 75) / 10 : lvl * 5;
         }
 
+        // ====================================================================
+        // 世界初始化
+        // ====================================================================
+        /// 设置初始世界设置
         void SetInitialWorldSettings();
+        /// 加载配置设置
         void LoadConfigSettings(bool reload = false);
 
+        // ====================================================================
+        // 全局消息发送
+        // ====================================================================
+        /// 发送世界文本消息（支持可变参数）
         void SendWorldText(uint32 string_id, ...);
+        /// 发送全局文本消息
         void SendGlobalText(char const* text, WorldSession* self);
+        /// 发送GM文本消息
         void SendGMText(uint32 string_id, ...);
+        /// 发送服务器消息
         void SendServerMessage(ServerMessageType messageID, std::string stringParam = "", Player* player = nullptr);
+        /// 发送全局数据包
         void SendGlobalMessage(WorldPacket const* packet, WorldSession* self = nullptr, uint32 team = 0);
+        /// 发送全局GM消息
         void SendGlobalGMMessage(WorldPacket const* packet, WorldSession* self = nullptr, uint32 team = 0);
 
-        /// Are we in the middle of a shutdown?
+        // ====================================================================
+        // 服务器关闭和重启
+        // ====================================================================
+        /// 是否正在关闭服务器
         bool IsShuttingDown() const { return m_ShutdownTimer > 0; }
+        /// 获取关闭倒计时剩余时间
         uint32 GetShutDownTimeLeft() const { return m_ShutdownTimer; }
+        /// 启动服务器关闭流程
         void ShutdownServ(uint32 time, uint32 options, uint8 exitcode, const std::string& reason = std::string());
+        /// 取消服务器关闭
         uint32 ShutdownCancel();
+        /// 发送关闭消息
         void ShutdownMsg(bool show = false, Player* player = nullptr, const std::string& reason = std::string());
+        /// 获取退出代码
         static uint8 GetExitCode() { return m_ExitCode; }
+        /// 立即停止服务器
         static void StopNow(uint8 exitcode) { m_stopEvent = true; m_ExitCode = exitcode; }
+        /// 服务器是否已停止
         static bool IsStopped() { return m_stopEvent; }
 
+        // ====================================================================
+        // 世界更新
+        // ====================================================================
+        /// 更新世界状态（主循环）
         void Update(uint32 diff);
 
+        /// 更新所有会话
         void UpdateSessions(uint32 diff);
-        /// Set a server rate (see #Rates)
+
+        // ====================================================================
+        // 倍率配置
+        // ====================================================================
+        /// 设置服务器倍率
         void setRate(Rates rate, float value) { rate_values[rate]=value; }
-        /// Get a server rate (see #Rates)
+        /// 获取服务器倍率
         float getRate(Rates rate) const { return rate_values[rate]; }
 
-        /// Set a server configuration element (see #WorldConfigs)
+        // ====================================================================
+        // 布尔配置
+        // ====================================================================
+        /// 设置布尔配置项
         void setBoolConfig(WorldBoolConfigs index, bool value)
         {
             if (index < BOOL_CONFIG_VALUE_COUNT)
                 m_bool_configs[index] = value;
         }
-
-        /// Get a server configuration element (see #WorldConfigs)
+        /// 获取布尔配置项
         bool getBoolConfig(WorldBoolConfigs index) const
         {
             return index < BOOL_CONFIG_VALUE_COUNT ? m_bool_configs[index] : 0;
         }
 
-        /// Set a server configuration element (see #WorldConfigs)
+        // ====================================================================
+        // 浮点数配置
+        // ====================================================================
+        /// 设置浮点数配置项
         void setFloatConfig(WorldFloatConfigs index, float value)
         {
             if (index < FLOAT_CONFIG_VALUE_COUNT)
                 m_float_configs[index] = value;
         }
-
-        /// Get a server configuration element (see #WorldConfigs)
+        /// 获取浮点数配置项
         float getFloatConfig(WorldFloatConfigs index) const
         {
             return index < FLOAT_CONFIG_VALUE_COUNT ? m_float_configs[index] : 0;
         }
 
-        /// Set a server configuration element (see #WorldConfigs)
+        // ====================================================================
+        // 整数配置
+        // ====================================================================
+        /// 设置整数配置项
         void setIntConfig(WorldIntConfigs index, uint32 value)
         {
             if (index < INT_CONFIG_VALUE_COUNT)
                 m_int_configs[index] = value;
         }
-
-        /// Get a server configuration element (see #WorldConfigs)
+        /// 获取整数配置项
         uint32 getIntConfig(WorldIntConfigs index) const
         {
             return index < INT_CONFIG_VALUE_COUNT ? m_int_configs[index] : 0;
         }
 
+        // ====================================================================
+        // 世界状态
+        // ====================================================================
+        /// 设置世界状态值
         void setWorldState(uint32 index, uint64 value);
+        /// 获取世界状态值
         uint64 getWorldState(uint32 index) const;
+        /// 加载世界状态
         void LoadWorldStates();
 
-        /// Are we on a "Player versus Player" server?
+        // ====================================================================
+        // PvP服务器判断
+        // ====================================================================
+        /// 是否为PvP服务器
         bool IsPvPRealm() const;
+        /// 是否为自由PvP服务器
         bool IsFFAPvPRealm() const;
 
+        // ====================================================================
+        // 踢出和封禁管理
+        // ====================================================================
+        /// 踢出所有玩家
         void KickAll();
+        /// 踢出指定安全等级以下的玩家
         void KickAllLess(AccountTypes sec);
+        /// 封禁账号
         BanReturn BanAccount(BanMode mode, std::string const& nameOrIP, std::string const& duration, std::string const& reason, std::string const& author);
         BanReturn BanAccount(BanMode mode, std::string const& nameOrIP, uint32 duration_secs, std::string const& reason, std::string const& author);
+        /// 解除账号封禁
         bool RemoveBanAccount(BanMode mode, std::string const& nameOrIP);
+        /// 封禁角色
         BanReturn BanCharacter(std::string const& name, std::string const& duration, std::string const& reason, std::string const& author);
+        /// 解除角色封禁
         bool RemoveBanCharacter(std::string const& name);
 
-        // for max speed access
+        // ====================================================================
+        // 可见性距离配置（用于最大速度访问）
+        // ====================================================================
+        /// 获取大陆上的最大可见距离
         static float GetMaxVisibleDistanceOnContinents()    { return m_MaxVisibleDistanceOnContinents; }
+        /// 获取副本中的最大可见距离
         static float GetMaxVisibleDistanceInInstances()     { return m_MaxVisibleDistanceInInstances;  }
+        /// 获取战场中的最大可见距离
         static float GetMaxVisibleDistanceInBG()            { return m_MaxVisibleDistanceInBG;         }
+        /// 获取竞技场中的最大可见距离
         static float GetMaxVisibleDistanceInArenas()        { return m_MaxVisibleDistanceInArenas;     }
 
+        // ====================================================================
+        // 可见性通知周期配置
+        // ====================================================================
+        /// 获取大陆上的可见性通知周期
         static int32 GetVisibilityNotifyPeriodOnContinents(){ return m_visibility_notify_periodOnContinents; }
+        /// 获取副本中的可见性通知周期
         static int32 GetVisibilityNotifyPeriodInInstances() { return m_visibility_notify_periodInInstances;  }
+        /// 获取战场中的可见性通知周期
         static int32 GetVisibilityNotifyPeriodInBG()        { return m_visibility_notify_periodInBG;         }
+        /// 获取竞技场中的可见性通知周期
         static int32 GetVisibilityNotifyPeriodInArenas()    { return m_visibility_notify_periodInArenas;     }
 
+        // ====================================================================
+        // CLI命令处理
+        // ====================================================================
+        /// 处理CLI命令
         void ProcessCliCommands();
+        /// 将CLI命令加入队列
         void QueueCliCommand(CliCommandHolder* commandHolder) { cliCmdQueue.add(commandHolder); }
 
+        /// 强制游戏事件更新
         void ForceGameEventUpdate();
 
+        /// 更新领域角色计数
         void UpdateRealmCharCount(uint32 accid);
 
+        /// 获取可用的DBC语言
         LocaleConstant GetAvailableDbcLocale(LocaleConstant locale) const { if (m_availableDbcLocaleMask & (1 << locale)) return locale; else return m_defaultDbcLocale; }
 
-        // used World DB version
+        // ====================================================================
+        // 数据库版本管理
+        // ====================================================================
+        /// 加载数据库版本
         void LoadDBVersion();
+        /// 获取数据库版本
         char const* GetDBVersion() const { return m_DBVersion.c_str(); }
 
+        /// 加载自动广播消息
         void LoadAutobroadcasts();
 
+        /// 更新区域依赖光环
         void UpdateAreaDependentAuras();
 
+        // ====================================================================
+        // 清理标志
+        // ====================================================================
+        /// 获取清理标志
         uint32 GetCleaningFlags() const { return m_CleaningFlags; }
+        /// 设置清理标志
         void SetCleaningFlags(uint32 flags) { m_CleaningFlags = flags; }
+        /// 重置事件季节性任务
         void ResetEventSeasonalQuests(uint16 event_id);
 
+        /// 重新加载RBAC权限
         void ReloadRBAC();
 
+        // ====================================================================
+        // GUID警告和清理
+        // ====================================================================
+        /// 移除旧尸体
         void RemoveOldCorpses();
+        /// 触发GUID警告
         void TriggerGuidWarning();
+        /// 触发GUID警报
         void TriggerGuidAlert();
+        /// 是否有GUID警告
         bool IsGuidWarning() { return _guidWarn; }
+        /// 是否有GUID警报
         bool IsGuidAlert() { return _guidAlert; }
 
     protected:
+        // ====================================================================
+        // 游戏时间更新
+        // ====================================================================
+        /// 更新游戏时间
         void _UpdateGameTime();
 
-        // callback for UpdateRealmCharacters
+        /// 更新领域角色计数回调函数
         void _UpdateRealmCharCount(PreparedQueryResult resultCharCount);
 
+        // ====================================================================
+        // 任务重置时间管理
+        // ====================================================================
+        /// 初始化任务重置时间
         void InitQuestResetTimes();
+        /// 检查任务重置时间
         void CheckQuestResetTimes();
+        /// 重置日常任务
         void ResetDailyQuests();
+        /// 重置周常任务
         void ResetWeeklyQuests();
+        /// 重置月常任务
         void ResetMonthlyQuests();
 
+        // ====================================================================
+        // 重置时间初始化
+        // ====================================================================
+        /// 初始化随机战场重置时间
         void InitRandomBGResetTime();
+        /// 初始化日历旧事件删除时间
         void InitCalendarOldEventsDeletionTime();
+        /// 初始化公会重置时间
         void InitGuildResetTime();
+        /// 重置随机战场
         void ResetRandomBG();
+        /// 删除旧日历事件
         void CalendarDeleteOldEvents();
+        /// 重置公会上限
         void ResetGuildCap();
     private:
+        // ====================================================================
+        // 构造和析构
+        // ====================================================================
         World();
         ~World();
 
-        static std::atomic<bool> m_stopEvent;
-        static uint8 m_ExitCode;
-        uint32 m_ShutdownTimer;
-        uint32 m_ShutdownMask;
+        // ====================================================================
+        // 服务器停止相关静态变量
+        // ====================================================================
+        static std::atomic<bool> m_stopEvent;      // 停止事件标志
+        static uint8 m_ExitCode;                   // 退出代码
+        uint32 m_ShutdownTimer;                    // 关闭倒计时（秒）
+        uint32 m_ShutdownMask;                     // 关闭掩码
 
-        uint32 m_CleaningFlags;
+        uint32 m_CleaningFlags;                    // 清理标志
 
-        bool m_isClosed;
+        bool m_isClosed;                           // 服务器是否关闭
 
-        IntervalTimer m_timers[WUPDATE_COUNT];
-        time_t mail_timer;
-        time_t mail_timer_expires;
+        // ====================================================================
+        // 定时器和时间管理
+        // ====================================================================
+        IntervalTimer m_timers[WUPDATE_COUNT];     // 定时器数组
+        time_t mail_timer;                         // 邮件定时器
+        time_t mail_timer_expires;                 // 邮件定时器过期时间
 
-        SessionMap m_sessions;
+        // ====================================================================
+        // 会话管理
+        // ====================================================================
+        SessionMap m_sessions;                     // 会话映射
         typedef std::unordered_map<uint32, time_t> DisconnectMap;
-        DisconnectMap m_disconnects;
-        uint32 m_maxActiveSessionCount;
-        uint32 m_maxQueuedSessionCount;
-        uint32 m_PlayerCount;
-        uint32 m_MaxPlayerCount;
+        DisconnectMap m_disconnects;               // 断开连接映射
+        uint32 m_maxActiveSessionCount;            // 最大活跃会话数
+        uint32 m_maxQueuedSessionCount;            // 最大排队会话数
+        uint32 m_PlayerCount;                      // 当前玩家数量
+        uint32 m_MaxPlayerCount;                   // 最大玩家数量
 
-        std::string m_newCharString;
+        std::string m_newCharString;               // 新角色欢迎字符串
 
-        float rate_values[MAX_RATES];
-        uint32 m_int_configs[INT_CONFIG_VALUE_COUNT];
-        bool m_bool_configs[BOOL_CONFIG_VALUE_COUNT];
-        float m_float_configs[FLOAT_CONFIG_VALUE_COUNT];
+        // ====================================================================
+        // 配置和倍率
+        // ====================================================================
+        float rate_values[MAX_RATES];              // 倍率值数组
+        uint32 m_int_configs[INT_CONFIG_VALUE_COUNT];      // 整数配置数组
+        bool m_bool_configs[BOOL_CONFIG_VALUE_COUNT];      // 布尔配置数组
+        float m_float_configs[FLOAT_CONFIG_VALUE_COUNT];   // 浮点数配置数组
         typedef std::map<uint32, uint64> WorldStatesMap;
-        WorldStatesMap m_worldstates;
-        uint32 m_playerLimit;
-        AccountTypes m_allowedSecurityLevel;
-        LocaleConstant m_defaultDbcLocale;                     // from config for one from loaded DBC locales
-        uint32 m_availableDbcLocaleMask;                       // by loaded DBC
-        void DetectDBCLang();
-        bool m_allowMovement;
-        std::string m_dataPath;
+        WorldStatesMap m_worldstates;              // 世界状态映射
+        uint32 m_playerLimit;                      // 玩家数量限制
+        AccountTypes m_allowedSecurityLevel;       // 允许的安全等级
+        LocaleConstant m_defaultDbcLocale;         // 默认DBC语言（从配置加载）
+        uint32 m_availableDbcLocaleMask;           // 可用的DBC语言掩码（根据已加载的DBC）
+        void DetectDBCLang();                      // 检测DBC语言
+        bool m_allowMovement;                      // 是否允许移动
+        std::string m_dataPath;                    // 数据文件路径（dbc、maps等）
 
-        // for max speed access
-        static float m_MaxVisibleDistanceOnContinents;
-        static float m_MaxVisibleDistanceInInstances;
-        static float m_MaxVisibleDistanceInBG;
-        static float m_MaxVisibleDistanceInArenas;
+        // ====================================================================
+        // 可见性距离配置（用于最大速度访问）
+        // ====================================================================
+        static float m_MaxVisibleDistanceOnContinents;    // 大陆上的最大可见距离
+        static float m_MaxVisibleDistanceInInstances;     // 副本中的最大可见距离
+        static float m_MaxVisibleDistanceInBG;            // 战场中的最大可见距离
+        static float m_MaxVisibleDistanceInArenas;        // 竞技场中的最大可见距离
 
-        static int32 m_visibility_notify_periodOnContinents;
-        static int32 m_visibility_notify_periodInInstances;
-        static int32 m_visibility_notify_periodInBG;
-        static int32 m_visibility_notify_periodInArenas;
+        static int32 m_visibility_notify_periodOnContinents;  // 大陆上的可见性通知周期
+        static int32 m_visibility_notify_periodInInstances;   // 副本中的可见性通知周期
+        static int32 m_visibility_notify_periodInBG;          // 战场中的可见性通知周期
+        static int32 m_visibility_notify_periodInArenas;      // 竞技场中的可见性通知周期
 
-        // CLI command holder to be thread safe
-        LockedQueue<CliCommandHolder*> cliCmdQueue;
+        // ====================================================================
+        // CLI命令队列（线程安全）
+        // ====================================================================
+        LockedQueue<CliCommandHolder*> cliCmdQueue;       // CLI命令队列
 
-        // next daily quests and random bg reset time
-        time_t m_NextDailyQuestReset;
-        time_t m_NextWeeklyQuestReset;
-        time_t m_NextMonthlyQuestReset;
-        time_t m_NextRandomBGReset;
-        time_t m_NextCalendarOldEventsDeletionTime;
-        time_t m_NextGuildReset;
+        // ====================================================================
+        // 重置时间
+        // ====================================================================
+        time_t m_NextDailyQuestReset;                     // 下次日常任务重置时间
+        time_t m_NextWeeklyQuestReset;                    // 下次周常任务重置时间
+        time_t m_NextMonthlyQuestReset;                   // 下次月常任务重置时间
+        time_t m_NextRandomBGReset;                       // 下次随机战场重置时间
+        time_t m_NextCalendarOldEventsDeletionTime;       // 下次日历旧事件删除时间
+        time_t m_NextGuildReset;                          // 下次公会重置时间
 
-        //Player Queue
-        Queue m_QueuedPlayer;
+        // ====================================================================
+        // 玩家队列
+        // ====================================================================
+        Queue m_QueuedPlayer;                             // 排队玩家队列
 
-        // sessions that are added async
-        void AddSession_(WorldSession* s);
-        LockedQueue<WorldSession*> addSessQueue;
+        // ====================================================================
+        // 异步会话添加
+        // ====================================================================
+        void AddSession_(WorldSession* s);                // 添加会话（内部实现）
+        LockedQueue<WorldSession*> addSessQueue;          // 异步添加会话队列
 
-        // used versions
-        std::string m_DBVersion;
+        // ====================================================================
+        // 数据库版本
+        // ====================================================================
+        std::string m_DBVersion;                          // 数据库版本字符串
 
+        // ====================================================================
+        // 自动广播
+        // ====================================================================
         typedef std::map<uint8, std::string> AutobroadcastsMap;
-        AutobroadcastsMap m_Autobroadcasts;
-
+        AutobroadcastsMap m_Autobroadcasts;               // 自动广播消息映射
         typedef std::map<uint8, uint8> AutobroadcastsWeightMap;
-        AutobroadcastsWeightMap m_AutobroadcastsWeights;
+        AutobroadcastsWeightMap m_AutobroadcastsWeights;  // 自动广播权重映射
 
-        void ProcessQueryCallbacks();
+        void ProcessQueryCallbacks();                     // 处理查询回调
 
-        void SendGuidWarning();
-        void DoGuidWarningRestart();
-        void DoGuidAlertRestart();
-        QueryCallbackProcessor _queryProcessor;
+        // ====================================================================
+        // GUID警告和警报
+        // ====================================================================
+        void SendGuidWarning();                           // 发送GUID警告
+        void DoGuidWarningRestart();                      // 执行GUID警告重启
+        void DoGuidAlertRestart();                        // 执行GUID警报重启
+        QueryCallbackProcessor _queryProcessor;           // 查询回调处理器
 
-        std::string _guidWarningMsg;
-        std::string _alertRestartReason;
+        std::string _guidWarningMsg;                      // GUID警告消息
+        std::string _alertRestartReason;                  // 警报重启原因
 
-        std::mutex _guidAlertLock;
+        std::mutex _guidAlertLock;                        // GUID警报锁
 
-        bool _guidWarn;
-        bool _guidAlert;
-        uint32 _warnDiff;
-        time_t _warnShutdownTime;
+        bool _guidWarn;                                   // GUID警告标志
+        bool _guidAlert;                                  // GUID警报标志
+        uint32 _warnDiff;                                 // 警告间隔
+        time_t _warnShutdownTime;                         // 警告关闭时间
 
     friend class debug_commandscript;
 };
 
-TC_GAME_API extern Realm realm;
+// ============================================================================
+// 全局变量和宏定义
+// ============================================================================
+TC_GAME_API extern Realm realm;           // 领域全局变量
 
-#define sWorld World::instance()
+#define sWorld World::instance()          // 世界管理器单例访问宏
 
 #endif
 /// @}

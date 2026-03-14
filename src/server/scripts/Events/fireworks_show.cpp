@@ -15,6 +15,20 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file    fireworks_show.cpp
+ * @brief   烟花表演事件脚本模块
+ *
+ * 本模块实现了游戏内烟花表演系统，主要功能包括：
+ * - 在特定节日和新年期间自动放烟花
+ * - 支持多种颜色和类型的烟花（红、蓝、绿、白、黄、紫）
+ * - 在各大主城和特定区域播放烟花表演
+ * - 配合欢呼声音效增强节日氛围
+ *
+ * 烟花表演在每小时整点自动开始，持续10分钟。
+ * 新年期间会有额外的盛大烟花表演。
+ */
+
 #include "ScriptMgr.h"
 #include "Containers.h"
 #include "CreatureAIImpl.h"
@@ -25,60 +39,80 @@
 #include "GameTime.h"
 #include "Util.h"
 
+/**
+ * @brief 烟花表演类型游戏对象ID枚举
+ *
+ * 定义了各种类型烟花的游戏对象标识符
+ */
 enum FireworksShowTypeObjects
 {
-    FIREWORK_SHOW_TYPE_1_RED        = 180703,
-    FIREWORK_SHOW_TYPE_2_RED        = 180704,
-    FIREWORK_SHOW_TYPE_1_RED_BIG    = 180707,
-    FIREWORK_SHOW_TYPE_2_RED_BIG    = 180708,
-    FIREWORK_SHOW_TYPE_1_BLUE       = 180720,
-    FIREWORK_SHOW_TYPE_2_BLUE       = 180721,
-    FIREWORK_SHOW_TYPE_1_BLUE_BIG   = 180722,
-    FIREWORK_SHOW_TYPE_2_BLUE_BIG   = 180723,
-    FIREWORK_SHOW_TYPE_1_GREEN      = 180724,
-    FIREWORK_SHOW_TYPE_2_GREEN_BIG  = 180725,
-    FIREWORK_SHOW_TYPE_1_GREEN_BIG  = 180726,
-    FIREWORK_SHOW_TYPE_2_GREEN      = 180727,
-    FIREWORK_SHOW_TYPE_1_WHITE      = 180728,
-    FIREWORK_SHOW_TYPE_1_WHITE_BIG  = 180729,
-    FIREWORK_SHOW_TYPE_2_WHITE      = 180730,
-    FIREWORK_SHOW_TYPE_2_WHITE_BIG  = 180731,
-    FIREWORK_SHOW_TYPE_1_YELLOW     = 180736,
-    FIREWORK_SHOW_TYPE_1_YELLOW_BIG = 180737,
-    FIREWORK_SHOW_TYPE_2_YELLOW     = 180738,
-    FIREWORK_SHOW_TYPE_2_YELLOW_BIG = 180739,
-    FIREWORK_SHOW_TYPE_2_PURPLE     = 180740,
-    FIREWORK_SHOW_TYPE_1_PURPLE_BIG = 180741,
-    FIREWORK_SHOW_TYPE_2_PURPLE_BIG = 180733
+    FIREWORK_SHOW_TYPE_1_RED        = 180703, ///< 红色烟花类型1
+    FIREWORK_SHOW_TYPE_2_RED        = 180704, ///< 红色烟花类型2
+    FIREWORK_SHOW_TYPE_1_RED_BIG    = 180707, ///< 大型红色烟花类型1
+    FIREWORK_SHOW_TYPE_2_RED_BIG    = 180708, ///< 大型红色烟花类型2
+    FIREWORK_SHOW_TYPE_1_BLUE       = 180720, ///< 蓝色烟花类型1
+    FIREWORK_SHOW_TYPE_2_BLUE       = 180721, ///< 蓝色烟花类型2
+    FIREWORK_SHOW_TYPE_1_BLUE_BIG   = 180722, ///< 大型蓝色烟花类型1
+    FIREWORK_SHOW_TYPE_2_BLUE_BIG   = 180723, ///< 大型蓝色烟花类型2
+    FIREWORK_SHOW_TYPE_1_GREEN      = 180724, ///< 绿色烟花类型1
+    FIREWORK_SHOW_TYPE_2_GREEN_BIG  = 180725, ///< 大型绿色烟花类型2
+    FIREWORK_SHOW_TYPE_1_GREEN_BIG  = 180726, ///< 大型绿色烟花类型1
+    FIREWORK_SHOW_TYPE_2_GREEN      = 180727, ///< 绿色烟花类型2
+    FIREWORK_SHOW_TYPE_1_WHITE      = 180728, ///< 白色烟花类型1
+    FIREWORK_SHOW_TYPE_1_WHITE_BIG  = 180729, ///< 大型白色烟花类型1
+    FIREWORK_SHOW_TYPE_2_WHITE      = 180730, ///< 白色烟花类型2
+    FIREWORK_SHOW_TYPE_2_WHITE_BIG  = 180731, ///< 大型白色烟花类型2
+    FIREWORK_SHOW_TYPE_1_YELLOW     = 180736, ///< 黄色烟花类型1
+    FIREWORK_SHOW_TYPE_1_YELLOW_BIG = 180737, ///< 大型黄色烟花类型1
+    FIREWORK_SHOW_TYPE_2_YELLOW     = 180738, ///< 黄色烟花类型2
+    FIREWORK_SHOW_TYPE_2_YELLOW_BIG = 180739, ///< 大型黄色烟花类型2
+    FIREWORK_SHOW_TYPE_2_PURPLE     = 180740, ///< 紫色烟花类型2
+    FIREWORK_SHOW_TYPE_1_PURPLE_BIG = 180741, ///< 大型紫色烟花类型1
+    FIREWORK_SHOW_TYPE_2_PURPLE_BIG = 180733  ///< 大型紫色烟花类型2
 };
 
+/**
+ * @brief 烟花表演杂项数据枚举
+ *
+ * 定义了声音效果、事件ID和游戏事件标识符
+ */
 enum FireworksMisc
 {
-    SOUND_CHEER_1       = 8574,
-    SOUND_CHEER_2       = 8573,
-    SOUND_CHEER_3       = 8572,
-    SOUND_CHEER_4       = 8571,
-    EVENT_CHEER         = 1,
-    EVENT_FIRE          = 2,
-    GAME_EVENT_NEW_YEAR = 6
+    SOUND_CHEER_1       = 8574, ///< 欢呼声音效果1
+    SOUND_CHEER_2       = 8573, ///< 欢呼声音效果2
+    SOUND_CHEER_3       = 8572, ///< 欢呼声音效果3
+    SOUND_CHEER_4       = 8571, ///< 欢呼声音效果4
+    EVENT_CHEER         = 1,    ///< 欢呼事件ID
+    EVENT_FIRE          = 2,    ///< 发射烟花事件ID
+    GAME_EVENT_NEW_YEAR = 6     ///< 新年游戏事件ID
 };
 
+/**
+ * @brief 烟花表演区域枚举
+ *
+ * 定义了各主城和区域的区域ID，用于确定烟花表演的位置
+ */
 enum FireworksZones
 {
-    STRANGLETHORN_VALE = 33,   // Booty bay
-    EVERSONG_WOODS     = 3430, // Silvermoon
-    ORGRIMMAR          = 1637,
-    DUROTAR            = 14,   // Orgrimmar
-    UNDERCITY          = 1497,
-    TIRISFAL_GLADES    = 85,   // Undercity
-    TELDRASSIL         = 141,  // Darnassus
-    EXODAR             = 3557,
-    THUNDERBLUFF       = 1638,
-    DUN_MOROGH         = 1,    // Ironforge
-    IRONFORGE          = 1537,
-    STORMWIND          = 1519
+    STRANGLETHORN_VALE = 33,   ///< 荆棘谷（藏宝海湾）
+    EVERSONG_WOODS     = 3430, ///< 永歌森林（银月城）
+    ORGRIMMAR          = 1637, ///< 奥格瑞玛
+    DUROTAR            = 14,   ///< 杜隆塔尔（奥格瑞玛）
+    UNDERCITY          = 1497, ///< 幽暗城
+    TIRISFAL_GLADES    = 85,   ///< 提瑞斯法林地（幽暗城）
+    TELDRASSIL         = 141,  ///< 泰达希尔（达纳苏斯）
+    EXODAR             = 3557, ///< 埃索达
+    THUNDERBLUFF       = 1638, ///< 雷霆崖
+    DUN_MOROGH         = 1,    ///< 丹莫罗（铁炉堡）
+    IRONFORGE          = 1537, ///< 铁炉堡
+    STORMWIND          = 1519  ///< 暴风城
 };
 
+/**
+ * @brief 藏宝海湾烟花发射位置列表
+ *
+ * 定义了荆棘谷藏宝海湾区域所有烟花发射点的精确坐标
+ */
 std::vector<Position> const BootyBayPos =
 {
     { -14358.03f, 515.058f, 34.2664f,   3.68265f   },
@@ -229,6 +263,11 @@ std::vector<Position> const StormwindPos =
     { -8872.734375f, 573.338440f, 97.723770f,  1.831103f  }
 };
 
+/**
+ * @brief 暴风城烟花发射位置列表
+ *
+ * 定义了暴风城区域所有烟花发射点的精确坐标
+ */
 std::vector<Position> const OrgrimmarPos =
 {
     { 1609.075f,    -4383.707f,     90.23414f,  0.3665176f  },
@@ -326,6 +365,11 @@ std::vector<Position> const OrgrimmarPos =
     { 1493.26253f,  -4402.19919f,   59.147816f, 2.2917f     }
 };
 
+/**
+ * @brief 铁炉堡烟花发射位置列表
+ *
+ * 定义了铁炉堡区域所有烟花发射点的精确坐标
+ */
 std::vector<Position> const IronForgePos =
 {
     { -5196.038f, -858.4618f, 525.0447f, 6.073746f  },
@@ -387,6 +431,11 @@ std::vector<Position> const IronForgePos =
     { -5194.976f, -759.9896f, 517.6288f, 3.630291f  }
 };
 
+/**
+ * @brief 银月城烟花发射位置列表
+ *
+ * 定义了银月城区域所有烟花发射点的精确坐标
+ */
 std::vector<Position> const SilvermoonPos =
 {
     { 9466.583f, -7307.326f, 107.8366f, 0.1047193f  },
@@ -457,6 +506,11 @@ std::vector<Position> const SilvermoonPos =
     { 9411.504f, -7288.202f, 112.2664f, 2.844883f   }
 };
 
+/**
+ * @brief 埃索达烟花发射位置列表
+ *
+ * 定义了埃索达区域所有烟花发射点的精确坐标
+ */
 std::vector<Position> const ExodarPos =
 {
     { -3992.465f, -11843.86f, 186.4043f, 2.199115f  },
@@ -519,6 +573,11 @@ std::vector<Position> const ExodarPos =
     { -4036.461f, -11783.4f,  142.8152f, 4.729844f  }
 };
 
+/**
+ * @brief 雷霆崖烟花发射位置列表
+ *
+ * 定义了雷霆崖区域所有烟花发射点的精确坐标
+ */
 std::vector<Position> const ThunderBluffPos =
 {
     { -1234.804f, -19.72239f, 206.5436f, 0.1396245f },
@@ -581,6 +640,11 @@ std::vector<Position> const ThunderBluffPos =
     { -1240.617f, -41.39486f, 205.0362f, 5.846854f  }
 };
 
+/**
+ * @brief 幽暗城烟花发射位置列表
+ *
+ * 定义了幽暗城区域所有烟花发射点的精确坐标
+ */
 std::vector<Position> const UndercityPos =
 {
     { 1850.231f, 257.0156f, 124.1743f, 4.729844f  },
@@ -641,6 +705,11 @@ std::vector<Position> const UndercityPos =
     { 1850.288f, 267.309f,  125.0537f, 3.630291f  }
 };
 
+/**
+ * @brief 达纳苏斯烟花发射位置列表
+ *
+ * 定义了达纳苏斯区域所有烟花发射点的精确坐标
+ */
 std::vector<Position> const DarnassusPos =
 {
     { 8578.888f, 975.2604f, 42.48742f, 5.846854f  },
@@ -704,35 +773,63 @@ std::vector<Position> const DarnassusPos =
     { 8554.825f, 813.0746f, 78.88226f, 6.0912f    }
 };
 
+/**
+ * @brief 区域ID到烟花位置列表的映射表
+ *
+ * 将各区域ID映射到对应的烟花发射位置列表指针，
+ * 用于根据当前区域快速查找烟花发射点
+ */
 std::unordered_map<uint32, std::vector<Position> const*> const PositionsByZoneMap =
 {
-    { STRANGLETHORN_VALE, &BootyBayPos     },
-    { STORMWIND,          &StormwindPos    },
-    { ORGRIMMAR,          &OrgrimmarPos    },
-    { DUROTAR,            &OrgrimmarPos    },
-    { DUN_MOROGH,         &IronForgePos    },
-    { IRONFORGE,          &IronForgePos    },
-    { EVERSONG_WOODS,     &SilvermoonPos   },
-    { EXODAR,             &ExodarPos       },
-    { THUNDERBLUFF,       &ThunderBluffPos },
-    { UNDERCITY,          &UndercityPos    },
-    { TIRISFAL_GLADES,    &UndercityPos    },
-    { TELDRASSIL,         &DarnassusPos    }
+    { STRANGLETHORN_VALE, &BootyBayPos     }, ///< 荆棘谷 -> 藏宝海湾位置
+    { STORMWIND,          &StormwindPos    }, ///< 暴风城
+    { ORGRIMMAR,          &OrgrimmarPos    }, ///< 奥格瑞玛
+    { DUROTAR,            &OrgrimmarPos    }, ///< 杜隆塔尔 -> 使用奥格瑞玛位置
+    { DUN_MOROGH,         &IronForgePos    }, ///< 丹莫罗 -> 使用铁炉堡位置
+    { IRONFORGE,          &IronForgePos    }, ///< 铁炉堡
+    { EVERSONG_WOODS,     &SilvermoonPos   }, ///< 永歌森林 -> 银月城
+    { EXODAR,             &ExodarPos       }, ///< 埃索达
+    { THUNDERBLUFF,       &ThunderBluffPos }, ///< 雷霆崖
+    { UNDERCITY,          &UndercityPos    }, ///< 幽暗城
+    { TIRISFAL_GLADES,    &UndercityPos    }, ///< 提瑞斯法林地 -> 使用幽暗城位置
+    { TELDRASSIL,         &DarnassusPos    }  ///< 泰达希尔 -> 达纳苏斯
 };
 
+/**
+ * @class go_cheer_speaker
+ * @brief 欢呼广播器游戏对象脚本 - 控制烟花表演的自动播放
+ *
+ * 这个脚本管理游戏内的自动烟花表演系统：
+ * - 在节日或新年期间自动触发烟花表演
+ * - 控制烟花发射的时机和位置
+ * - 播放随机欢呼声音效增强氛围
+ * - 支持普通烟花和大型烟花两种模式
+ */
 class go_cheer_speaker : public GameObjectScript
 {
 public:
     go_cheer_speaker() : GameObjectScript("go_cheer_speaker") { }
 
+    /**
+     * @class go_cheer_speakerAI
+     * @brief 欢呼广播器AI - 实现烟花表演的核心逻辑
+     */
     struct go_cheer_speakerAI : public GameObjectAI
     {
+        /**
+         * @brief 构造函数
+         * @param go 关联的游戏对象
+         */
         go_cheer_speakerAI(GameObject* go) : GameObjectAI(go)
         {
             _started = false;
             _big = true;
         }
 
+        /**
+         * @brief 随机选择欢呼声音效果
+         * @return 随机选择的欢呼声音ID
+         */
         static uint32 CheerPicker()
         {
             uint32 newid = RAND(
@@ -744,6 +841,10 @@ public:
             return newid;
         }
 
+        /**
+         * @brief 随机选择烟花类型（包含所有类型）
+         * @return 随机选择的烟花游戏对象ID
+         */
         static uint32 FireworksPicker()
         {
             uint32 newid = RAND(
@@ -774,6 +875,12 @@ public:
             return newid;
         }
 
+        /**
+         * @brief 随机选择大型烟花类型
+         * @return 随机选择的大型烟花游戏对象ID
+         *
+         * 只返回大型烟花，用于新年等特殊时刻的盛大表演
+         */
         static uint32 FireworksBIGOnlyPicker()
         {
             uint32 newid = RAND(
@@ -793,15 +900,25 @@ public:
             return newid;
         }
 
+        /**
+         * @brief 更新AI - 每帧调用，处理烟花表演逻辑
+         * @param diff 距离上次更新的时间间隔（毫秒）
+         *
+         * 根据当前游戏时间判断是否应该开始或结束烟花表演：
+         * - 整点开始表演（在节日或新年期间）
+         * - 持续10分钟后结束
+         * - 新年零点10分30秒时有额外的盛大烟花
+         */
         void UpdateAI(uint32 diff) override
         {
             _events.Update(diff);
 
+            // 获取当前游戏时间
             time_t time = GameTime::GetGameTime();
             tm localTm;
             localtime_r(&time, &localTm);
 
-            // Start
+            // 整点开始：在分钟和秒数都为0时触发
             if ((localTm.tm_min == 0 && localTm.tm_sec == 0) && !_started && (IsHolidayActive(HOLIDAY_FIREWORKS_SPECTACULAR) || IsEventActive(GAME_EVENT_NEW_YEAR)))
             {
                 _events.ScheduleEvent(EVENT_CHEER, 1s);
@@ -809,14 +926,14 @@ public:
                 _started = true;
             }
 
-            // Event is active
+            // 表演进行中：在0-9分钟期间持续发射烟花
             if ((localTm.tm_min >= 0 && localTm.tm_sec >= 1 && localTm.tm_min <= 9 && localTm.tm_sec <= 59 && !_started) && (IsHolidayActive(HOLIDAY_FIREWORKS_SPECTACULAR) || IsEventActive(GAME_EVENT_NEW_YEAR)))
             {
                 _events.ScheduleEvent(EVENT_FIRE, 1s);
                 _started = true;
             }
 
-            // Stop
+            // 表演结束：第10分钟整点停止
             if ((localTm.tm_min == 10 && localTm.tm_sec == 0) && _started == true)
             {
                 _started = false;
@@ -824,11 +941,13 @@ public:
                 _events.CancelEvent(EVENT_FIRE);
             }
 
-            // New Year (Only!) - One more big bang!
+            // 新年特别节目：零点10分30秒时发射更多大型烟花
             if ((localTm.tm_min == 10 && localTm.tm_sec == 30 && localTm.tm_hour == 0) && IsEventActive(GAME_EVENT_NEW_YEAR) && _big == true)
             {
                 _big = false;
                 _events.ScheduleEvent(EVENT_CHEER, 1s);
+                // 连续发射11个大烟花
+                _events.ScheduleEvent(EVENT_FIRE, 1s);
                 _events.ScheduleEvent(EVENT_FIRE, 1s);
                 _events.ScheduleEvent(EVENT_FIRE, 1s);
                 _events.ScheduleEvent(EVENT_FIRE, 1s);
@@ -841,25 +960,31 @@ public:
                 _events.ScheduleEvent(EVENT_FIRE, 1s);
             }
 
+            // 执行事件队列中的事件
             while (uint32 eventId = _events.ExecuteEvent())
             {
                 switch (eventId)
                 {
                     case EVENT_CHEER:
                     {
+                        // 播放随机欢呼声音
                         me->PlayDistanceSound(CheerPicker());
                         break;
                     }
                     case EVENT_FIRE:
                     {
+                        // 在预定义的位置发射烟花
                         if (std::vector<Position> const* positions = Trinity::Containers::MapGetValuePtr(PositionsByZoneMap, me->GetZoneId()))
                         {
+                            // 随机选择一个发射位置
                             Position const& rndpos = Trinity::Containers::SelectRandomContainerElement(*positions);
+                            // 随机旋转角度
                             float rndrot = frand(-1.0000000f, 1.0000000f);
                             float rndrot2 = frand(-1.0000000f, 1.0000000f);
 
                             if (_big)
                             {
+                                // 使用大型烟花
                                 if (GameObject* firework = me->SummonGameObject(FireworksBIGOnlyPicker(), rndpos, QuaternionData(0.f, 0.f, rndrot, rndrot2), 5min))
                                 {
                                     firework->SetRespawnTime(0);
@@ -868,6 +993,7 @@ public:
                             }
                             else
                             {
+                                // 使用普通烟花（包含所有类型）
                                 if (GameObject* firework = me->SummonGameObject(FireworksPicker(), rndpos, QuaternionData(0.f, 0.f, rndrot, rndrot2), 5min))
                                 {
                                     firework->SetRespawnTime(0);
@@ -876,6 +1002,7 @@ public:
                             }
                         }
 
+                        // 如果表演正在进行，安排下一次发射
                         if (_started == true)
                             _events.ScheduleEvent(EVENT_FIRE, 1s, 2s);
 
@@ -887,17 +1014,27 @@ public:
             }
         }
     private:
-        EventMap _events;
-        bool _started;
-        bool _big;
+        EventMap _events;   ///< 事件管理器，用于调度烟花发射和欢呼事件
+        bool _started;      ///< 表演是否已开始
+        bool _big;          ///< 是否使用大型烟花
     };
 
+    /**
+     * @brief 获取AI实例
+     * @param go 游戏对象
+     * @return 新创建的AI实例指针
+     */
     GameObjectAI* GetAI(GameObject* go) const override
     {
         return new go_cheer_speakerAI(go);
     }
 };
 
+/**
+ * @brief 注册烟花表演事件脚本
+ *
+ * 此函数在服务器启动时被调用，用于注册烟花表演相关的游戏对象脚本
+ */
 void AddSC_event_fireworks()
 {
     new go_cheer_speaker();

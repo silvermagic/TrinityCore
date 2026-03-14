@@ -15,7 +15,22 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-/*
+/**
+ * @file spell_dk.cpp
+ * @brief 死亡骑士法术脚本模块
+ *
+ * 本模块实现死亡骑士职业相关法术的脚本逻辑，包括：
+ * - 鲜血系：鲜血打击、死亡打击、灵界打击、鲜血沸腾等
+ * - 冰霜系：冰霜打击、凛风冲击、湮灭、冰结之触等
+ * - 邪恶系：天灾打击、死亡缠绕、邪恶虫群、瘟疫打击等
+ *
+ * 法术脚本主要处理：
+ * - 符文能量消耗和恢复
+ * - 疾病传播和持续伤害
+ * - 召唤食尸鬼和符文武器
+ * - 天赋和雕文的特殊处理
+ * - 套装效果的额外处理
+ *
  * Scripts for spells with SPELLFAMILY_DEATHKNIGHT and SPELLFAMILY_GENERIC spells used by deathknight players.
  * Ordered alphabetically using scriptname.
  * Scriptnames of files in this file should be prefixed with "spell_dk_".
@@ -39,89 +54,104 @@
 #include "TemporarySummon.h"
 #include "Unit.h"
 
+/**
+ * @brief 死亡骑士法术ID枚举
+ *
+ * 定义死亡骑士法术脚本使用的各种法术ID
+ */
 enum DeathKnightSpells
 {
-    SPELL_DK_ACCLIMATION_HOLY                   = 50490,
-    SPELL_DK_ACCLIMATION_FIRE                   = 50362,
-    SPELL_DK_ACCLIMATION_FROST                  = 50485,
-    SPELL_DK_ACCLIMATION_ARCANE                 = 50486,
-    SPELL_DK_ACCLIMATION_SHADOW                 = 50489,
-    SPELL_DK_ACCLIMATION_NATURE                 = 50488,
-    SPELL_DK_ADVANTAGE_T10_4P_MELEE             = 70657,
-    SPELL_DK_ANTI_MAGIC_SHELL_TALENT            = 51052,
-    SPELL_DK_BLACK_ICE_R1                       = 49140,
-    SPELL_DK_BLOOD_BOIL_TRIGGERED               = 65658,
-    SPELL_DK_BLOOD_GORGED_HEAL                  = 50454,
-    SPELL_DK_BLOOD_PRESENCE                     = 48266,
-    SPELL_DK_CORPSE_EXPLOSION_TRIGGERED         = 43999,
-    SPELL_DK_CORPSE_EXPLOSION_VISUAL            = 51270,
-    SPELL_DK_DEATH_AND_DECAY_DAMAGE             = 52212,
-    SPELL_DK_DEATH_COIL_DAMAGE                  = 47632,
-    SPELL_DK_DEATH_COIL_HEAL                    = 47633,
-    SPELL_DK_DEATH_GRIP                         = 49560,
-    SPELL_DK_DEATH_STRIKE_HEAL                  = 45470,
-    SPELL_DK_FROST_FEVER                        = 55095,
-    SPELL_DK_FROST_PRESENCE                     = 48263,
-    SPELL_DK_FROST_PRESENCE_TRIGGERED           = 61261,
-    SPELL_DK_GHOUL_EXPLODE                      = 47496,
-    SPELL_DK_GLYPH_OF_DISEASE                   = 63334,
-    SPELL_DK_GLYPH_OF_ICEBOUND_FORTITUDE        = 58625,
-    SPELL_DK_IMPROVED_BLOOD_PRESENCE_R1         = 50365,
-    SPELL_DK_IMPROVED_FROST_PRESENCE_R1         = 50384,
-    SPELL_DK_IMPROVED_UNHOLY_PRESENCE_R1        = 50391,
-    SPELL_DK_IMPROVED_BLOOD_PRESENCE_HEAL       = 50475,
-    SPELL_DK_IMPROVED_BLOOD_PRESENCE_TRIGGERED  = 63611,
-    SPELL_DK_IMPROVED_UNHOLY_PRESENCE_TRIGGERED = 63622,
-    SPELL_DK_ITEM_SIGIL_VENGEFUL_HEART          = 64962,
-    SPELL_DK_ITEM_T8_MELEE_4P_BONUS             = 64736,
-    SPELL_DK_MASTER_OF_GHOULS                   = 52143,
-    SPELL_DK_BLOOD_PLAGUE                       = 55078,
-    SPELL_DK_RAISE_DEAD_USE_REAGENT             = 48289,
-    SPELL_DK_RUNIC_POWER_ENERGIZE               = 49088,
-    SPELL_DK_SCENT_OF_BLOOD                     = 50422,
-    SPELL_DK_SCOURGE_STRIKE_TRIGGERED           = 70890,
-    SPELL_DK_UNHOLY_PRESENCE                    = 48265,
-    SPELL_DK_UNHOLY_PRESENCE_TRIGGERED          = 49772,
-    SPELL_DK_WILL_OF_THE_NECROPOLIS_TALENT_R1   = 49189,
-    SPELL_DK_WILL_OF_THE_NECROPOLIS_AURA_R1     = 52284,
-    SPELL_DK_GHOUL_THRASH                       = 47480,
-    SPELL_DK_GLYPH_OF_SCOURGE_STRIKE_SCRIPT     = 69961,
-    SPELL_DK_BUTCHERY_RUNIC_POWER               = 50163,
-    SPELL_DK_MARK_OF_BLOOD_HEAL                 = 61607,
-    SPELL_DK_UNHOLY_BLIGHT_DAMAGE               = 50536,
-    SPELL_DK_GLYPH_OF_UNHOLY_BLIGHT             = 63332,
-    SPELL_DK_VENDETTA_HEAL                      = 50181,
-    SPELL_DK_NECROSIS_DAMAGE                    = 51460,
-    SPELL_DK_OBLITERATE_OFF_HAND_R1             = 66198,
-    SPELL_DK_FROST_STRIKE_OFF_HAND_R1           = 66196,
-    SPELL_DK_PLAGUE_STRIKE_OFF_HAND_R1          = 66216,
-    SPELL_DK_DEATH_STRIKE_OFF_HAND_R1           = 66188,
-    SPELL_DK_RUNE_STRIKE_OFF_HAND_R1            = 66217,
-    SPELL_DK_BLOOD_STRIKE_OFF_HAND_R1           = 66215,
-    SPELL_DK_RUNIC_RETURN                       = 61258,
-    SPELL_DK_WANDERING_PLAGUE_DAMAGE            = 50526,
-    SPELL_DK_DEATH_COIL_R1                      = 47541,
-    SPELL_DK_DEATH_GRIP_INITIAL                 = 49576,
-    SPELL_DK_BLOOD_STRIKE                       = 45902,
-    SPELL_DK_ICY_TOUCH                          = 45477,
-    SPELL_DK_PLAGUE_STRIKE                      = 45462,
-    SPELL_DK_DEATH_STRIKE                       = 49998,
-    SPELL_DK_HEART_STRIKE                       = 55050,
-    SPELL_DK_OBLITERATE                         = 49020,
-    SPELL_DK_RUNE_STRIKE                        = 56815
+    SPELL_DK_ACCLIMATION_HOLY                   = 50490,  ///< 适应神圣 - 神圣抗性增益
+    SPELL_DK_ACCLIMATION_FIRE                   = 50362,  ///< 适应火焰 - 火焰抗性增益
+    SPELL_DK_ACCLIMATION_FROST                  = 50485,  ///< 适应冰霜 - 冰霜抗性增益
+    SPELL_DK_ACCLIMATION_ARCANE                 = 50486,  ///< 适应奥术 - 奥术抗性增益
+    SPELL_DK_ACCLIMATION_SHADOW                 = 50489,  ///< 适应暗影 - 暗影抗性增益
+    SPELL_DK_ACCLIMATION_NATURE                 = 50488,  ///< 适应自然 - 自然抗性增益
+    SPELL_DK_ADVANTAGE_T10_4P_MELEE             = 70657,  ///< T10 4件套优势效果
+    SPELL_DK_ANTI_MAGIC_SHELL_TALENT            = 51052,  ///< 反魔法护罩天赋效果
+    SPELL_DK_BLACK_ICE_R1                       = 49140,  ///< 黑冰等级1 - 增加冰霜伤害
+    SPELL_DK_BLOOD_BOIL_TRIGGERED               = 65658,  ///< 鲜血沸腾触发效果
+    SPELL_DK_BLOOD_GORGED_HEAL                  = 50454,  ///< 鲜血涌动治疗
+    SPELL_DK_BLOOD_PRESENCE                     = 48266,  ///< 鲜血灵气
+    SPELL_DK_CORPSE_EXPLOSION_TRIGGERED         = 43999,  ///< 尸体爆炸触发效果
+    SPELL_DK_CORPSE_EXPLOSION_VISUAL            = 51270,  ///< 尸体爆炸视觉效果
+    SPELL_DK_DEATH_AND_DECAY_DAMAGE             = 52212,  ///< 死亡凋零伤害
+    SPELL_DK_DEATH_COIL_DAMAGE                  = 47632,  ///< 死亡缠绕伤害
+    SPELL_DK_DEATH_COIL_HEAL                    = 47633,  ///< 死亡缠绕治疗
+    SPELL_DK_DEATH_GRIP                         = 49560,  ///< 死亡之握
+    SPELL_DK_DEATH_STRIKE_HEAL                  = 45470,  ///< 死亡打击治疗
+    SPELL_DK_FROST_FEVER                        = 55095,  ///< 冰霜热疫疾病
+    SPELL_DK_FROST_PRESENCE                     = 48263,  ///< 冰霜灵气
+    SPELL_DK_FROST_PRESENCE_TRIGGERED           = 61261,  ///< 冰霜灵气触发效果
+    SPELL_DK_GHOUL_EXPLODE                      = 47496,  ///< 食尸鬼爆炸
+    SPELL_DK_GLYPH_OF_DISEASE                   = 63334,  ///< 疾病雕文
+    SPELL_DK_GLYPH_OF_ICEBOUND_FORTITUDE        = 58625,  ///< 冰封韧劲雕文
+    SPELL_DK_IMPROVED_BLOOD_PRESENCE_R1         = 50365,  ///< 强化鲜血灵气等级1
+    SPELL_DK_IMPROVED_FROST_PRESENCE_R1         = 50384,  ///< 强化冰霜灵气等级1
+    SPELL_DK_IMPROVED_UNHOLY_PRESENCE_R1        = 50391,  ///< 强化邪恶灵气等级1
+    SPELL_DK_IMPROVED_BLOOD_PRESENCE_HEAL       = 50475,  ///< 强化鲜血灵气治疗
+    SPELL_DK_IMPROVED_BLOOD_PRESENCE_TRIGGERED  = 63611,  ///< 强化鲜血灵气触发
+    SPELL_DK_IMPROVED_UNHOLY_PRESENCE_TRIGGERED = 63622,  ///< 强化邪恶灵气触发
+    SPELL_DK_ITEM_SIGIL_VENGEFUL_HEART          = 64962,  ///< 复仇之心圣物
+    SPELL_DK_ITEM_T8_MELEE_4P_BONUS             = 64736,  ///< T8近战4件套奖励
+    SPELL_DK_MASTER_OF_GHOULS                   = 52143,  ///< 亡者之主 - 永久食尸鬼
+    SPELL_DK_BLOOD_PLAGUE                       = 55078,  ///< 血液瘟疫疾病
+    SPELL_DK_RAISE_DEAD_USE_REAGENT             = 48289,  ///< 复活死者使用材料
+    SPELL_DK_RUNIC_POWER_ENERGIZE               = 49088,  ///< 符文能量充能
+    SPELL_DK_SCENT_OF_BLOOD                     = 50422,  ///< 血之气息
+    SPELL_DK_SCOURGE_STRIKE_TRIGGERED           = 70890,  ///< 天灾打击触发效果
+    SPELL_DK_UNHOLY_PRESENCE                    = 48265,  ///< 邪恶灵气
+    SPELL_DK_UNHOLY_PRESENCE_TRIGGERED          = 49772,  ///< 邪恶灵气触发效果
+    SPELL_DK_WILL_OF_THE_NECROPOLIS_TALENT_R1   = 49189,  ///< 大墓地意志天赋等级1
+    SPELL_DK_WILL_OF_THE_NECROPOLIS_AURA_R1     = 52284,  ///< 大墓地意志光环等级1
+    SPELL_DK_GHOUL_THRASH                       = 47480,  ///< 食尸鬼重殴
+    SPELL_DK_GLYPH_OF_SCOURGE_STRIKE_SCRIPT     = 69961,  ///< 天灾打击雕文脚本
+    SPELL_DK_BUTCHERY_RUNIC_POWER               = 50163,  ///< 屠宰符文能量
+    SPELL_DK_MARK_OF_BLOOD_HEAL                 = 61607,  ///< 鲜血印记治疗
+    SPELL_DK_UNHOLY_BLIGHT_DAMAGE               = 50536,  ///< 邪恶虫群伤害
+    SPELL_DK_GLYPH_OF_UNHOLY_BLIGHT             = 63332,  ///< 邪恶虫群雕文
+    SPELL_DK_VENDETTA_HEAL                      = 50181,  ///< 复仇治疗
+    SPELL_DK_NECROSIS_DAMAGE                    = 51460,  ///< 坏死伤害
+    SPELL_DK_OBLITERATE_OFF_HAND_R1             = 66198,  ///< 湮灭副手等级1
+    SPELL_DK_FROST_STRIKE_OFF_HAND_R1           = 66196,  ///< 冰霜打击副手等级1
+    SPELL_DK_PLAGUE_STRIKE_OFF_HAND_R1          = 66216,  ///< 瘟疫打击副手等级1
+    SPELL_DK_DEATH_STRIKE_OFF_HAND_R1           = 66188,  ///< 死亡打击副手等级1
+    SPELL_DK_RUNE_STRIKE_OFF_HAND_R1            = 66217,  ///< 符文打击副手等级1
+    SPELL_DK_BLOOD_STRIKE_OFF_HAND_R1           = 66215,  ///< 鲜血打击副手等级1
+    SPELL_DK_RUNIC_RETURN                       = 61258,  ///< 符文返还
+    SPELL_DK_WANDERING_PLAGUE_DAMAGE            = 50526,  ///< 游荡瘟疫伤害
+    SPELL_DK_DEATH_COIL_R1                      = 47541,  ///< 死亡缠绕等级1
+    SPELL_DK_DEATH_GRIP_INITIAL                 = 49576,  ///< 死亡之握初始法术
+    SPELL_DK_BLOOD_STRIKE                       = 45902,  ///< 鲜血打击
+    SPELL_DK_ICY_TOUCH                          = 45477,  ///< 冰结之触
+    SPELL_DK_PLAGUE_STRIKE                      = 45462,  ///< 瘟疫打击
+    SPELL_DK_DEATH_STRIKE                       = 49998,  ///< 死亡打击
+    SPELL_DK_HEART_STRIKE                       = 55050,  ///< 心脏打击
+    SPELL_DK_OBLITERATE                         = 49020,  ///< 湮灭
+    SPELL_DK_RUNE_STRIKE                        = 56815   ///< 符文打击
 };
 
+/**
+ * @brief 死亡骑士法术图标ID枚举
+ *
+ * 用于过滤特定法术，因为某些法术共享家族标志
+ */
 enum DeathKnightSpellIcons
 {
-    DK_ICON_ID_EPIDEMIC                         = 234,
-    DK_ICON_ID_IMPROVED_DEATH_STRIKE            = 2751
+    DK_ICON_ID_EPIDEMIC                         = 234,    ///< 瘟疫图标ID
+    DK_ICON_ID_IMPROVED_DEATH_STRIKE            = 2751    ///< 强化死亡打击图标ID
 };
 
+/**
+ * @brief 死亡骑士杂项枚举
+ *
+ * 定义NPC ID和法术类别ID
+ */
 enum DeathKnightMisc
 {
-    NPC_DK_GHOUL                                = 26125,
-    NPC_DK_DANCING_RUNE_WEAPON                  = 27893,
-    SPELL_CATEGORY_HOWLING_BLAST                = 1248
+    NPC_DK_GHOUL                                = 26125,  ///< 食尸鬼NPC ID
+    NPC_DK_DANCING_RUNE_WEAPON                  = 27893,  ///< 符文武器NPC ID
+    SPELL_CATEGORY_HOWLING_BLAST                = 1248    ///< 凛风冲击法术类别
 };
 
 // -49200 - Acclimation

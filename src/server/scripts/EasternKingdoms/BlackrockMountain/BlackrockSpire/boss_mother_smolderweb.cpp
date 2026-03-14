@@ -15,32 +15,87 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file boss_mother_smolderweb.cpp
+ * @brief 黑石塔下层首领 - 烟网蛛后 (Mother Smolderweb) AI 实现
+ *
+ * 本模块实现了黑石塔下层副本中蜘蛛型首领烟网蛛后的战斗AI逻辑。
+ * 烟网蛛后是一只巨大的火焰蜘蛛，使用毒液和结茧技能攻击玩家。
+ *
+ * 主要功能：
+ * - 管理首领的战斗周期性技能施放
+ * - 实现结茧技能，将目标困在晶体中
+ * - 实现蜘蛛毒液技能，对周围敌人造成伤害
+ * - 实现死亡时召唤小蜘蛛的机制
+ */
+
 #include "ScriptMgr.h"
 #include "blackrock_spire.h"
 #include "ScriptedCreature.h"
 
+/**
+ * @brief 法术ID枚举
+ *
+ * 定义烟网蛛后使用的所有法术ID
+ */
 enum Spells
 {
-    SPELL_CRYSTALIZE                = 16104,
-    SPELL_MOTHERSMILK               = 16468,
-    SPELL_SUMMON_SPIRE_SPIDERLING   = 16103,
+    SPELL_CRYSTALIZE                = 16104, ///< 结茧 - 将目标困在晶体茧中
+    SPELL_MOTHERSMILK               = 16468, ///< 蜘蛛毒液 - 对周围敌人造成自然伤害
+    SPELL_SUMMON_SPIRE_SPIDERLING   = 16103, ///< 召唤尖塔幼蛛 - 死亡时召唤小蜘蛛
 };
 
+/**
+ * @brief 事件ID枚举
+ *
+ * 定义战斗中使用的所有事件ID，用于事件调度系统
+ */
 enum Events
 {
-    EVENT_CRYSTALIZE                = 1,
-    EVENT_MOTHERS_MILK              = 2,
+    EVENT_CRYSTALIZE                = 1,     ///< 结茧事件
+    EVENT_MOTHERS_MILK              = 2,     ///< 蜘蛛毒液事件
 };
 
+/**
+ * @brief 烟网蛛后 AI 结构体
+ *
+ * 继承自 BossAI 基类，实现烟网蛛后的完整战斗AI。
+ * 负责管理技能施放时机和死亡时的召唤机制。
+ */
 struct boss_mother_smolderweb : public BossAI
 {
+    /**
+     * @brief 构造函数
+     * @param creature 关联的生物对象指针
+     *
+     * 初始化 BossAI 基类，关联首领数据为 DATA_MOTHER_SMOLDERWEB
+     */
     boss_mother_smolderweb(Creature* creature) : BossAI(creature, DATA_MOTHER_SMOLDERWEB) { }
 
+    /**
+     * @brief 重置首领状态
+     *
+     * 当首领脱离战斗或重置时调用。
+     * 调用基类的 _Reset() 方法清理事件队列和重置战斗状态。
+     *
+     * @note 调用时机：首领脱战、重置副本、首领死亡后重生
+     */
     void Reset() override
     {
         _Reset();
     }
 
+    /**
+     * @brief 进入战斗回调
+     * @param who 触发战斗的单位（通常是第一个攻击者）
+     *
+     * 当首领进入战斗状态时调用。
+     * 初始化战斗事件调度：
+     * - 结茧技能：20秒后首次施放
+     * - 蜘蛛毒液：10秒后首次施放
+     *
+     * @note 调用时机：首领被玩家攻击或主动攻击玩家
+     */
     void JustEngagedWith(Unit* who) override
     {
         BossAI::JustEngagedWith(who);
@@ -48,48 +103,107 @@ struct boss_mother_smolderweb : public BossAI
         events.ScheduleEvent(EVENT_MOTHERS_MILK, 10s);
     }
 
+    /**
+     * @brief 死亡回调
+     * @param killer 击杀首领的单位（可为nullptr）
+     *
+     * 当首领死亡时调用。
+     * 调用基类的 _JustDied() 方法处理副本状态更新和战利品生成。
+     *
+     * @note 调用时机：首领生命值降为0
+     */
     void JustDied(Unit* /*killer*/) override
     {
         _JustDied();
     }
 
+    /**
+     * @brief 受伤回调
+     * @param done_by 造成伤害的单位
+     * @param damage 造成的伤害值（可修改）
+     * @param damageType 伤害类型
+     * @param spellInfo 造成伤害的法术信息（可为nullptr）
+     *
+     * 当首领受到伤害时调用。
+     * 如果伤害将导致首领死亡，则立即召唤尖塔幼蛛。
+     *
+     * @note 调用时机：首领受到任何伤害
+     * @note 性能注意事项：此函数频繁调用，应保持轻量级
+     */
     void DamageTaken(Unit* /*done_by*/, uint32& damage, DamageEffectType /*damageType*/, SpellInfo const* /*spellInfo = nullptr*/) override
     {
+        // 如果伤害将导致死亡，召唤小蜘蛛
         if (me->GetHealth() <= damage)
             DoCast(me, SPELL_SUMMON_SPIRE_SPIDERLING, true);
     }
 
+    /**
+     * @brief 更新AI逻辑
+     * @param diff 自上次更新以来经过的时间（毫秒）
+     *
+     * 每个服务器tick调用一次，处理战斗AI的主逻辑循环。
+     *
+     * 执行流程：
+     * 1. 检查是否有有效攻击目标，无则返回
+     * 2. 更新事件队列
+     * 3. 如果正在施法则暂停技能处理
+     * 4. 执行到期事件并施放相应技能
+     * 5. 如果未施法则进行近战攻击
+     *
+     * 技能循环：
+     * - 结茧：每15秒施放一次
+     * - 蜘蛛毒液：每5-12.5秒施放一次
+     *
+     * @note 性能注意事项：避免在此函数中进行耗时操作，保持高效执行
+     */
     void UpdateAI(uint32 diff) override
     {
+        // 检查是否有有效攻击目标
         if (!UpdateVictim())
             return;
 
+        // 更新事件队列时间
         events.Update(diff);
 
+        // 如果正在施法，则等待施法完成
         if (me->HasUnitState(UNIT_STATE_CASTING))
             return;
 
+        // 处理所有到期事件
         while (uint32 eventId = events.ExecuteEvent())
         {
             switch (eventId)
             {
                 case EVENT_CRYSTALIZE:
+                    // 对自己施放结茧技能
                     DoCast(me, SPELL_CRYSTALIZE);
+                    // 安排下一次结茧，15秒后
                     events.ScheduleEvent(EVENT_CRYSTALIZE, 15s);
                     break;
                 case EVENT_MOTHERS_MILK:
+                    // 对自己施放蜘蛛毒液技能
                     DoCast(me, SPELL_MOTHERSMILK);
+                    // 安排下一次蜘蛛毒液，5-12.5秒后
                     events.ScheduleEvent(EVENT_MOTHERS_MILK, 5s, 12500ms);
                     break;
             }
 
+            // 如果在事件处理过程中开始施法，则退出循环
             if (me->HasUnitState(UNIT_STATE_CASTING))
                 return;
         }
+
+        // 如果没有在施法且准备就绪，进行近战攻击
         DoMeleeAttackIfReady();
     }
 };
 
+/**
+ * @brief 注册烟网蛛后 AI
+ *
+ * 此函数将烟网蛛后的AI注册到脚本系统中，
+ * 使游戏服务器能够正确加载和运行该首领的AI逻辑。
+ */
 void AddSC_boss_mothersmolderweb()
 {
     RegisterBlackrockSpireCreatureAI(boss_mother_smolderweb);

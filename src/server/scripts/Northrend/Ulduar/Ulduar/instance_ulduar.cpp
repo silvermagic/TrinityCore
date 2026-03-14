@@ -15,6 +15,37 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file instance_ulduar.cpp
+ * @brief 奥杜尔副本实例脚本
+ *
+ * 本模块实现了奥杜尔副本（Ulduar）的实例管理脚本。
+ * 奥杜尔是《魔兽世界：巫妖王之怒》资料片中的核心团队副本。
+ *
+ * 主要功能：
+ * - 管理14个首领的战斗状态和进度
+ * - 控制副本内的门和障碍物
+ * - 处理首领战斗边界（防止拖出房间）
+ * - 管理世界状态和成就
+ * - 协调首领之间的关联事件
+ *
+ * 首领列表：
+ * 1. 烈焰巨兽（Flame Leviathan）- 载具战斗
+ * 2. 掌炉者伊格尼斯（Ignis）
+ * 3. 锋鳞（Razorscale）
+ * 4. XT-002拆解者（XT-002 Deconstructor）
+ * 5. 钢铁议会（Assembly of Iron）- 三首领
+ * 6. 科隆加恩（Kologarn）
+ * 7. 欧尔莉亚（Auriaya）
+ * 8. 霍迪尔（Hodir）
+ * 9. 索林姆（Thorim）
+ * 10. 芙蕾亚（Freya）
+ * 11. 米米尔隆（Mimiron）
+ * 12. 维扎克斯将军（General Vezax）
+ * 13. 尤格-萨隆（Yogg-Saron）
+ * 14. 观察者奥尔加隆（Algalon the Observer）- 隐藏首领
+ */
+
 #include "ulduar.h"
 #include "AreaBoundary.h"
 #include "CreatureAI.h"
@@ -28,76 +59,102 @@
 #include "Vehicle.h"
 #include "WorldStatePackets.h"
 
+/**
+ * @brief 首领战斗边界数据
+ *
+ * 定义每个首领战斗区域的边界，防止玩家将首领拖出房间
+ * 边界类型：矩形、圆形、椭圆形、Z轴范围
+ */
 static BossBoundaryData const boundaries =
 {
-    { DATA_FLAME_LEVIATHAN, new RectangleBoundary(148.0f, 401.3f, -155.0f, 90.0f) },
-    { DATA_IGNIS, new RectangleBoundary(495.0f, 680.0f, 90.0f, 400.0f) },
-    { DATA_RAZORSCALE, new RectangleBoundary(370.0f, 810.0f, -542.0f, -55.0f) },
-    { DATA_XT002, new RectangleBoundary(755.0f, 940.0f, -125.0f, 95.0f) },
-    { DATA_ASSEMBLY_OF_IRON, new CircleBoundary(Position(1587.2f, 121.0f), 90.0) },
-    { DATA_ALGALON, new CircleBoundary(Position(1632.668f, -307.7656f), 45.0) },
-    { DATA_ALGALON, new ZRangeBoundary(410.0f, 470.0f) },
-    { DATA_HODIR, new EllipseBoundary(Position(2001.5f, -240.0f), 50.0, 75.0) },
-    // Thorim sets boundaries dynamically
-    { DATA_FREYA, new RectangleBoundary(2094.6f, 2520.0f, -250.0f, 200.0f) },
-    { DATA_MIMIRON, new CircleBoundary(Position(2744.0f, 2569.0f), 70.0) },
-    { DATA_VEZAX, new RectangleBoundary(1740.0f, 1930.0f, 31.0f, 228.0f) },
-    { DATA_YOGG_SARON, new CircleBoundary(Position(1980.42f, -27.68f), 105.0) }
+    { DATA_FLAME_LEVIATHAN, new RectangleBoundary(148.0f, 401.3f, -155.0f, 90.0f) },      ///< 烈焰巨兽：矩形边界
+    { DATA_IGNIS, new RectangleBoundary(495.0f, 680.0f, 90.0f, 400.0f) },                 ///< 伊格尼斯：矩形边界
+    { DATA_RAZORSCALE, new RectangleBoundary(370.0f, 810.0f, -542.0f, -55.0f) },          ///< 锋鳞：矩形边界
+    { DATA_XT002, new RectangleBoundary(755.0f, 940.0f, -125.0f, 95.0f) },                ///< XT-002：矩形边界
+    { DATA_ASSEMBLY_OF_IRON, new CircleBoundary(Position(1587.2f, 121.0f), 90.0) },       ///< 钢铁议会：圆形边界
+    { DATA_ALGALON, new CircleBoundary(Position(1632.668f, -307.7656f), 45.0) },          ///< 奥尔加隆：圆形边界
+    { DATA_ALGALON, new ZRangeBoundary(410.0f, 470.0f) },                                 ///< 奥尔加隆：Z轴范围边界
+    { DATA_HODIR, new EllipseBoundary(Position(2001.5f, -240.0f), 50.0, 75.0) },          ///< 霍迪尔：椭圆边界
+    // Thorim sets boundaries dynamically - 索林姆动态设置边界
+    { DATA_FREYA, new RectangleBoundary(2094.6f, 2520.0f, -250.0f, 200.0f) },             ///< 芙蕾亚：矩形边界
+    { DATA_MIMIRON, new CircleBoundary(Position(2744.0f, 2569.0f), 70.0) },               ///< 米米尔隆：圆形边界
+    { DATA_VEZAX, new RectangleBoundary(1740.0f, 1930.0f, 31.0f, 228.0f) },               ///< 维扎克斯：矩形边界
+    { DATA_YOGG_SARON, new CircleBoundary(Position(1980.42f, -27.68f), 105.0) }           ///< 尤格-萨隆：圆形边界
 };
 
+/**
+ * @brief 门的控制数据
+ *
+ * 定义副本内各种门的开关逻辑：
+ * - DOOR_TYPE_ROOM：战斗区域门，战斗中关闭
+ * - DOOR_TYPE_PASSAGE：通道门，首领死亡后开启
+ * - DOOR_TYPE_SPAWN_HOLE：刷新洞，控制刷怪
+ */
 static DoorData const doorData[] =
 {
-    { GO_LEVIATHAN_DOOR,                DATA_FLAME_LEVIATHAN,   DOOR_TYPE_ROOM },
-    { GO_XT_002_DOOR,                   DATA_XT002,             DOOR_TYPE_ROOM },
-    { GO_IRON_COUNCIL_DOOR,             DATA_ASSEMBLY_OF_IRON,  DOOR_TYPE_ROOM },
-    { GO_ARCHIVUM_DOOR,                 DATA_ASSEMBLY_OF_IRON,  DOOR_TYPE_PASSAGE },
-    { GO_HODIR_ENTRANCE,                DATA_HODIR,             DOOR_TYPE_ROOM },
-    { GO_HODIR_DOOR,                    DATA_HODIR,             DOOR_TYPE_PASSAGE },
-    { GO_HODIR_ICE_DOOR,                DATA_HODIR,             DOOR_TYPE_PASSAGE },
-    { GO_MIMIRON_DOOR_1,                DATA_MIMIRON,           DOOR_TYPE_ROOM },
-    { GO_MIMIRON_DOOR_2,                DATA_MIMIRON,           DOOR_TYPE_ROOM },
-    { GO_MIMIRON_DOOR_3,                DATA_MIMIRON,           DOOR_TYPE_ROOM },
-    { GO_THORIM_ENCOUNTER_DOOR,         DATA_THORIM,            DOOR_TYPE_ROOM },
-    { GO_ANCIENT_GATE_OF_THE_KEEPERS,   DATA_HODIR,             DOOR_TYPE_PASSAGE },
-    { GO_ANCIENT_GATE_OF_THE_KEEPERS,   DATA_MIMIRON,           DOOR_TYPE_PASSAGE },
-    { GO_ANCIENT_GATE_OF_THE_KEEPERS,   DATA_THORIM,            DOOR_TYPE_PASSAGE },
-    { GO_ANCIENT_GATE_OF_THE_KEEPERS,   DATA_FREYA,             DOOR_TYPE_PASSAGE },
-    { GO_VEZAX_DOOR,                    DATA_VEZAX,             DOOR_TYPE_PASSAGE },
-    { GO_YOGG_SARON_DOOR,               DATA_YOGG_SARON,        DOOR_TYPE_ROOM },
-    { GO_DOODAD_UL_SIGILDOOR_03,        DATA_ALGALON,           DOOR_TYPE_ROOM },
-    { GO_DOODAD_UL_UNIVERSEFLOOR_01,    DATA_ALGALON,           DOOR_TYPE_ROOM },
-    { GO_DOODAD_UL_UNIVERSEFLOOR_02,    DATA_ALGALON,           DOOR_TYPE_SPAWN_HOLE },
-    { GO_DOODAD_UL_UNIVERSEGLOBE01,     DATA_ALGALON,           DOOR_TYPE_SPAWN_HOLE },
-    { GO_DOODAD_UL_ULDUAR_TRAPDOOR_03,  DATA_ALGALON,           DOOR_TYPE_SPAWN_HOLE },
+    { GO_LEVIATHAN_DOOR,                DATA_FLAME_LEVIATHAN,   DOOR_TYPE_ROOM },      ///< 烈焰巨兽门
+    { GO_XT_002_DOOR,                   DATA_XT002,             DOOR_TYPE_ROOM },      ///< XT-002门
+    { GO_IRON_COUNCIL_DOOR,             DATA_ASSEMBLY_OF_IRON,  DOOR_TYPE_ROOM },      ///< 钢铁议会门
+    { GO_ARCHIVUM_DOOR,                 DATA_ASSEMBLY_OF_IRON,  DOOR_TYPE_PASSAGE },   ///< 档案室门（通道）
+    { GO_HODIR_ENTRANCE,                DATA_HODIR,             DOOR_TYPE_ROOM },      ///< 霍迪尔入口
+    { GO_HODIR_DOOR,                    DATA_HODIR,             DOOR_TYPE_PASSAGE },   ///< 霍迪尔门（通道）
+    { GO_HODIR_ICE_DOOR,                DATA_HODIR,             DOOR_TYPE_PASSAGE },   ///< 霍迪尔冰门
+    { GO_MIMIRON_DOOR_1,                DATA_MIMIRON,           DOOR_TYPE_ROOM },      ///< 米米尔隆门1
+    { GO_MIMIRON_DOOR_2,                DATA_MIMIRON,           DOOR_TYPE_ROOM },      ///< 米米尔隆门2
+    { GO_MIMIRON_DOOR_3,                DATA_MIMIRON,           DOOR_TYPE_ROOM },      ///< 米米尔隆门3
+    { GO_THORIM_ENCOUNTER_DOOR,         DATA_THORIM,            DOOR_TYPE_ROOM },      ///< 索林姆战斗门
+    { GO_ANCIENT_GATE_OF_THE_KEEPERS,   DATA_HODIR,             DOOR_TYPE_PASSAGE },   ///< 守护者古老之门（霍迪尔）
+    { GO_ANCIENT_GATE_OF_THE_KEEPERS,   DATA_MIMIRON,           DOOR_TYPE_PASSAGE },   ///< 守护者古老之门（米米尔隆）
+    { GO_ANCIENT_GATE_OF_THE_KEEPERS,   DATA_THORIM,            DOOR_TYPE_PASSAGE },   ///< 守护者古老之门（索林姆）
+    { GO_ANCIENT_GATE_OF_THE_KEEPERS,   DATA_FREYA,             DOOR_TYPE_PASSAGE },   ///< 守护者古老之门（芙蕾亚）
+    { GO_VEZAX_DOOR,                    DATA_VEZAX,             DOOR_TYPE_PASSAGE },   ///< 维扎克斯门
+    { GO_YOGG_SARON_DOOR,               DATA_YOGG_SARON,        DOOR_TYPE_ROOM },      ///< 尤格-萨隆门
+    { GO_DOODAD_UL_SIGILDOOR_03,        DATA_ALGALON,           DOOR_TYPE_ROOM },      ///< 奥尔加隆符文门
+    { GO_DOODAD_UL_UNIVERSEFLOOR_01,    DATA_ALGALON,           DOOR_TYPE_ROOM },      ///< 奥尔加隆宇宙地板1
+    { GO_DOODAD_UL_UNIVERSEFLOOR_02,    DATA_ALGALON,           DOOR_TYPE_SPAWN_HOLE },///< 奥尔加隆宇宙地板2
+    { GO_DOODAD_UL_UNIVERSEGLOBE01,     DATA_ALGALON,           DOOR_TYPE_SPAWN_HOLE },///< 奥尔加隆宇宙球体
+    { GO_DOODAD_UL_ULDUAR_TRAPDOOR_03,  DATA_ALGALON,           DOOR_TYPE_SPAWN_HOLE },///< 奥尔加隆活板门
     { 0,                                0,                      DOOR_TYPE_ROOM },
 };
 
+/**
+ * @brief 随从数据
+ *
+ * 定义关联首领的随从生物，随从死亡会影响首领
+ */
 MinionData const minionData[] =
 {
-    { NPC_STEELBREAKER,   DATA_ASSEMBLY_OF_IRON },
-    { NPC_MOLGEIM,        DATA_ASSEMBLY_OF_IRON },
-    { NPC_BRUNDIR,        DATA_ASSEMBLY_OF_IRON },
+    { NPC_STEELBREAKER,   DATA_ASSEMBLY_OF_IRON },  ///< 钢铁破坏者（钢铁议会）
+    { NPC_MOLGEIM,        DATA_ASSEMBLY_OF_IRON },  ///< 符文大师莫尔基姆（钢铁议会）
+    { NPC_BRUNDIR,        DATA_ASSEMBLY_OF_IRON },  ///< 风暴召唤者布伦迪尔（钢铁议会）
     { 0,                  0,                    }
 };
 
+/**
+ * @brief 生物对象数据映射
+ *
+ * 将NPC ID映射到数据ID，用于在副本中查找和引用特定的NPC
+ */
 ObjectData const creatureData[] =
 {
-    { NPC_FLAME_LEVIATHAN,          DATA_FLAME_LEVIATHAN          },
-    { NPC_IGNIS,                    DATA_IGNIS                    },
-    { NPC_RAZORSCALE,               DATA_RAZORSCALE               },
-    { NPC_XT002,                    DATA_XT002                    },
-    { NPC_KOLOGARN,                 DATA_KOLOGARN                 },
-    { NPC_AURIAYA,                  DATA_AURIAYA                  },
-    { NPC_HODIR,                    DATA_HODIR                    },
-    { NPC_THORIM,                   DATA_THORIM                   },
-    { NPC_FREYA,                    DATA_FREYA                    },
-    { NPC_MIMIRON,                  DATA_MIMIRON                  },
-    { NPC_VEZAX,                    DATA_VEZAX                    },
-    { NPC_YOGG_SARON,               DATA_YOGG_SARON               },
-    { NPC_ALGALON,                  DATA_ALGALON                  },
+    // 首领映射
+    { NPC_FLAME_LEVIATHAN,          DATA_FLAME_LEVIATHAN          },  ///< 烈焰巨兽
+    { NPC_IGNIS,                    DATA_IGNIS                    },  ///< 掌炉者伊格尼斯
+    { NPC_RAZORSCALE,               DATA_RAZORSCALE               },  ///< 锋鳞
+    { NPC_XT002,                    DATA_XT002                    },  ///< XT-002拆解者
+    { NPC_KOLOGARN,                 DATA_KOLOGARN                 },  ///< 科隆加恩
+    { NPC_AURIAYA,                  DATA_AURIAYA                  },  ///< 欧尔莉亚
+    { NPC_HODIR,                    DATA_HODIR                    },  ///< 霍迪尔
+    { NPC_THORIM,                   DATA_THORIM                   },  ///< 索林姆
+    { NPC_FREYA,                    DATA_FREYA                    },  ///< 芙蕾亚
+    { NPC_MIMIRON,                  DATA_MIMIRON                  },  ///< 米米尔隆
+    { NPC_VEZAX,                    DATA_VEZAX                    },  ///< 维扎克斯将军
+    { NPC_YOGG_SARON,               DATA_YOGG_SARON               },  ///< 尤格-萨隆
+    { NPC_ALGALON,                  DATA_ALGALON                  },  ///< 观察者奥尔加隆
 
-    { NPC_EXPEDITION_COMMANDER,     DATA_EXPEDITION_COMMANDER     },
-    { NPC_RAZORSCALE_CONTROLLER,    DATA_RAZORSCALE_CONTROL       },
+    // 重要NPC映射
+    { NPC_EXPEDITION_COMMANDER,     DATA_EXPEDITION_COMMANDER     },  ///< 远征指挥官
+    { NPC_RAZORSCALE_CONTROLLER,    DATA_RAZORSCALE_CONTROL       },  ///< 锋鳞控制器
     { NPC_SIF,                      DATA_SIF                      },
     { NPC_RUNIC_COLOSSUS,           DATA_RUNIC_COLOSSUS           },
     { NPC_RUNE_GIANT,               DATA_RUNE_GIANT               },

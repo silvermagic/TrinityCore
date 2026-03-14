@@ -15,6 +15,28 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file BattlefieldHandler.cpp
+ * @brief 战场（Battlefield）网络消息处理器实现文件
+ *
+ * 本文件实现了 WorldSession 类中与战场系统相关的网络消息处理函数，
+ * 包括战场邀请、排队、进入战场、离开战场等核心交互流程。
+ *
+ * 主要功能模块：
+ * - 发送战场邀请消息（排队邀请、参战邀请）
+ * - 处理玩家对邀请的响应（接受/拒绝）
+ * - 管理战场排队状态
+ * - 处理玩家离开战场的请求
+ *
+ * 相关模块：
+ * - Battlefield: 战场基类，定义战场核心逻辑
+ * - BattlefieldMgr: 战场管理器，管理所有战场实例
+ * - WorldSession: 客户端会话，处理网络消息收发
+ *
+ * @note 本文件主要处理 Wintergrasp（冬拥湖）和 Tol Barad（托巴拉德）
+ *       等世界战场相关的网络通信
+ */
+
 #include "WorldSession.h"
 #include "Battlefield.h"
 #include "BattlefieldMgr.h"

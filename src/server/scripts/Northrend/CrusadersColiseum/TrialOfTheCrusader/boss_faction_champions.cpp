@@ -15,6 +15,31 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file boss_faction_champions.cpp
+ * @brief 十字军试炼副本 - 阵营勇士 BOSS 战斗脚本
+ *
+ * 本模块实现了阵营勇士 BOSS 战的核心逻辑，这是一场模拟 PVP 的 PVE 战斗：
+ * - 根据玩家阵营（联盟/部落）召唤对立阵营的 NPC 勇士
+ * - 10 人模式召唤 5 名勇士，25 人模式召唤 10 名勇士
+ * - 勇士包括治疗、近战 DPS、远程 DPS 等不同职业
+ * - 每个职业都有完整的技能体系和 AI 逻辑
+ * - 模拟真实 PVP 行为，包括使用 PvP 饰品、控制技能、保护技能等
+ *
+ * 职业列表：
+ * - 治疗：德鲁伊（恢复）、圣骑士（神圣）、牧师（戒律）、萨满（恢复）
+ * - 近战 DPS：战士、死亡骑士、盗贼、增强萨满、惩戒圣骑士
+ * - 远程 DPS：法师、术士、猎人、暗影牧师、平衡德鲁伊
+ *
+ * 战术要点：
+ * - 优先击杀治疗职业
+ * - 合理使用控制技能打断治疗
+ * - 注意驱散关键 buff
+ * - 防止被对方控制链连控
+ *
+ * @author TrinityCore Team
+ */
+
 #include "ScriptMgr.h"
 #include "GridNotifiers.h"
 #include "InstanceScript.h"
@@ -28,362 +53,427 @@
 #include "TemporarySummon.h"
 #include "trial_of_the_crusader.h"
 
+/**
+ * @enum AIs
+ * @brief AI 类型枚举
+ *
+ * 定义勇士的 AI 行为类型，用于区分不同职业的战斗风格
+ */
 enum AIs
 {
-    AI_MELEE    = 0,
-    AI_RANGED   = 1,
-    AI_HEALER   = 2,
-    AI_PET      = 3
+    AI_MELEE    = 0,    ///< 近战 AI：需要接近目标进行攻击
+    AI_RANGED   = 1,    ///< 远程 AI：保持距离进行攻击
+    AI_HEALER   = 2,    ///< 治疗 AI：优先治疗友方单位
+    AI_PET      = 3     ///< 宠物 AI：跟随主人并协助攻击
 };
 
+/**
+ * @enum Spells
+ * @brief 阵营勇士使用的法术 ID 枚举
+ *
+ * 包含所有职业的技能 ID，按职业和专精分类
+ * 涵盖治疗技能、DPS 技能、控制技能、防御技能等
+ */
 enum Spells
 {
-    // generic
-    SPELL_ANTI_AOE                  = 68595,
-    SPELL_PVP_TRINKET               = 65547,
+    // 通用技能
+    SPELL_ANTI_AOE                  = 68595,   ///< 防止 AOE 技能：减少 AOE 伤害
+    SPELL_PVP_TRINKET               = 65547,   ///< PvP 饰品：移除所有控制效果
 
-    // druid healer
-    SPELL_LIFEBLOOM                 = 66093,
-    SPELL_NOURISH                   = 66066,
-    SPELL_REGROWTH                  = 66067,
-    SPELL_REJUVENATION              = 66065,
-    SPELL_TRANQUILITY               = 66086,
-    SPELL_BARKSKIN                  = 65860,
-    SPELL_THORNS                    = 66068,
-    SPELL_NATURE_GRASP              = 66071,
+    // 德鲁伊治疗技能
+    SPELL_LIFEBLOOM                 = 66093,   ///< 生命绽放：持续治疗，结束时回复生命
+    SPELL_NOURISH                   = 66066,   ///< 滋养：直接治疗法术
+    SPELL_REGROWTH                  = 66067,   ///< 愈合：直接治疗 + 持续治疗
+    SPELL_REJUVENATION              = 66065,   ///< 回春术：持续治疗
+    SPELL_TRANQUILITY               = 66086,   ///< 宁静：群体持续治疗
+    SPELL_BARKSKIN                  = 65860,   ///< 树皮术：减少受到的伤害
+    SPELL_THORNS                    = 66068,   ///< 荆棘术：对攻击者造成伤害
+    SPELL_NATURE_GRASP              = 66071,   ///< 自然之握：被攻击时定身攻击者
 
-    // shaman healer
-    SPELL_HEALING_WAVE              = 66055,
-    SPELL_RIPTIDE                   = 66053,
-    SPELL_SPIRIT_CLEANSE            = 66056, //friendly only
-    SPELL_HEROISM                   = 65983,
-    SPELL_BLOODLUST                 = 65980,
-    SPELL_HEX                       = 66054,
-    SPELL_EARTH_SHIELD              = 66063,
-    SPELL_EARTH_SHOCK               = 65973,
-    AURA_EXHAUSTION                 = 57723,
-    AURA_SATED                      = 57724,
+    // 萨满治疗技能
+    SPELL_HEALING_WAVE              = 66055,   ///< 治疗波：直接治疗法术
+    SPELL_RIPTIDE                   = 66053,   ///< 激流：直接治疗 + 持续治疗
+    SPELL_SPIRIT_CLEANSE            = 66056,   ///< 净化灵魂：移除友方单位的诅咒和中毒（仅友方）
+    SPELL_HEROISM                   = 65983,   ///< 英勇：提升急速（联盟方）
+    SPELL_BLOODLUST                 = 65980,   ///< 嗜血：提升急速（部落方）
+    SPELL_HEX                       = 66054,   ///< 妖术：将目标变为青蛙
+    SPELL_EARTH_SHIELD              = 66063,   ///< 大地之盾：受击时自动治疗
+    SPELL_EARTH_SHOCK               = 65973,   ///< 大地震击：打断施法
+    AURA_EXHAUSTION                 = 57723,   ///< 筋疲力尽：英勇/嗜血后的减益效果
+    AURA_SATED                      = 57724,   ///< 厌倦：英勇/嗜血后的减益效果
 
-    // paladin healer
-    SPELL_HAND_OF_FREEDOM           = 68757,
-    SPELL_DIVINE_SHIELD             = 66010,
-    SPELL_CLEANSE                   = 66116,
-    SPELL_FLASH_OF_LIGHT            = 66113,
-    SPELL_HOLY_LIGHT                = 66112,
-    SPELL_HOLY_SHOCK                = 66114,
-    SPELL_HAND_OF_PROTECTION        = 66009,
-    SPELL_HAMMER_OF_JUSTICE         = 66613,
-    SPELL_FORBEARANCE               = 25771,
+    // 圣骑士治疗技能
+    SPELL_HAND_OF_FREEDOM           = 68757,   ///< 自由之手：移除并免疫移动限制效果
+    SPELL_DIVINE_SHIELD             = 66010,   ///< 圣盾术：免疫所有伤害和效果
+    SPELL_CLEANSE                   = 66116,   ///< 清洁术：移除友方单位的毒素、疾病和魔法效果
+    SPELL_FLASH_OF_LIGHT            = 66113,   ///< 圣光闪现：快速治疗法术
+    SPELL_HOLY_LIGHT                = 66112,   ///< 圣光术：强力治疗法术
+    SPELL_HOLY_SHOCK                = 66114,   ///< 神圣震击：直接治疗或伤害
+    SPELL_HAND_OF_PROTECTION        = 66009,   ///< 保护之手：免疫物理攻击
+    SPELL_HAMMER_OF_JUSTICE         = 66613,   ///< 制裁之锤：眩晕目标
+    SPELL_FORBEARANCE               = 25771,   ///< 忍耐祝福：圣盾术/保护之手后的减益效果
 
-    // priest healer
-    SPELL_RENEW                     = 66177,
-    SPELL_SHIELD                    = 66099,
-    SPELL_FLASH_HEAL                = 66104,
-    SPELL_DISPEL                    = 65546,
-    SPELL_PSYCHIC_SCREAM            = 65543,
-    SPELL_MANA_BURN                 = 66100,
-    SPELL_PENANCE                   = 66097,
+    // 牧师治疗技能
+    SPELL_RENEW                     = 66177,   ///< 恢复：持续治疗
+    SPELL_SHIELD                    = 66099,   ///< 真言术：盾：吸收伤害
+    SPELL_FLASH_HEAL                = 66104,   ///< 快速治疗：快速治疗法术
+    SPELL_DISPEL                    = 65546,   ///< 驱散魔法：移除魔法效果
+    SPELL_PSYCHIC_SCREAM            = 65543,   ///< 心灵尖啸：恐惧周围敌人
+    SPELL_MANA_BURN                 = 66100,   ///< 法力燃烧：消耗目标法力并造成伤害
+    SPELL_PENANCE                   = 66097,   ///< 苦修：多段治疗或伤害
 
-    // priest dps
-    SPELL_SILENCE                   = 65542,
-    SPELL_VAMPIRIC_TOUCH            = 65490,
-    SPELL_SW_PAIN                   = 65541,
-    SPELL_MIND_FLAY                 = 65488,
-    SPELL_MIND_BLAST                = 65492,
-    SPELL_HORROR                    = 65545,
-    SPELL_DISPERSION                = 65544,
-    SPELL_SHADOWFORM                = 16592,
+    // 暗影牧师技能
+    SPELL_SILENCE                   = 65542,   ///< 沉默：打断施法并沉默
+    SPELL_VAMPIRIC_TOUCH            = 65490,   ///< 吸血鬼之触：持续伤害
+    SPELL_SW_PAIN                   = 65541,   ///< 暗言术：痛：持续伤害
+    SPELL_MIND_FLAY                 = 65488,   ///< 精神鞭笞：持续伤害并减速
+    SPELL_MIND_BLAST                = 65492,   ///< 心灵震爆：直接伤害
+    SPELL_HORROR                    = 65545,   ///< 惊骇：眩晕目标
+    SPELL_DISPERSION                = 65544,   ///< 消散：减少受到的伤害
+    SPELL_SHADOWFORM                = 16592,   ///< 暗影形态：增加暗影伤害
 
-    // warlock
-    SPELL_HELLFIRE                   = 65816,
-    SPELL_CORRUPTION                 = 65810,
-    SPELL_CURSE_OF_AGONY             = 65814,
-    SPELL_CURSE_OF_EXHAUSTION        = 65815,
-    SPELL_FEAR                       = 65809,
-    SPELL_SEARING_PAIN               = 65819,
-    SPELL_SHADOW_BOLT                = 65821,
-    SPELL_UNSTABLE_AFFLICTION        = 65812,
-    SPELL_UNSTABLE_AFFLICTION_DISPEL = 65813,
-    SPELL_SUMMON_FELHUNTER           = 67514,
+    // 术士技能
+    SPELL_HELLFIRE                   = 65816,  ///< 地狱火：周围 AOE 伤害
+    SPELL_CORRUPTION                 = 65810,  ///< 腐蚀术：持续伤害
+    SPELL_CURSE_OF_AGONY             = 65814,  ///< 痛苦诅咒：持续伤害
+    SPELL_CURSE_OF_EXHAUSTION        = 65815,  ///< 疲劳诅咒：降低移动速度
+    SPELL_FEAR                       = 65809,  ///< 恐惧术：使目标恐惧逃跑
+    SPELL_SEARING_PAIN               = 65819,  ///< 灼热之痛：快速施法的火焰伤害
+    SPELL_SHADOW_BOLT                = 65821,  ///< 暗影箭：暗影伤害
+    SPELL_UNSTABLE_AFFLICTION        = 65812,  ///< 不稳定的痛苦：持续伤害，驱散时沉默
+    SPELL_UNSTABLE_AFFLICTION_DISPEL = 65813,  ///< 不稳定的痛苦驱散效果：沉默驱散者
+    SPELL_SUMMON_FELHUNTER           = 67514,  ///< 召唤地狱猎犬：术士宠物
 
-    // mage
-    SPELL_ARCANE_BARRAGE            = 65799,
-    SPELL_ARCANE_BLAST              = 65791,
-    SPELL_ARCANE_EXPLOSION          = 65800,
-    SPELL_BLINK                     = 65793,
-    SPELL_COUNTERSPELL              = 65790,
-    SPELL_FROST_NOVA                = 65792,
-    SPELL_FROSTBOLT                 = 65807,
-    SPELL_ICE_BLOCK                 = 65802,
-    SPELL_POLYMORPH                 = 65801,
+    // 法师技能
+    SPELL_ARCANE_BARRAGE            = 65799,   ///< 奥术弹幕：瞬发奥术伤害
+    SPELL_ARCANE_BLAST              = 65791,   ///< 奥术冲击：奥术伤害，叠加增伤 buff
+    SPELL_ARCANE_EXPLOSION          = 65800,   ///< 奥术爆炸：周围 AOE 伤害
+    SPELL_BLINK                     = 65793,   ///< 闪烁：瞬移并解除昏迷
+    SPELL_COUNTERSPELL              = 65790,   ///< 法术反制：打断施法并沉默
+    SPELL_FROST_NOVA                = 65792,   ///< 冰霜新星：定身周围敌人
+    SPELL_FROSTBOLT                 = 65807,   ///< 寒冰箭：冰霜伤害并减速
+    SPELL_ICE_BLOCK                 = 65802,   ///< 寒冰屏障：免疫所有伤害
+    SPELL_POLYMORPH                 = 65801,   ///< 变形术：将目标变羊
 
-    // hunter
-    SPELL_AIMED_SHOT                = 65883,
-    SPELL_DETERRENCE                = 65871,
-    SPELL_DISENGAGE                 = 65869,
-    SPELL_EXPLOSIVE_SHOT            = 65866,
-    SPELL_FROST_TRAP                = 65880,
-    SPELL_SHOOT                     = 65868,
-    SPELL_STEADY_SHOT               = 65867,
-    SPELL_WING_CLIP                 = 66207,
-    SPELL_WYVERN_STING              = 65877,
-    SPELL_CALL_PET                  = 67777,
+    // 猎人技能
+    SPELL_AIMED_SHOT                = 65883,   ///< 瞄准射击：强力射击，降低治疗效果
+    SPELL_DETERRENCE                = 65871,   ///< 威慑：招架所有攻击
+    SPELL_DISENGAGE                 = 65869,   ///< 脱离：后跳
+    SPELL_EXPLOSIVE_SHOT            = 65866,   ///< 爆炸射击：火焰伤害 + AOE
+    SPELL_FROST_TRAP                = 65880,   ///< 冰霜陷阱：减速敌人
+    SPELL_SHOOT                     = 65868,   ///< 自动射击：基础射击
+    SPELL_STEADY_SHOT               = 65867,   ///< 稳固射击：稳定射击
+    SPELL_WING_CLIP                 = 66207,   ///< 摔绊：减速目标
+    SPELL_WYVERN_STING              = 65877,   ///< 翼龙钉刺：睡眠目标
+    SPELL_CALL_PET                  = 67777,   ///< 召唤宠物：猎人宠物
 
-    // druid dps
-    SPELL_CYCLONE                   = 65859,
-    SPELL_ENTANGLING_ROOTS          = 65857,
-    SPELL_FAERIE_FIRE               = 65863,
-    SPELL_FORCE_OF_NATURE           = 65861,
-    SPELL_INSECT_SWARM              = 65855,
-    SPELL_MOONFIRE                  = 65856,
-    SPELL_STARFIRE                  = 65854,
-    SPELL_WRATH                     = 65862,
+    // 平衡德鲁伊技能
+    SPELL_CYCLONE                   = 65859,   ///< 飓风：使目标无法行动且免疫伤害
+    SPELL_ENTANGLING_ROOTS          = 65857,   ///< 纠缠之根：定身目标
+    SPELL_FAERIE_FIRE               = 65863,   ///< 精灵之火：降低护甲
+    SPELL_FORCE_OF_NATURE           = 65861,   ///< 自然之力：召唤树人
+    SPELL_INSECT_SWARM              = 65855,   ///< 虫群：持续伤害并降低命中率
+    SPELL_MOONFIRE                  = 65856,   ///< 月火术：直接伤害 + 持续伤害
+    SPELL_STARFIRE                  = 65854,   ///< 星火术：强力奥术伤害
+    SPELL_WRATH                     = 65862,   ///< 愤怒：快速自然伤害
 
-    // warrior
-    SPELL_BLADESTORM                = 65947,
-    SPELL_INTIMIDATING_SHOUT        = 65930,
-    SPELL_MORTAL_STRIKE             = 65926,
-    SPELL_CHARGE                    = 68764,
-    SPELL_DISARM                    = 65935,
-    SPELL_OVERPOWER                 = 65924,
-    SPELL_SUNDER_ARMOR              = 65936,
-    SPELL_SHATTERING_THROW          = 65940,
-    SPELL_RETALIATION               = 65932,
+    // 战士技能
+    SPELL_BLADESTORM                = 65947,   ///< 剑刃风暴：旋转攻击周围敌人
+    SPELL_INTIMIDATING_SHOUT        = 65930,   ///< 恐惧吼叫：恐惧周围敌人
+    SPELL_MORTAL_STRIKE             = 65926,   ///< 致死打击：高伤害，降低治疗效果
+    SPELL_CHARGE                    = 68764,   ///< 冲锋：快速接近目标并眩晕
+    SPELL_DISARM                    = 65935,   ///< 缴械：缴械目标武器
+    SPELL_OVERPOWER                 = 65924,   ///< 压制：反击招架的目标
+    SPELL_SUNDER_ARMOR              = 65936,   ///< 破甲攻击：降低护甲
+    SPELL_SHATTERING_THROW          = 65940,   ///< 碎裂投掷：移除护盾效果
+    SPELL_RETALIATION               = 65932,   ///< 反击：反击近战攻击
 
-    // death knight
-    SPELL_CHAINS_OF_ICE             = 66020,
-    SPELL_DEATH_COIL                = 66019,
-    SPELL_DEATH_GRIP                = 66017,
-    SPELL_FROST_STRIKE              = 66047,
-    SPELL_ICEBOUND_FORTITUDE        = 66023,
-    SPELL_ICY_TOUCH                 = 66021,
-    SPELL_STRANGULATE               = 66018,
-    SPELL_DEATH_GRIP_PULL           = 64431,    // used at spellscript
+    // 死亡骑士技能
+    SPELL_CHAINS_OF_ICE             = 66020,   ///< 寒冰锁链：减速目标
+    SPELL_DEATH_COIL                = 66019,   ///< 死亡缠绕：暗影伤害或治疗亡灵
+    SPELL_DEATH_GRIP                = 66017,   ///< 死亡之握：将目标拉到自己身边
+    SPELL_FROST_STRIKE              = 66047,   ///< 冰霜打击：冰霜伤害
+    SPELL_ICEBOUND_FORTITUDE        = 66023,   ///< 冰固之力：减少受到的伤害
+    SPELL_ICY_TOUCH                 = 66021,   ///< 冰霜之触：冰霜伤害
+    SPELL_STRANGULATE               = 66018,   ///< 绞杀：沉默目标
+    SPELL_DEATH_GRIP_PULL           = 64431,   ///< 死亡之握拉取效果：法术脚本使用
 
-    // rogue
-    SPELL_FAN_OF_KNIVES             = 65955,
-    SPELL_BLIND                     = 65960,
-    SPELL_CLOAK                     = 65961,
-    SPELL_BLADE_FLURRY              = 65956,
-    SPELL_SHADOWSTEP                = 66178,
-    SPELL_HEMORRHAGE                = 65954,
-    SPELL_EVISCERATE                = 65957,
-    SPELL_WOUND_POISON              = 65962,
+    // 盗贼技能
+    SPELL_FAN_OF_KNIVES             = 65955,   ///< 刀扇：周围 AOE 伤害
+    SPELL_BLIND                     = 65960,   ///< 致盲：致盲目标
+    SPELL_CLOAK                     = 65961,   ///< 暗影斗篷：抵抗法术伤害
+    SPELL_BLADE_FLURRY              = 65956,   ///< 剑刃乱舞：攻击额外目标
+    SPELL_SHADOWSTEP                = 66178,   ///< 暗影步：瞬移到目标身后
+    SPELL_HEMORRHAGE                = 65954,   ///< 出血：造成流血伤害
+    SPELL_EVISCERATE                = 65957,   ///< 剔骨：终结技，根据连击点数造成伤害
+    SPELL_WOUND_POISON              = 65962,   ///< 致伤毒药：降低治疗效果
 
-    // shaman dps (some spells taken from shaman healer)
-    SPELL_LAVA_LASH                 = 65974,
-    SPELL_STORMSTRIKE               = 65970,
-    SPELL_WINDFURY                  = 65976,
+    // 增强萨满技能（部分技能继承自恢复萨满）
+    SPELL_LAVA_LASH                 = 65974,   ///< 熔岩猛击：火焰伤害
+    SPELL_STORMSTRIKE               = 65970,   ///< 风暴打击：自然伤害
+    SPELL_WINDFURY                  = 65976,   ///< 风怒武器：额外攻击
 
-    // paladin dps
-    SPELL_AVENGING_WRATH            = 66011,
-    SPELL_CRUSADER_STRIKE           = 66003,
-    SPELL_DIVINE_STORM              = 66006,
-    SPELL_HAMMER_OF_JUSTICE_RET     = 66007,
-    SPELL_JUDGEMENT_OF_COMMAND      = 66005,
-    SPELL_REPENTANCE                = 66008,
-    SPELL_SEAL_OF_COMMAND           = 66004,
+    // 惩戒圣骑士技能
+    SPELL_AVENGING_WRATH            = 66011,   ///< 复仇之怒：增加伤害
+    SPELL_CRUSADER_STRIKE           = 66003,   ///< 十字军打击：神圣伤害
+    SPELL_DIVINE_STORM              = 66006,   ///< 神圣风暴：周围 AOE 神圣伤害
+    SPELL_HAMMER_OF_JUSTICE_RET     = 66007,   ///< 制裁之锤（惩戒）：眩晕目标
+    SPELL_JUDGEMENT_OF_COMMAND      = 66005,   ///< 命令审判：神圣伤害
+    SPELL_REPENTANCE                = 66008,   ///< 忏悔：使目标瘫痪
+    SPELL_SEAL_OF_COMMAND           = 66004,   ///< 命令圣印：增加伤害
 
-    // warlock pet
-    SPELL_DEVOUR_MAGIC              = 67518,
-    SPELL_SPELL_LOCK                = 67519,
+    // 术士宠物技能（地狱猎犬）
+    SPELL_DEVOUR_MAGIC              = 67518,   ///< 吞噬魔法：移除友方增益或敌方减益
+    SPELL_SPELL_LOCK                = 67519,   ///< 法术封锁：打断施法并沉默
 
-    // hunter pet
-    SPELL_CLAW                      = 67793
+    // 猎人宠物技能
+    SPELL_CLAW                      = 67793    ///< 爪击：宠物攻击技能
 };
 
+/**
+ * @enum Events
+ * @brief 事件枚举
+ *
+ * 定义所有职业的技能调度事件
+ * 每个职业使用独立的编号空间，从 1 开始
+ */
 enum Events
 {
-    // generic
-    EVENT_THREAT                    = 1,
-    EVENT_REMOVE_CC                 = 2,
+    // 通用事件
+    EVENT_THREAT                    = 1,    ///< 威胁更新事件：重新计算目标威胁值
+    EVENT_REMOVE_CC                 = 2,    ///< 移除控制效果事件：移除眩晕、恐惧等（英雄模式）
 
-    // druid healer
-    EVENT_LIFEBLOOM                 = 1,
-    EVENT_NOURISH                   = 2,
-    EVENT_REGROWTH                  = 3,
-    EVENT_REJUVENATION              = 4,
-    EVENT_TRANQUILITY               = 5,
-    EVENT_HEAL_BARKSKIN             = 6,
-    EVENT_THORNS                    = 7,
-    EVENT_NATURE_GRASP              = 8,
+    // 德鲁伊治疗事件
+    EVENT_LIFEBLOOM                 = 1,    ///< 生命绽放事件
+    EVENT_NOURISH                   = 2,    ///< 滋养事件
+    EVENT_REGROWTH                  = 3,    ///< 愈合事件
+    EVENT_REJUVENATION              = 4,    ///< 回春术事件
+    EVENT_TRANQUILITY               = 5,    ///< 宁静事件
+    EVENT_HEAL_BARKSKIN             = 6,    ///< 树皮术事件（治疗）
+    EVENT_THORNS                    = 7,    ///< 荆棘术事件
+    EVENT_NATURE_GRASP              = 8,    ///< 自然之握事件
 
-    // shaman healer
-    EVENT_HEALING_WAVE              = 1,
-    EVENT_RIPTIDE                   = 2,
-    EVENT_SPIRIT_CLEANSE            = 3,
-    EVENT_HEAL_BLOODLUST_HEROISM    = 4,
-    EVENT_HEX                       = 5,
-    EVENT_EARTH_SHIELD              = 6,
-    EVENT_HEAL_EARTH_SHOCK          = 7,
+    // 萨满治疗事件
+    EVENT_HEALING_WAVE              = 1,    ///< 治疗波事件
+    EVENT_RIPTIDE                   = 2,    ///< 激流事件
+    EVENT_SPIRIT_CLEANSE            = 3,    ///< 净化灵魂事件
+    EVENT_HEAL_BLOODLUST_HEROISM    = 4,    ///< 英勇/嗜血事件（治疗）
+    EVENT_HEX                       = 5,    ///< 妖术事件
+    EVENT_EARTH_SHIELD              = 6,    ///< 大地之盾事件
+    EVENT_HEAL_EARTH_SHOCK          = 7,    ///< 大地震击事件（治疗）
 
-    // paladin healer
-    EVENT_HAND_OF_FREEDOM           = 1,
-    EVENT_HEAL_DIVINE_SHIELD        = 2,
-    EVENT_CLEANSE                   = 3,
-    EVENT_FLASH_OF_LIGHT            = 4,
-    EVENT_HOLY_LIGHT                = 5,
-    EVENT_HOLY_SHOCK                = 6,
-    EVENT_HEAL_HAND_OF_PROTECTION   = 7,
-    EVENT_HAMMER_OF_JUSTICE         = 8,
+    // 圣骑士治疗事件
+    EVENT_HAND_OF_FREEDOM           = 1,    ///< 自由之手事件
+    EVENT_HEAL_DIVINE_SHIELD        = 2,    ///< 圣盾术事件（治疗）
+    EVENT_CLEANSE                   = 3,    ///< 清洁术事件
+    EVENT_FLASH_OF_LIGHT            = 4,    ///< 圣光闪现事件
+    EVENT_HOLY_LIGHT                = 5,    ///< 圣光术事件
+    EVENT_HOLY_SHOCK                = 6,    ///< 神圣震击事件
+    EVENT_HEAL_HAND_OF_PROTECTION   = 7,    ///< 保护之手事件（治疗）
+    EVENT_HAMMER_OF_JUSTICE         = 8,    ///< 制裁之锤事件
 
-    // priest healer
-    EVENT_RENEW                     = 1,
-    EVENT_SHIELD                    = 2,
-    EVENT_FLASH_HEAL                = 3,
-    EVENT_HEAL_DISPEL               = 4,
-    EVENT_HEAL_PSYCHIC_SCREAM       = 5,
-    EVENT_MANA_BURN                 = 6,
-    EVENT_PENANCE                   = 7,
+    // 牧师治疗事件
+    EVENT_RENEW                     = 1,    ///< 恢复事件
+    EVENT_SHIELD                    = 2,    ///< 真言术：盾事件
+    EVENT_FLASH_HEAL                = 3,    ///< 快速治疗事件
+    EVENT_HEAL_DISPEL               = 4,    ///< 驱散魔法事件（治疗）
+    EVENT_HEAL_PSYCHIC_SCREAM       = 5,    ///< 心灵尖啸事件（治疗）
+    EVENT_MANA_BURN                 = 6,    ///< 法力燃烧事件
+    EVENT_PENANCE                   = 7,    ///< 苦修事件
 
-    // priest dps
-    EVENT_SILENCE                   = 1,
-    EVENT_VAMPIRIC_TOUCH            = 2,
-    EVENT_SW_PAIN                   = 3,
-    EVENT_MIND_BLAST                = 4,
-    EVENT_HORROR                    = 5,
-    EVENT_DISPERSION                = 6,
-    EVENT_DPS_DISPEL                = 7,
-    EVENT_DPS_PSYCHIC_SCREAM        = 8,
+    // 暗影牧师事件
+    EVENT_SILENCE                   = 1,    ///< 沉默事件
+    EVENT_VAMPIRIC_TOUCH            = 2,    ///< 吸血鬼之触事件
+    EVENT_SW_PAIN                   = 3,    ///< 暗言术：痛事件
+    EVENT_MIND_BLAST                = 4,    ///< 心灵震爆事件
+    EVENT_HORROR                    = 5,    ///< 惊骇事件
+    EVENT_DISPERSION                = 6,    ///< 消散事件
+    EVENT_DPS_DISPEL                = 7,    ///< 驱散魔法事件（DPS）
+    EVENT_DPS_PSYCHIC_SCREAM        = 8,    ///< 心灵尖啸事件（DPS）
 
-    // warlock
-    EVENT_HELLFIRE                  = 1,
-    EVENT_CORRUPTION                = 2,
-    EVENT_CURSE_OF_AGONY            = 3,
-    EVENT_CURSE_OF_EXHAUSTION       = 4,
-    EVENT_FEAR                      = 5,
-    EVENT_SEARING_PAIN              = 6,
-    EVENT_UNSTABLE_AFFLICTION       = 7,
+    // 术士事件
+    EVENT_HELLFIRE                  = 1,    ///< 地狱火事件
+    EVENT_CORRUPTION                = 2,    ///< 腐蚀术事件
+    EVENT_CURSE_OF_AGONY            = 3,    ///< 痛苦诅咒事件
+    EVENT_CURSE_OF_EXHAUSTION       = 4,    ///< 疲劳诅咒事件
+    EVENT_FEAR                      = 5,    ///< 恐惧术事件
+    EVENT_SEARING_PAIN              = 6,    ///< 灼热之痛事件
+    EVENT_UNSTABLE_AFFLICTION       = 7,    ///< 不稳定的痛苦事件
 
-    // mage
-    EVENT_ARCANE_BARRAGE            = 1,
-    EVENT_ARCANE_BLAST              = 2,
-    EVENT_ARCANE_EXPLOSION          = 3,
-    EVENT_BLINK                     = 4,
-    EVENT_COUNTERSPELL              = 5,
-    EVENT_FROST_NOVA                = 6,
-    EVENT_ICE_BLOCK                 = 7,
-    EVENT_POLYMORPH                 = 8,
+    // 法师事件
+    EVENT_ARCANE_BARRAGE            = 1,    ///< 奥术弹幕事件
+    EVENT_ARCANE_BLAST              = 2,    ///< 奥术冲击事件
+    EVENT_ARCANE_EXPLOSION          = 3,    ///< 奥术爆炸事件
+    EVENT_BLINK                     = 4,    ///< 闪烁事件
+    EVENT_COUNTERSPELL              = 5,    ///< 法术反制事件
+    EVENT_FROST_NOVA                = 6,    ///< 冰霜新星事件
+    EVENT_ICE_BLOCK                 = 7,    ///< 寒冰屏障事件
+    EVENT_POLYMORPH                 = 8,    ///< 变形术事件
 
-    // hunter
-    EVENT_AIMED_SHOT                = 1,
-    EVENT_DETERRENCE                = 2,
-    EVENT_DISENGAGE                 = 3,
-    EVENT_EXPLOSIVE_SHOT            = 4,
-    EVENT_FROST_TRAP                = 5,
-    EVENT_STEADY_SHOT               = 6,
-    EVENT_WING_CLIP                 = 7,
-    EVENT_WYVERN_STING              = 8,
+    // 猎人事件
+    EVENT_AIMED_SHOT                = 1,    ///< 瞄准射击事件
+    EVENT_DETERRENCE                = 2,    ///< 威慑事件
+    EVENT_DISENGAGE                 = 3,    ///< 脱离事件
+    EVENT_EXPLOSIVE_SHOT            = 4,    ///< 爆炸射击事件
+    EVENT_FROST_TRAP                = 5,    ///< 冰霜陷阱事件
+    EVENT_STEADY_SHOT               = 6,    ///< 稳固射击事件
+    EVENT_WING_CLIP                 = 7,    ///< 摔绊事件
+    EVENT_WYVERN_STING              = 8,    ///< 翼龙钉刺事件
 
-    // druid dps
-    EVENT_CYCLONE                   = 1,
-    EVENT_ENTANGLING_ROOTS          = 2,
-    EVENT_FAERIE_FIRE               = 3,
-    EVENT_FORCE_OF_NATURE           = 4,
-    EVENT_INSECT_SWARM              = 5,
-    EVENT_MOONFIRE                  = 6,
-    EVENT_STARFIRE                  = 7,
-    EVENT_DPS_BARKSKIN              = 8,
+    // 平衡德鲁伊事件
+    EVENT_CYCLONE                   = 1,    ///< 飓风事件
+    EVENT_ENTANGLING_ROOTS          = 2,    ///< 纠缠之根事件
+    EVENT_FAERIE_FIRE               = 3,    ///< 精灵之火事件
+    EVENT_FORCE_OF_NATURE           = 4,    ///< 自然之力事件
+    EVENT_INSECT_SWARM              = 5,    ///< 虫群事件
+    EVENT_MOONFIRE                  = 6,    ///< 月火术事件
+    EVENT_STARFIRE                  = 7,    ///< 星火术事件
+    EVENT_DPS_BARKSKIN              = 8,    ///< 树皮术事件（DPS）
 
-    // warrior
-    EVENT_BLADESTORM                = 1,
-    EVENT_INTIMIDATING_SHOUT        = 2,
-    EVENT_MORTAL_STRIKE             = 3,
-    EVENT_WARR_CHARGE               = 4,
-    EVENT_DISARM                    = 5,
-    EVENT_OVERPOWER                 = 6,
-    EVENT_SUNDER_ARMOR              = 7,
-    EVENT_SHATTERING_THROW          = 8,
-    EVENT_RETALIATION               = 9,
+    // 战士事件
+    EVENT_BLADESTORM                = 1,    ///< 剑刃风暴事件
+    EVENT_INTIMIDATING_SHOUT        = 2,    ///< 恐惧吼叫事件
+    EVENT_MORTAL_STRIKE             = 3,    ///< 致死打击事件
+    EVENT_WARR_CHARGE               = 4,    ///< 冲锋事件
+    EVENT_DISARM                    = 5,    ///< 缴械事件
+    EVENT_OVERPOWER                 = 6,    ///< 压制事件
+    EVENT_SUNDER_ARMOR              = 7,    ///< 破甲攻击事件
+    EVENT_SHATTERING_THROW          = 8,    ///< 碎裂投掷事件
+    EVENT_RETALIATION               = 9,    ///< 反击事件
 
-    // death knight
-    EVENT_CHAINS_OF_ICE             = 1,
-    EVENT_DEATH_COIL                = 2,
-    EVENT_DEATH_GRIP                = 3,
-    EVENT_FROST_STRIKE              = 4,
-    EVENT_ICEBOUND_FORTITUDE        = 5,
-    EVENT_ICY_TOUCH                 = 6,
-    EVENT_STRANGULATE               = 7,
+    // 死亡骑士事件
+    EVENT_CHAINS_OF_ICE             = 1,    ///< 寒冰锁链事件
+    EVENT_DEATH_COIL                = 2,    ///< 死亡缠绕事件
+    EVENT_DEATH_GRIP                = 3,    ///< 死亡之握事件
+    EVENT_FROST_STRIKE              = 4,    ///< 冰霜打击事件
+    EVENT_ICEBOUND_FORTITUDE        = 5,    ///< 冰固之力事件
+    EVENT_ICY_TOUCH                 = 6,    ///< 冰霜之触事件
+    EVENT_STRANGULATE               = 7,    ///< 绞杀事件
 
-    // rogue
-    EVENT_FAN_OF_KNIVES             = 1,
-    EVENT_BLIND                     = 2,
-    EVENT_CLOAK                     = 3,
-    EVENT_BLADE_FLURRY              = 4,
-    EVENT_SHADOWSTEP                = 5,
-    EVENT_HEMORRHAGE                = 6,
-    EVENT_EVISCERATE                = 7,
-    EVENT_WOUND_POISON              = 8,
+    // 盗贼事件
+    EVENT_FAN_OF_KNIVES             = 1,    ///< 刀扇事件
+    EVENT_BLIND                     = 2,    ///< 致盲事件
+    EVENT_CLOAK                     = 3,    ///< 暗影斗篷事件
+    EVENT_BLADE_FLURRY              = 4,    ///< 剑刃乱舞事件
+    EVENT_SHADOWSTEP                = 5,    ///< 暗影步事件
+    EVENT_HEMORRHAGE                = 6,    ///< 出血事件
+    EVENT_EVISCERATE                = 7,    ///< 剔骨事件
+    EVENT_WOUND_POISON              = 8,    ///< 致伤毒药事件
 
-    // shaman dps
-    EVENT_DPS_EARTH_SHOCK           = 1,
-    EVENT_LAVA_LASH                 = 2,
-    EVENT_STORMSTRIKE               = 3,
-    EVENT_DPS_BLOODLUST_HEROISM     = 4,
-    EVENT_DEPLOY_TOTEM              = 5,
-    EVENT_WINDFURY                  = 6,
+    // 增强萨满事件
+    EVENT_DPS_EARTH_SHOCK           = 1,    ///< 大地震击事件（DPS）
+    EVENT_LAVA_LASH                 = 2,    ///< 熔岩猛击事件
+    EVENT_STORMSTRIKE               = 3,    ///< 风暴打击事件
+    EVENT_DPS_BLOODLUST_HEROISM     = 4,    ///< 英勇/嗜血事件（DPS）
+    EVENT_DEPLOY_TOTEM              = 5,    ///< 部署图腾事件
+    EVENT_WINDFURY                  = 6,    ///< 风怒武器事件
 
-    // paladin dps
-    EVENT_AVENGING_WRATH            = 1,
-    EVENT_CRUSADER_STRIKE           = 2,
-    EVENT_DIVINE_STORM              = 3,
-    EVENT_HAMMER_OF_JUSTICE_RET     = 4,
-    EVENT_JUDGEMENT_OF_COMMAND      = 5,
-    EVENT_REPENTANCE                = 6,
-    EVENT_DPS_HAND_OF_PROTECTION    = 7,
-    EVENT_DPS_DIVINE_SHIELD         = 8,
+    // 惩戒圣骑士事件
+    EVENT_AVENGING_WRATH            = 1,    ///< 复仇之怒事件
+    EVENT_CRUSADER_STRIKE           = 2,    ///< 十字军打击事件
+    EVENT_DIVINE_STORM              = 3,    ///< 神圣风暴事件
+    EVENT_HAMMER_OF_JUSTICE_RET     = 4,    ///< 制裁之锤事件（惩戒）
+    EVENT_JUDGEMENT_OF_COMMAND      = 5,    ///< 命令审判事件
+    EVENT_REPENTANCE                = 6,    ///< 忏悔事件
+    EVENT_DPS_HAND_OF_PROTECTION    = 7,    ///< 保护之手事件（DPS）
+    EVENT_DPS_DIVINE_SHIELD         = 8,    ///< 圣盾术事件（DPS）
 
-    // warlock pet
-    EVENT_DEVOUR_MAGIC              = 1,
-    EVENT_SPELL_LOCK                = 2
+    // 术士宠物事件
+    EVENT_DEVOUR_MAGIC              = 1,    ///< 吞噬魔法事件
+    EVENT_SPELL_LOCK                = 2     ///< 法术封锁事件
 };
 
+/**
+ * @brief 阵营勇士位置数组
+ *
+ * 定义勇士的初始刷新位置和最终跳跃位置
+ * - 索引 0-4：部落勇士初始位置（联盟玩家时使用）
+ * - 索引 5-9：联盟勇士初始位置（部落玩家时使用）
+ * - 索引 10-19：勇士最终位置（跳跃目标点）
+ */
 Position const FactionChampionLoc[] =
 {
-    { 514.231f, 105.569f, 418.234f, 0 },               //  0 - Horde Initial Pos 0
-    { 508.334f, 115.377f, 418.234f, 0 },               //  1 - Horde Initial Pos 1
-    { 506.454f, 126.291f, 418.234f, 0 },               //  2 - Horde Initial Pos 2
-    { 506.243f, 106.596f, 421.592f, 0 },               //  3 - Horde Initial Pos 3
-    { 499.885f, 117.717f, 421.557f, 0 },               //  4 - Horde Initial Pos 4
+    { 514.231f, 105.569f, 418.234f, 0 },               //  0 - 部落初始位置 0
+    { 508.334f, 115.377f, 418.234f, 0 },               //  1 - 部落初始位置 1
+    { 506.454f, 126.291f, 418.234f, 0 },               //  2 - 部落初始位置 2
+    { 506.243f, 106.596f, 421.592f, 0 },               //  3 - 部落初始位置 3
+    { 499.885f, 117.717f, 421.557f, 0 },               //  4 - 部落初始位置 4
 
-    { 613.127f, 100.443f, 419.74f, 0 },                //  5 - Ally Initial Pos 0
-    { 621.126f, 128.042f, 418.231f, 0 },               //  6 - Ally Initial Pos 1
-    { 618.829f, 113.606f, 418.232f, 0 },               //  7 - Ally Initial Pos 2
-    { 625.845f, 112.914f, 421.575f, 0 },               //  8 - Ally Initial Pos 3
-    { 615.566f, 109.653f, 418.234f, 0 },               //  9 - Ally Initial Pos 4
+    { 613.127f, 100.443f, 419.74f, 0 },                //  5 - 联盟初始位置 0
+    { 621.126f, 128.042f, 418.231f, 0 },               //  6 - 联盟初始位置 1
+    { 618.829f, 113.606f, 418.232f, 0 },               //  7 - 联盟初始位置 2
+    { 625.845f, 112.914f, 421.575f, 0 },               //  8 - 联盟初始位置 3
+    { 615.566f, 109.653f, 418.234f, 0 },               //  9 - 联盟初始位置 4
 
-    { 535.469f, 113.012f, 394.66f, 0 },                // 10 - Horde Final Pos 0
-    { 526.417f, 137.465f, 394.749f, 0 },               // 11 - Horde Final Pos 1
-    { 528.108f, 111.057f, 395.289f, 0 },               // 12 - Horde Final Pos 2
-    { 519.92f, 134.285f, 395.289f, 0 },                // 13 - Horde Final Pos 3
-    { 533.648f, 119.148f, 394.646f, 0 },               // 14 - Horde Final Pos 4
-    { 531.399f, 125.63f, 394.708f, 0 },                // 15 - Horde Final Pos 5
-    { 528.958f, 131.47f, 394.73f, 0 },                 // 16 - Horde Final Pos 6
-    { 526.309f, 116.667f, 394.833f, 0 },               // 17 - Horde Final Pos 7
-    { 524.238f, 122.411f, 394.819f, 0 },               // 18 - Horde Final Pos 8
-    { 521.901f, 128.488f, 394.832f, 0 }                // 19 - Horde Final Pos 9
+    { 535.469f, 113.012f, 394.66f, 0 },                // 10 - 最终位置 0
+    { 526.417f, 137.465f, 394.749f, 0 },               // 11 - 最终位置 1
+    { 528.108f, 111.057f, 395.289f, 0 },               // 12 - 最终位置 2
+    { 519.92f, 134.285f, 395.289f, 0 },                // 13 - 最终位置 3
+    { 533.648f, 119.148f, 394.646f, 0 },               // 14 - 最终位置 4
+    { 531.399f, 125.63f, 394.708f, 0 },                // 15 - 最终位置 5
+    { 528.958f, 131.47f, 394.73f, 0 },                 // 16 - 最终位置 6
+    { 526.309f, 116.667f, 394.833f, 0 },               // 17 - 最终位置 7
+    { 524.238f, 122.411f, 394.819f, 0 },               // 18 - 最终位置 8
+    { 521.901f, 128.488f, 394.832f, 0 }                // 19 - 最终位置 9
 };
 
+/**
+ * @struct boss_toc_champion_controller
+ * @brief 阵营勇士控制器 AI
+ *
+ * 管理阵营勇士战斗的整体流程：
+ * - 根据玩家阵营选择对立阵营的勇士
+ * - 召唤勇士并分配位置
+ * - 跟踪战斗状态（击杀数、失败数等）
+ * - 当所有勇士被击杀或团队团灭时结束战斗
+ *
+ * 工作流程：
+ * 1. 根据团队规模选择勇士数量（10人：5个，25人：10个）
+ * 2. 随机选择职业组合（必须有 2-3 个治疗）
+ * 3. 召唤勇士并跳跃到战斗位置
+ * 4. 激活勇士进入战斗
+ * 5. 跟踪战斗进度
+ */
 struct boss_toc_champion_controller : public BossAI
 {
+    /**
+     * @brief 构造函数
+     * @param creature 生物对象指针
+     */
     boss_toc_champion_controller(Creature* creature) : BossAI(creature, DATA_FACTION_CRUSADERS)
     {
         Initialize();
     }
 
+    /**
+     * @brief 初始化成员变量
+     *
+     * 重置计数器和状态标志
+     */
     void Initialize()
     {
-        _championsNotStarted = 0;
-        _championsFailed = 0;
-        _championsKilled = 0;
-        _inProgress = false;
+        _championsNotStarted = 0;       ///< 未开始的勇士数量
+        _championsFailed = 0;           ///< 失败（团灭）的勇士数量
+        _championsKilled = 0;           ///< 被击杀的勇士数量
+        _inProgress = false;            ///< 战斗是否正在进行
     }
 
+    /**
+     * @brief 重置状态
+     *
+     * 初始化所有计数器
+     */
     void Reset() override
     {
         Initialize();
     }
 
+    /**
+     * @brief 召唤生物事件（空实现）
+     * @param summon 召唤的生物（未使用）
+     *
+     * 覆盖基类方法，避免自动添加到召唤列表
+     */
     void JustSummoned(Creature* /*summon*/) override { }
 
     std::vector<uint32> SelectChampions(Team playerTeam)

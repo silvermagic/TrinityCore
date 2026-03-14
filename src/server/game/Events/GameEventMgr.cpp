@@ -15,6 +15,20 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file GameEventMgr.cpp
+ * @brief 游戏事件管理器实现文件
+ *
+ * 本文件实现了GameEventMgr类，负责管理游戏中的所有周期性事件和节日活动。
+ * 主要功能包括：
+ * - 从数据库加载事件数据
+ * - 根据时间或条件自动启动和停止事件
+ * - 生成和移除事件相关的生物、游戏对象
+ * - 更新事件相关的任务、商人和装备
+ * - 处理世界事件的条件检测和进度追踪
+ * - 发送世界状态更新给玩家
+ */
+
 #include "GameEventMgr.h"
 #include "BattlegroundMgr.h"
 #include "CreatureAI.h"
@@ -31,12 +45,29 @@
 #include "World.h"
 #include "WorldStatePackets.h"
 
+/**
+ * @brief 获取GameEventMgr单例实例
+ * @return GameEventMgr单例指针
+ *
+ * 使用静态局部变量实现线程安全的单例模式
+ */
 GameEventMgr* GameEventMgr::instance()
 {
     static GameEventMgr instance;
     return &instance;
 }
 
+/**
+ * @brief 检查单个游戏事件是否应该激活
+ * @param entry 事件ID
+ * @return 如果事件应该激活返回true
+ *
+ * 根据事件状态和当前时间判断事件是否应该处于活动状态：
+ * - GAMEEVENT_NORMAL: 根据时间范围和周期判断
+ * - GAMEEVENT_WORLD_CONDITIONS/NEXTPHASE: 总是返回true
+ * - GAMEEVENT_WORLD_FINISHED/INTERNAL: 总是返回false
+ * - GAMEEVENT_WORLD_INACTIVE: 检查前置事件是否完成
+ */
 bool GameEventMgr::CheckOneGameEvent(uint16 entry) const
 {
     switch (mGameEvent[entry].state)
@@ -45,45 +76,61 @@ bool GameEventMgr::CheckOneGameEvent(uint16 entry) const
         case GAMEEVENT_NORMAL:
         {
             time_t currenttime = GameTime::GetGameTime();
-            // Get the event information
+            // 检查事件是否在时间范围内，并且当前周期未结束
+            // 条件1: 当前时间在事件的总时间范围内
+            // 条件2: 当前时间在事件周期的活动期内
             return mGameEvent[entry].start < currenttime
                 && currenttime < mGameEvent[entry].end
                 && (currenttime - mGameEvent[entry].start) % (mGameEvent[entry].occurence * MINUTE) < mGameEvent[entry].length * MINUTE;
         }
-        // if the state is conditions or nextphase, then the event should be active
+        // 如果状态是CONDITIONS或NEXTPHASE，则事件应该处于活动状态
         case GAMEEVENT_WORLD_CONDITIONS:
         case GAMEEVENT_WORLD_NEXTPHASE:
             return true;
-        // finished world events are inactive
+        // 已完成的世界事件和内部事件不活动
         case GAMEEVENT_WORLD_FINISHED:
         case GAMEEVENT_INTERNAL:
             return false;
-        // if inactive world event, check the prerequisite events
+        // 如果是非活动的世界事件，检查前置事件是否完成
         case GAMEEVENT_WORLD_INACTIVE:
         {
             time_t currenttime = GameTime::GetGameTime();
+            // 遍历所有前置事件
             for (std::set<uint16>::const_iterator itr = mGameEvent[entry].prerequisite_events.begin(); itr != mGameEvent[entry].prerequisite_events.end(); ++itr)
             {
-                if ((mGameEvent[*itr].state != GAMEEVENT_WORLD_NEXTPHASE && mGameEvent[*itr].state != GAMEEVENT_WORLD_FINISHED) ||   // if prereq not in nextphase or finished state, then can't start this one
-                    mGameEvent[*itr].nextstart > currenttime)               // if not in nextphase state for long enough, can't start this one
+                // 如果前置事件不在NEXTPHASE或FINISHED状态，或者还没到开始时间，则无法启动本事件
+                if ((mGameEvent[*itr].state != GAMEEVENT_WORLD_NEXTPHASE && mGameEvent[*itr].state != GAMEEVENT_WORLD_FINISHED) ||   // 如果前置事件不在下一阶段或已完成状态，则无法启动本事件
+                    mGameEvent[*itr].nextstart > currenttime)               // 如果下一阶段状态持续时间不够长，无法启动本事件
                     return false;
             }
-            // all prerequisite events are met
-            // but if there are no prerequisites, this can be only activated through gm command
+            // 所有前置事件条件都满足
+            // 但如果没有前置事件，这只能通过GM命令激活
             return !(mGameEvent[entry].prerequisite_events.empty());
         }
     }
 }
 
+/**
+ * @brief 计算下次检查事件的时间
+ * @param entry 事件ID
+ * @return 距离下次检查的秒数
+ *
+ * 根据事件状态和时间计算多久后需要再次检查该事件：
+ * - NEXTPHASE/FINISHED状态：返回到下一阶段开始的时间
+ * - CONDITIONS状态：返回检查条件的时间间隔
+ * - 已过期事件：返回最大延迟
+ * - 未开始事件：返回到开始的时间
+ * - 活动中事件：返回到结束或下一周期开始的时间
+ */
 uint32 GameEventMgr::NextCheck(uint16 entry) const
 {
     time_t currenttime = GameTime::GetGameTime();
 
-    // for NEXTPHASE state world events, return the delay to start the next event, so the followup event will be checked correctly
+    // 对于NEXTPHASE状态的世界事件，返回启动下一事件的延迟，以便正确检查后续事件
     if ((mGameEvent[entry].state == GAMEEVENT_WORLD_NEXTPHASE || mGameEvent[entry].state == GAMEEVENT_WORLD_FINISHED) && mGameEvent[entry].nextstart >= currenttime)
         return uint32(mGameEvent[entry].nextstart - currenttime);
 
-    // for CONDITIONS state world events, return the length of the wait period, so if the conditions are met, this check will be called again to set the timer as NEXTPHASE event
+    // 对于CONDITIONS状态的世界事件，返回等待周期的长度，这样如果条件满足，会再次调用此检查设置为NEXTPHASE事件
     if (mGameEvent[entry].state == GAMEEVENT_WORLD_CONDITIONS)
     {
         if (mGameEvent[entry].length)
@@ -92,28 +139,34 @@ uint32 GameEventMgr::NextCheck(uint16 entry) const
             return max_ge_check_delay;
     }
 
-    // outdated event: we return max
+    // 过期事件：返回最大延迟
     if (currenttime > mGameEvent[entry].end)
         return max_ge_check_delay;
 
-    // never started event, we return delay before start
+    // 从未启动的事件，返回到启动前的延迟
     if (mGameEvent[entry].start > currenttime)
         return uint32(mGameEvent[entry].start - currenttime);
 
     uint32 delay;
-    // in event, we return the end of it
+    // 如果在事件周期内，返回到结束的延迟
     if ((((currenttime - mGameEvent[entry].start) % (mGameEvent[entry].occurence * 60)) < (mGameEvent[entry].length * 60)))
-        // we return the delay before it ends
+        // 返回到事件结束前的延迟
         delay = (mGameEvent[entry].length * MINUTE) - ((currenttime - mGameEvent[entry].start) % (mGameEvent[entry].occurence * MINUTE));
-    else                                                    // not in window, we return the delay before next start
+    else                                                    // 不在活动窗口内，返回到下次启动前的延迟
         delay = (mGameEvent[entry].occurence * MINUTE) - ((currenttime - mGameEvent[entry].start) % (mGameEvent[entry].occurence * MINUTE));
-    // In case the end is before next check
+    // 如果结束时间在下次检查之前
     if (mGameEvent[entry].end  < time_t(currenttime + delay))
         return uint32(mGameEvent[entry].end - currenttime);
     else
         return delay;
 }
 
+/**
+ * @brief 启动内部事件
+ * @param event_id 事件ID
+ *
+ * 启动GAMEEVENT_INTERNAL类型的事件，这类事件不会通过Update自动处理
+ */
 void GameEventMgr::StartInternalEvent(uint16 event_id)
 {
     if (event_id < 1 || event_id >= mGameEvent.size())
@@ -122,19 +175,34 @@ void GameEventMgr::StartInternalEvent(uint16 event_id)
     if (!mGameEvent[event_id].isValid())
         return;
 
+    // 如果事件已经活动，直接返回
     if (m_ActiveEvents.find(event_id) != m_ActiveEvents.end())
         return;
 
     StartEvent(event_id);
 }
 
+/**
+ * @brief 启动指定事件
+ * @param event_id 事件ID
+ * @param overwrite 是否覆盖时间检查，默认false
+ * @return 如果世界事件的条件立即满足返回true
+ *
+ * 手动启动事件，会生成事件相关的生物、游戏对象，更新任务等。
+ * 当overwrite=true时，会调整事件时间到当前时间并强制启动。
+ * 对于世界事件，会检查条件是否满足并更新状态。
+ */
 bool GameEventMgr::StartEvent(uint16 event_id, bool overwrite)
 {
     GameEventData &data = mGameEvent[event_id];
+    // 处理普通事件和内部事件
     if (data.state == GAMEEVENT_NORMAL || data.state == GAMEEVENT_INTERNAL)
     {
+        // 添加到活动事件列表
         AddActiveEvent(event_id);
+        // 应用事件（生成生物、游戏对象等）
         ApplyNewEvent(event_id);
+        // 如果是覆盖模式，调整事件时间
         if (overwrite)
         {
             mGameEvent[event_id].start = GameTime::GetGameTime();
@@ -142,28 +210,29 @@ bool GameEventMgr::StartEvent(uint16 event_id, bool overwrite)
                 data.end = data.start + data.length;
         }
 
-        // When event is started, set its worldstate to current time
+        // 事件启动时，设置世界状态为当前时间
         sWorld->setWorldState(event_id, GameTime::GetGameTime());
         return false;
     }
     else
     {
+        // 处理世界事件
         if (data.state == GAMEEVENT_WORLD_INACTIVE)
-            // set to conditions phase
+            // 设置为条件检查阶段
             data.state = GAMEEVENT_WORLD_CONDITIONS;
 
-        // add to active events
+        // 添加到活动事件列表
         AddActiveEvent(event_id);
-        // add spawns
+        // 应用事件（生成生物、游戏对象等）
         ApplyNewEvent(event_id);
 
-        // check if can go to next state
+        // 检查是否可以进入下一状态
         bool conditions_met = CheckOneGameEventConditions(event_id);
-        // save to db
+        // 保存到数据库
         SaveWorldEventStateToDB(event_id);
-        // force game event update to set the update timer if conditions were met from a command
-        // this update is needed to possibly start events dependent on the started one
-        // or to scedule another update where the next event will be started
+        // 如果通过命令满足条件，强制游戏事件更新以设置更新定时器
+        // 此更新用于启动依赖于此事件的其他事件
+        // 或安排下次更新以启动下一事件
         if (overwrite && conditions_met)
             sWorld->ForceGameEventUpdate();
 
@@ -171,35 +240,48 @@ bool GameEventMgr::StartEvent(uint16 event_id, bool overwrite)
     }
 }
 
+/**
+ * @brief 停止指定事件
+ * @param event_id 事件ID
+ * @param overwrite 是否覆盖时间检查，默认false
+ *
+ * 手动停止事件，会移除事件相关的生物、游戏对象，恢复原始状态。
+ * 当overwrite=true时，会更新事件时间防止自动重启。
+ */
 void GameEventMgr::StopEvent(uint16 event_id, bool overwrite)
 {
     GameEventData &data = mGameEvent[event_id];
     bool serverwide_evt = data.state != GAMEEVENT_NORMAL && data.state != GAMEEVENT_INTERNAL;
 
+    // 从活动事件列表移除
     RemoveActiveEvent(event_id);
+    // 取消应用事件（移除生物、游戏对象等）
     UnApplyEvent(event_id);
 
-    // When event is stopped, clean up its worldstate
+    // 事件停止时，清理世界状态
     sWorld->setWorldState(event_id, 0);
 
+    // 如果是覆盖模式且不是世界事件
     if (overwrite && !serverwide_evt)
     {
+        // 设置开始时间为过去，防止自动重启
         data.start = GameTime::GetGameTime() - data.length * MINUTE;
         if (data.end <= data.start)
             data.end = data.start + data.length;
     }
     else if (serverwide_evt)
     {
-        // if finished world event, then only gm command can stop it
+        // 如果是已完成的世界事件，只有GM命令可以停止
         if (overwrite || data.state != GAMEEVENT_WORLD_FINISHED)
         {
-            // reset conditions
+            // 重置条件
             data.nextstart = 0;
             data.state = GAMEEVENT_WORLD_INACTIVE;
             GameEventConditionMap::iterator itr;
             for (itr = data.conditions.begin(); itr != data.conditions.end(); ++itr)
                 itr->second.done = 0;
 
+            // 从数据库删除条件保存数据
             CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
             CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_ALL_GAME_EVENT_CONDITION_SAVE);
             stmt->setUInt8(0, uint8(event_id));
@@ -214,6 +296,20 @@ void GameEventMgr::StopEvent(uint16 event_id, bool overwrite)
     }
 }
 
+/**
+ * @brief 从数据库加载所有事件数据
+ *
+ * 加载事件定义、生物、游戏对象、任务、商人、模型装备等数据。
+ * 调用时机：世界服务器启动时。
+ * 加载顺序：
+ * 1. 事件基础定义（game_event表）
+ * 2. 事件前置条件（game_event_prerequisite表）
+ * 3. 事件完成条件（game_event_condition表）
+ * 4. 任务到事件条件映射（game_event_quest_condition表）
+ * 5. 事件条件保存数据（game_event_condition_save表）
+ * 6. 事件保存数据（game_event_save表）
+ * 7. 事件关联的生物、游戏对象、池、任务等
+ */
 void GameEventMgr::LoadFromDB()
 {
     {
@@ -233,6 +329,7 @@ void GameEventMgr::LoadFromDB()
             Field* fields = result->Fetch();
 
             uint8 event_id = fields[0].GetUInt8();
+            // 事件ID为0是保留的，不能使用
             if (event_id == 0)
             {
                 TC_LOG_ERROR("sql.sql", "`game_event`: game event entry 0 is reserved and can't be used.");
@@ -993,13 +1090,23 @@ void GameEventMgr::LoadHolidayDates()
     TC_LOG_INFO("server.loading", ">> Loaded {} holiday dates in {} ms", count, GetMSTimeDiffToNow(oldMSTime));
 }
 
+/**
+ * @brief 获取生物的NPC标志
+ * @param cr 生物对象指针
+ * @return NPC标志位掩码
+ *
+ * 根据活动事件计算生物应该显示的NPC标志。
+ * 遍历所有活动事件，累积该生物的事件相关NPC标志。
+ */
 uint32 GameEventMgr::GetNPCFlag(Creature* cr)
 {
     uint32 mask = 0;
     ObjectGuid::LowType guid = cr->GetSpawnId();
 
+    // 遍历所有活动事件
     for (ActiveEvents::iterator e_itr = m_ActiveEvents.begin(); e_itr != m_ActiveEvents.end(); ++e_itr)
     {
+        // 检查该事件是否有此生物的NPC标志变更
         for (NPCFlagList::iterator itr = mGameEventNPCFlags[*e_itr].begin();
             itr != mGameEventNPCFlags[*e_itr].end();
             ++ itr)
@@ -1010,6 +1117,13 @@ uint32 GameEventMgr::GetNPCFlag(Creature* cr)
     return mask;
 }
 
+/**
+ * @brief 初始化游戏事件管理器
+ *
+ * 重置所有事件状态，清空活动事件列表。
+ * 查询数据库获取最大事件ID，并调整容器大小。
+ * 调用时机：世界服务器启动时
+ */
 void GameEventMgr::Initialize()
 {
     QueryResult result = WorldDatabase.Query("SELECT MAX(eventEntry) FROM game_event");
@@ -1019,9 +1133,10 @@ void GameEventMgr::Initialize()
 
         uint32 maxEventId = fields[0].GetUInt8();
 
-        // Id starts with 1 and vector with 0, thus increment
+        // ID从1开始，vector从0开始，因此需要增加
         maxEventId++;
 
+        // 调整各容器大小，* 2 - 1是为了支持负数事件ID（用于移除生物/对象）
         mGameEvent.resize(maxEventId);
         mGameEventCreatureGuids.resize(maxEventId * 2 - 1);
         mGameEventGameobjectGuids.resize(maxEventId * 2 - 1);
@@ -1035,7 +1150,14 @@ void GameEventMgr::Initialize()
     }
 }
 
-uint32 GameEventMgr::StartSystem()                           // return the next event delay in ms
+/**
+ * @brief 启动系统事件
+ * @return 下次更新时间（秒）
+ *
+ * 初始化并启动所有应该活动的事件。
+ * 清空活动事件列表，执行更新，设置系统初始化标志。
+ */
+uint32 GameEventMgr::StartSystem()
 {
     m_ActiveEvents.clear();
     uint32 delay = Update();
@@ -1043,6 +1165,12 @@ uint32 GameEventMgr::StartSystem()                           // return the next 
     return delay;
 }
 
+/**
+ * @brief 启动竞技场赛季事件
+ *
+ * 根据数据库配置启动当前竞技场赛季对应的事件。
+ * 从配置中读取当前赛季ID，查找对应的事件并启动。
+ */
 void GameEventMgr::StartArenaSeason()
 {
     uint8 season = sWorld->getIntConfig(CONFIG_ARENA_SEASON_ID);
@@ -1068,135 +1196,192 @@ void GameEventMgr::StartArenaSeason()
 
 }
 
-uint32 GameEventMgr::Update()                               // return the next event delay in ms
+/**
+ * @brief 更新所有游戏事件
+ * @return 距离下次需要更新的时间（秒）
+ *
+ * 检查所有事件的状态，启动应该启动的事件，停止应该停止的事件。
+ * 调用时机：世界服务器每次更新循环中。
+ * 性能注意：会遍历所有事件，但不频繁调用。
+ *
+ * 处理流程：
+ * 1. 遍历所有事件，检查每个事件是否应该活动
+ * 2. 对于世界事件，检查是否需要更新状态
+ * 3. 收集需要激活和停用的事件列表
+ * 4. 先激活事件，再停用事件（避免客户端闪烁）
+ * 5. 计算下次更新的延迟时间
+ */
+uint32 GameEventMgr::Update()
 {
     time_t currenttime = GameTime::GetGameTime();
-    uint32 nextEventDelay = max_ge_check_delay;             // 1 day
+    uint32 nextEventDelay = max_ge_check_delay;             // 默认1天
     uint32 calcDelay;
     std::set<uint16> activate, deactivate;
     for (uint16 itr = 1; itr < mGameEvent.size(); ++itr)
     {
-        // must do the activating first, and after that the deactivating
-        // so first queue it
-        //TC_LOG_ERROR("sql.sql", "Checking event {}", itr);
+        // 必须先处理激活，再处理停用
+        // 所以先排队
         if (CheckOneGameEvent(itr))
         {
-            // if the world event is in NEXTPHASE state, and the time has passed to finish this event, then do so
+            // 如果世界事件在NEXTPHASE状态，并且时间已过，则完成此事件
             if (mGameEvent[itr].state == GAMEEVENT_WORLD_NEXTPHASE && mGameEvent[itr].nextstart <= currenttime)
             {
-                // set this event to finished, null the nextstart time
+                // 设置此事件为完成状态，清空nextstart时间
                 mGameEvent[itr].state = GAMEEVENT_WORLD_FINISHED;
                 mGameEvent[itr].nextstart = 0;
-                // save the state of this gameevent
+                // 保存此游戏事件的状态
                 SaveWorldEventStateToDB(itr);
-                // queue for deactivation
+                // 加入停用队列
                 if (IsActiveEvent(itr))
                     deactivate.insert(itr);
-                // go to next event, this no longer needs an event update timer
+                // 跳到下一个事件，此事件不再需要事件更新定时器
                 continue;
             }
             else if (mGameEvent[itr].state == GAMEEVENT_WORLD_CONDITIONS && CheckOneGameEventConditions(itr))
-                // changed, save to DB the gameevent state, will be updated in next update cycle
+                // 状态已改变，保存到数据库，将在下次更新周期中更新
                 SaveWorldEventStateToDB(itr);
 
-            //TC_LOG_DEBUG("misc", "GameEvent {} is active", itr->first);
-            // queue for activation
+            // 加入激活队列
             if (!IsActiveEvent(itr))
                 activate.insert(itr);
         }
         else
         {
-            // If event is inactive, periodically clean up its worldstate
+            // 如果事件非活动，定期清理其世界状态
             sWorld->setWorldState(itr, 0);
-            //TC_LOG_DEBUG("misc", "GameEvent {} is not active", itr->first);
             if (IsActiveEvent(itr))
                 deactivate.insert(itr);
             else
             {
+                // 系统初始化时，生成负ID的生物/对象（移除列表）
                 if (!isSystemInit)
                 {
                     int16 event_nid = (-1) * (itr);
-                    // spawn all negative ones for this event
+                    // 为此事件生成所有负ID的生物/对象
                     GameEventSpawn(event_nid);
                 }
             }
         }
+        // 计算此事件的下次检查延迟
         calcDelay = NextCheck(itr);
         if (calcDelay < nextEventDelay)
             nextEventDelay = calcDelay;
     }
-    // now activate the queue
-    // a now activated event can contain a spawn of a to-be-deactivated one
-    // following the activate - deactivate order, deactivating the first event later will leave the spawn in (wont disappear then reappear clientside)
+    // 现在激活队列
+    // 一个现在激活的事件可能包含一个将要停用的事件的生物生成
+    // 按照激活-停用顺序，稍后停用第一个事件将保留生成（不会在客户端消失然后重新出现）
     for (std::set<uint16>::iterator itr = activate.begin(); itr != activate.end(); ++itr)
-        // start the event
-        // returns true the started event completed
-        // in that case, initiate next update in 1 second
+        // 启动事件
+        // 如果启动的事件立即完成，返回true
+        // 在这种情况下，在1秒后发起下次更新
         if (StartEvent(*itr))
             nextEventDelay = 0;
+    // 停用队列
     for (std::set<uint16>::iterator itr = deactivate.begin(); itr != deactivate.end(); ++itr)
         StopEvent(*itr);
     TC_LOG_INFO("gameevent", "Next game event check in {} seconds.", nextEventDelay + 1);
-    return (nextEventDelay + 1) * IN_MILLISECONDS;           // Add 1 second to be sure event has started/stopped at next call
+    return (nextEventDelay + 1) * IN_MILLISECONDS;           // 加1秒确保下次调用时事件已启动/停止
 }
 
+/**
+ * @brief 取消应用事件
+ * @param event_id 事件ID
+ *
+ * 执行事件停止时的所有清理操作：
+ * 1. 运行SmartAI脚本（GAME_EVENT_END）
+ * 2. 移除事件关联的生物和游戏对象
+ * 3. 恢复负ID事件关联的生物和游戏对象
+ * 4. 恢复原始装备和模型
+ * 5. 移除事件任务
+ * 6. 更新世界状态
+ * 7. 恢复NPC标志
+ * 8. 移除商人物品
+ * 9. 更新战场设置
+ */
 void GameEventMgr::UnApplyEvent(uint16 event_id)
 {
     TC_LOG_INFO("gameevent", "GameEvent {} \"{}\" removed.", event_id, mGameEvent[event_id].description);
-    //! Run SAI scripts with SMART_EVENT_GAME_EVENT_END
+    //! 运行SmartAI脚本，触发SMART_EVENT_GAME_EVENT_END事件
     RunSmartAIScripts(event_id, false);
-    // un-spawn positive event tagged objects
+    // 移除正ID事件标记的对象
     GameEventUnspawn(event_id);
-    // spawn negative event tagget objects
+    // 生成负ID事件标记的对象
     int16 event_nid = (-1) * event_id;
     GameEventSpawn(event_nid);
-    // restore equipment or model
+    // 恢复装备或模型
     ChangeEquipOrModel(event_id, false);
-    // Remove quests that are events only to non event npc
+    // 从非事件NPC移除仅限事件的任务
     UpdateEventQuests(event_id, false);
+    // 更新世界状态
     UpdateWorldStates(event_id, false);
-    // update npcflags in this event
+    // 更新此事件中的NPC标志
     UpdateEventNPCFlags(event_id);
-    // remove vendor items
+    // 移除商人物品
     UpdateEventNPCVendor(event_id, false);
-    // update bg holiday
+    // 更新战场假日设置
     UpdateBattlegroundSettings();
 }
 
+/**
+ * @brief 应用新事件
+ * @param event_id 事件ID
+ *
+ * 执行事件启动时的所有操作：
+ * 1. 发送事件公告（如果配置允许）
+ * 2. 生成事件关联的生物和游戏对象
+ * 3. 移除负ID事件关联的生物和游戏对象
+ * 4. 更改装备和模型
+ * 5. 添加事件任务
+ * 6. 更新世界状态
+ * 7. 更新NPC标志
+ * 8. 添加商人物品
+ * 9. 更新战场设置
+ * 10. 运行SmartAI脚本（GAME_EVENT_START）
+ * 11. 重置季节性任务（如果是首次启动）
+ */
 void GameEventMgr::ApplyNewEvent(uint16 event_id)
 {
+    // 检查是否需要发送公告
     uint8 announce = mGameEvent[event_id].announce;
     if (announce == 1 || (announce == 2 && sWorld->getBoolConfig(CONFIG_EVENT_ANNOUNCE)))
         sWorld->SendWorldText(LANG_EVENTMESSAGE, mGameEvent[event_id].description.c_str());
 
     TC_LOG_INFO("gameevent", "GameEvent {} \"{}\" started.", event_id, mGameEvent[event_id].description);
 
-    // spawn positive event tagget objects
+    // 生成正ID事件标记的对象
     GameEventSpawn(event_id);
-    // un-spawn negative event tagged objects
+    // 移除负ID事件标记的对象
     int16 event_nid = (-1) * event_id;
     GameEventUnspawn(event_nid);
-    // Change equipement or model
+    // 更改装备或模型
     ChangeEquipOrModel(event_id, true);
-    // Add quests that are events only to non event npc
+    // 向非事件NPC添加仅限事件的任务
     UpdateEventQuests(event_id, true);
+    // 更新世界状态
     UpdateWorldStates(event_id, true);
-    // update npcflags in this event
+    // 更新此事件中的NPC标志
     UpdateEventNPCFlags(event_id);
-    // add vendor items
+    // 添加商人物品
     UpdateEventNPCVendor(event_id, true);
-    // update bg holiday
+    // 更新战场假日设置
     UpdateBattlegroundSettings();
 
-    //! Run SAI scripts with SMART_EVENT_GAME_EVENT_START
+    //! 运行SmartAI脚本，触发SMART_EVENT_GAME_EVENT_START事件
     RunSmartAIScripts(event_id, true);
 
-    // If event's worldstate is 0, it means the event hasn't been started yet. In that case, reset seasonal quests.
-    // When event ends (if it expires or if it's stopped via commands) worldstate will be set to 0 again, ready for another seasonal quest reset.
+    // 如果事件的世界状态为0，表示事件尚未启动过。在这种情况下，重置季节性任务。
+    // 当事件结束（过期或通过命令停止）时，世界状态将再次设置为0，准备进行下一次季节性任务重置。
     if (sWorld->getWorldState(event_id) == 0)
         sWorld->ResetEventSeasonalQuests(event_id);
 }
 
+/**
+ * @brief 更新事件NPC标志
+ * @param event_id 事件ID
+ *
+ * 更新事件关联NPC的交互标志。
+ * 通知地图上的所有玩家更新NPC标志。
+ */
 void GameEventMgr::UpdateEventNPCFlags(uint16 event_id)
 {
     std::unordered_map<uint32, std::unordered_set<ObjectGuid::LowType>> creaturesByMap;
@@ -1230,29 +1415,62 @@ void GameEventMgr::UpdateEventNPCFlags(uint16 event_id)
     }
 }
 
+/**
+ * @brief 更新战场设置
+ *
+ * 根据活动的节日事件更新战场假日设置。
+ * 重置所有假日状态，然后根据当前活动事件重新设置。
+ */
 void GameEventMgr::UpdateBattlegroundSettings()
 {
     sBattlegroundMgr->ResetHolidays();
 
+    // 为每个活动事件设置战场假日
     for (uint16 activeEventId : m_ActiveEvents)
         sBattlegroundMgr->SetHolidayActive(mGameEventBattlegroundHolidays[activeEventId]);
 }
 
+/**
+ * @brief 更新事件NPC商人
+ * @param event_id 事件ID
+ * @param activate true表示激活，false表示停用
+ *
+ * 添加或移除事件期间NPC出售的物品。
+ */
 void GameEventMgr::UpdateEventNPCVendor(uint16 event_id, bool activate)
 {
     for (NPCVendorList::iterator itr = mGameEventVendors[event_id].begin(); itr != mGameEventVendors[event_id].end(); ++itr)
     {
         if (activate)
+            // 添加商人物品
             sObjectMgr->AddVendorItem(itr->entry, itr->item, itr->maxcount, itr->incrtime, itr->ExtendedCost, false);
         else
+            // 移除商人物品
             sObjectMgr->RemoveVendorItem(itr->entry, itr->item, false);
     }
 }
 
+/**
+ * @brief 生成事件生物和游戏对象
+ * @param event_id 事件ID（可以为负数，表示移除列表）
+ *
+ * 生成事件关联的所有生物和游戏对象。
+ * 对于已加载的地图格子，立即生成实体；
+ * 对于未加载的格子，添加到格子数据中等待加载时生成。
+ *
+ * 处理流程：
+ * 1. 计算内部事件ID（支持负ID）
+ * 2. 遍历所有关联的生物GUID
+ * 3. 将生物添加到格子并生成（如果格子已加载）
+ * 4. 遍历所有关联的游戏对象GUID
+ * 5. 将游戏对象添加到格子并生成（如果格子已加载）
+ */
 void GameEventMgr::GameEventSpawn(int16 event_id)
 {
+    // 计算内部事件ID，支持负ID
     int32 internal_event_id = mGameEvent.size() + event_id - 1;
 
+    // 边界检查
     if (internal_event_id < 0 || internal_event_id >= int32(mGameEventCreatureGuids.size()))
     {
         TC_LOG_ERROR("gameevent", "GameEventMgr::GameEventSpawn attempted access to out of range mGameEventCreatureGuids element {} (size: {}).",
@@ -1260,27 +1478,28 @@ void GameEventMgr::GameEventSpawn(int16 event_id)
         return;
     }
 
+    // 遍历所有关联的生物GUID
     for (GuidList::iterator itr = mGameEventCreatureGuids[internal_event_id].begin(); itr != mGameEventCreatureGuids[internal_event_id].end(); ++itr)
     {
-        // Add to correct cell
+        // 添加到正确的格子
         if (CreatureData const* data = sObjectMgr->GetCreatureData(*itr))
         {
             sObjectMgr->AddCreatureToGrid(*itr, data);
 
-            // Spawn if necessary (loaded grids only)
+            // 如果需要则生成（仅已加载的格子）
             Map* map = sMapMgr->CreateBaseMap(data->mapId);
             map->RemoveRespawnTime(SPAWN_TYPE_CREATURE, *itr);
-            // We use spawn coords to spawn
+            // 使用生成坐标生成
             if (!map->Instanceable() && map->IsGridLoaded(data->spawnPoint))
             {
                 Creature* creature = new Creature();
-                //TC_LOG_DEBUG("misc", "Spawning creature {}", *itr);
                 if (!creature->LoadFromDB(*itr, map, true, false))
                     delete creature;
             }
         }
     }
 
+    // 边界检查
     if (internal_event_id >= int32(mGameEventGameobjectGuids.size()))
     {
         TC_LOG_ERROR("gameevent", "GameEventMgr::GameEventSpawn attempted access to out of range mGameEventGameobjectGuids element {} (size: {}).",
@@ -1288,22 +1507,22 @@ void GameEventMgr::GameEventSpawn(int16 event_id)
         return;
     }
 
+    // 遍历所有关联的游戏对象GUID
     for (GuidList::iterator itr = mGameEventGameobjectGuids[internal_event_id].begin(); itr != mGameEventGameobjectGuids[internal_event_id].end(); ++itr)
     {
-        // Add to correct cell
+        // 添加到正确的格子
         if (GameObjectData const* data = sObjectMgr->GetGameObjectData(*itr))
         {
             sObjectMgr->AddGameobjectToGrid(*itr, data);
-            // Spawn if necessary (loaded grids only)
-            // this base map checked as non-instanced and then only existed
+            // 如果需要则生成（仅已加载的格子）
+            // 此基础地图检查为非实例化且仅存在的
             Map* map = sMapMgr->CreateBaseMap(data->mapId);
             map->RemoveRespawnTime(SPAWN_TYPE_GAMEOBJECT, *itr);
-            // We use current coords to unspawn, not spawn coords since creature can have changed grid
+            // 使用当前坐标取消生成，而不是生成坐标，因为生物可能已更改格子
             if (!map->Instanceable() && map->IsGridLoaded(data->spawnPoint))
             {
                 GameObject* pGameobject = new GameObject;
-                //TC_LOG_DEBUG("misc", "Spawning gameobject {}", *itr);
-                /// @todo find out when it is add to map
+                /// @todo 找出何时添加到地图
                 if (!pGameobject->LoadFromDB(*itr, map, false))
                     delete pGameobject;
                 else
@@ -1326,10 +1545,28 @@ void GameEventMgr::GameEventSpawn(int16 event_id)
         sPoolMgr->SpawnPool(*itr);
 }
 
+/**
+ * @brief 移除事件生物和游戏对象
+ * @param event_id 事件ID（可以为负数，表示移除列表）
+ *
+ * 移除事件关联的所有生物和游戏对象。
+ * 如果生物/游戏对象被其他活动事件使用，则不会移除。
+ *
+ * 处理流程：
+ * 1. 计算内部事件ID（支持负ID）
+ * 2. 遍历所有关联的生物GUID
+ * 3. 检查是否被其他事件使用，如果是则跳过
+ * 4. 从格子移除并删除所有地图上的生物实例
+ * 5. 遍历所有关联的游戏对象GUID
+ * 6. 同样处理游戏对象的移除
+ * 7. 处理池的取消生成
+ */
 void GameEventMgr::GameEventUnspawn(int16 event_id)
 {
+    // 计算内部事件ID，支持负ID
     int32 internal_event_id = mGameEvent.size() + event_id - 1;
 
+    // 边界检查
     if (internal_event_id < 0 || internal_event_id >= int32(mGameEventCreatureGuids.size()))
     {
         TC_LOG_ERROR("gameevent", "GameEventMgr::GameEventUnspawn attempted access to out of range mGameEventCreatureGuids element {} (size: {}).",
@@ -1337,16 +1574,18 @@ void GameEventMgr::GameEventUnspawn(int16 event_id)
         return;
     }
 
+    // 遍历所有关联的生物GUID
     for (GuidList::iterator itr = mGameEventCreatureGuids[internal_event_id].begin(); itr != mGameEventCreatureGuids[internal_event_id].end(); ++itr)
     {
-        // check if it's needed by another event, if so, don't remove
+        // 检查是否被其他事件需要，如果是，不移除
         if (event_id > 0 && hasCreatureActiveEventExcept(*itr, event_id))
             continue;
-        // Remove the creature from grid
+        // 从格子移除生物
         if (CreatureData const* data = sObjectMgr->GetCreatureData(*itr))
         {
             sObjectMgr->RemoveCreatureFromGrid(*itr, data);
 
+            // 从所有地图移除生物
             sMapMgr->DoForAllMapsWithMapId(data->mapId, [&itr](Map* map)
             {
                 map->RemoveRespawnTime(SPAWN_TYPE_CREATURE, *itr);
@@ -1361,6 +1600,7 @@ void GameEventMgr::GameEventUnspawn(int16 event_id)
         }
     }
 
+    // 边界检查
     if (internal_event_id < 0 || internal_event_id >= int32(mGameEventGameobjectGuids.size()))
     {
         TC_LOG_ERROR("gameevent", "GameEventMgr::GameEventUnspawn attempted access to out of range mGameEventGameobjectGuids element {} (size: {}).",
@@ -1368,16 +1608,18 @@ void GameEventMgr::GameEventUnspawn(int16 event_id)
         return;
     }
 
+    // 遍历所有关联的游戏对象GUID
     for (GuidList::iterator itr = mGameEventGameobjectGuids[internal_event_id].begin(); itr != mGameEventGameobjectGuids[internal_event_id].end(); ++itr)
     {
-        // check if it's needed by another event, if so, don't remove
+        // 检查是否被其他事件需要，如果是，不移除
         if (event_id >0 && hasGameObjectActiveEventExcept(*itr, event_id))
             continue;
-        // Remove the gameobject from grid
+        // 从格子移除游戏对象
         if (GameObjectData const* data = sObjectMgr->GetGameObjectData(*itr))
         {
             sObjectMgr->RemoveGameobjectFromGrid(*itr, data);
 
+            // 从所有地图移除游戏对象
             sMapMgr->DoForAllMapsWithMapId(data->mapId, [&itr](Map* map)
             {
                 map->RemoveRespawnTime(SPAWN_TYPE_GAMEOBJECT, *itr);
@@ -1391,28 +1633,39 @@ void GameEventMgr::GameEventUnspawn(int16 event_id)
             });
         }
     }
+    // 边界检查
     if (internal_event_id < 0 || internal_event_id >= int32(mGameEventPoolIds.size()))
     {
         TC_LOG_ERROR("gameevent", "GameEventMgr::GameEventUnspawn attempted access to out of range mGameEventPoolIds element {} (size: {}).", internal_event_id, mGameEventPoolIds.size());
         return;
     }
 
+    // 取消生成池
     for (IdList::iterator itr = mGameEventPoolIds[internal_event_id].begin(); itr != mGameEventPoolIds[internal_event_id].end(); ++itr)
     {
         sPoolMgr->DespawnPool(*itr, true);
     }
 }
 
+/**
+ * @brief 更改装备或模型
+ * @param event_id 事件ID
+ * @param activate true表示激活事件，false表示停止事件
+ *
+ * 切换事件关联生物的模型和装备。
+ * 当activate=true时，应用事件的模型和装备；
+ * 当activate=false时，恢复原始模型和装备。
+ */
 void GameEventMgr::ChangeEquipOrModel(int16 event_id, bool activate)
 {
     for (ModelEquipList::iterator itr = mGameEventModelEquip[event_id].begin(); itr != mGameEventModelEquip[event_id].end(); ++itr)
     {
-        // Remove the creature from grid
+        // 从格子移除生物
         CreatureData const* data = sObjectMgr->GetCreatureData(itr->first);
         if (!data)
             continue;
 
-        // Update if spawned
+        // 如果已生成则更新
         sMapMgr->DoForAllMapsWithMapId(data->mapId, [&itr, activate](Map* map)
 
         {
@@ -1422,6 +1675,7 @@ void GameEventMgr::ChangeEquipOrModel(int16 event_id, bool activate)
                 Creature* creature = itr2->second;
                 if (activate)
                 {
+                    // 保存原始装备ID和模型ID
                     itr->second.equipement_id_prev = creature->GetCurrentEquipmentId();
                     itr->second.modelid_prev = creature->GetDisplayId();
                     creature->LoadEquipment(itr->second.equipment_id, true);
@@ -1461,6 +1715,14 @@ void GameEventMgr::ChangeEquipOrModel(int16 event_id, bool activate)
     }
 }
 
+/**
+ * @brief 检查是否有其他活动事件也包含该生物任务
+ * @param quest_id 任务ID
+ * @param event_id 要排除的事件ID
+ * @return 如果有其他活动事件包含此任务返回true
+ *
+ * 用于在停止事件时判断任务是否可以安全移除
+ */
 bool GameEventMgr::hasCreatureQuestActiveEventExcept(uint32 quest_id, uint16 event_id)
 {
     for (ActiveEvents::iterator e_itr = m_ActiveEvents.begin(); e_itr != m_ActiveEvents.end(); ++e_itr)
@@ -1475,6 +1737,14 @@ bool GameEventMgr::hasCreatureQuestActiveEventExcept(uint32 quest_id, uint16 eve
     return false;
 }
 
+/**
+ * @brief 检查是否有其他活动事件也包含该游戏对象任务
+ * @param quest_id 任务ID
+ * @param event_id 要排除的事件ID
+ * @return 如果有其他活动事件包含此任务返回true
+ *
+ * 用于在停止事件时判断任务是否可以安全移除
+ */
 bool GameEventMgr::hasGameObjectQuestActiveEventExcept(uint32 quest_id, uint16 event_id)
 {
     for (ActiveEvents::iterator e_itr = m_ActiveEvents.begin(); e_itr != m_ActiveEvents.end(); ++e_itr)
@@ -1488,6 +1758,15 @@ bool GameEventMgr::hasGameObjectQuestActiveEventExcept(uint32 quest_id, uint16 e
     }
     return false;
 }
+
+/**
+ * @brief 检查是否有其他活动事件也包含该生物
+ * @param creature_id 生物GUID低32位
+ * @param event_id 要排除的事件ID
+ * @return 如果有其他活动事件包含此生物返回true
+ *
+ * 用于在停止事件时判断生物是否可以安全移除
+ */
 bool GameEventMgr::hasCreatureActiveEventExcept(ObjectGuid::LowType creature_id, uint16 event_id)
 {
     for (ActiveEvents::iterator e_itr = m_ActiveEvents.begin(); e_itr != m_ActiveEvents.end(); ++e_itr)
@@ -1504,6 +1783,15 @@ bool GameEventMgr::hasCreatureActiveEventExcept(ObjectGuid::LowType creature_id,
     }
     return false;
 }
+
+/**
+ * @brief 检查是否有其他活动事件也包含该游戏对象
+ * @param go_id 游戏对象GUID低32位
+ * @param event_id 要排除的事件ID
+ * @return 如果有其他活动事件包含此游戏对象返回true
+ *
+ * 用于在停止事件时判断游戏对象是否可以安全移除
+ */
 bool GameEventMgr::hasGameObjectActiveEventExcept(ObjectGuid::LowType go_id, uint16 event_id)
 {
     for (ActiveEvents::iterator e_itr = m_ActiveEvents.begin(); e_itr != m_ActiveEvents.end(); ++e_itr)
@@ -1521,19 +1809,30 @@ bool GameEventMgr::hasGameObjectActiveEventExcept(ObjectGuid::LowType go_id, uin
     return false;
 }
 
+/**
+ * @brief 更新事件任务
+ * @param event_id 事件ID
+ * @param activate true表示激活任务，false表示停用任务
+ *
+ * 激活或停用事件关联的任务。
+ * 当activate=true时，添加任务关系；
+ * 当activate=false时，移除任务关系（如果没有其他活动事件使用）。
+ */
 void GameEventMgr::UpdateEventQuests(uint16 event_id, bool activate)
 {
     QuestRelList::iterator itr;
+    // 处理生物任务
     for (itr = mGameEventCreatureQuests[event_id].begin(); itr != mGameEventCreatureQuests[event_id].end(); ++itr)
     {
         QuestRelations* CreatureQuestMap = sObjectMgr->GetCreatureQuestRelationMapHACK();
-        if (activate)                                           // Add the pair(id, quest) to the multimap
+        if (activate)                                           // 添加(id, quest)对到multimap
             CreatureQuestMap->insert(QuestRelations::value_type(itr->first, itr->second));
         else
         {
+            // 如果没有其他活动事件使用此任务，则移除
             if (!hasCreatureQuestActiveEventExcept(itr->second, event_id))
             {
-                // Remove the pair(id, quest) from the multimap
+                // 从multimap移除(id, quest)对
                 QuestRelations::iterator qitr = CreatureQuestMap->find(itr->first);
                 if (qitr == CreatureQuestMap->end())
                     continue;
@@ -1549,16 +1848,18 @@ void GameEventMgr::UpdateEventQuests(uint16 event_id, bool activate)
             }
         }
     }
+    // 处理游戏对象任务
     for (itr = mGameEventGameObjectQuests[event_id].begin(); itr != mGameEventGameObjectQuests[event_id].end(); ++itr)
     {
         QuestRelations* GameObjectQuestMap = sObjectMgr->GetGOQuestRelationMapHACK();
-        if (activate)                                           // Add the pair(id, quest) to the multimap
+        if (activate)                                           // 添加(id, quest)对到multimap
             GameObjectQuestMap->insert(QuestRelations::value_type(itr->first, itr->second));
         else
         {
+            // 如果没有其他活动事件使用此任务，则移除
             if (!hasGameObjectQuestActiveEventExcept(itr->second, event_id))
             {
-                // Remove the pair(id, quest) from the multimap
+                // 从multimap移除(id, quest)对
                 QuestRelations::iterator qitr = GameObjectQuestMap->find(itr->first);
                 if (qitr == GameObjectQuestMap->end())
                     continue;
@@ -1567,8 +1868,8 @@ void GameEventMgr::UpdateEventQuests(uint16 event_id, bool activate)
                 {
                     if (qitr->second == itr->second)
                     {
-                        GameObjectQuestMap->erase(qitr);        // iterator is now no more valid
-                        break;                                  // but we can exit loop since the element is found
+                        GameObjectQuestMap->erase(qitr);        // 迭代器现在不再有效
+                        break;                                  // 但我们可以退出循环，因为元素已找到
                     }
                 }
             }
@@ -1576,9 +1877,18 @@ void GameEventMgr::UpdateEventQuests(uint16 event_id, bool activate)
     }
 }
 
+/**
+ * @brief 更新世界状态
+ * @param event_id 事件ID
+ * @param Activate true表示激活，false表示停用
+ *
+ * 更新事件相关的世界状态变量。
+ * 如果事件关联节日，更新对应战场假日的世界状态。
+ */
 void GameEventMgr::UpdateWorldStates(uint16 event_id, bool Activate)
 {
     GameEventData const& event = mGameEvent[event_id];
+    // 如果事件关联节日，更新战场假日世界状态
     if (event.holiday_id != HOLIDAY_NONE)
     {
         BattlegroundTypeId bgTypeId = BattlegroundMgr::WeekendHolidayIdToBGType(event.holiday_id);
@@ -1587,6 +1897,7 @@ void GameEventMgr::UpdateWorldStates(uint16 event_id, bool Activate)
             BattlemasterListEntry const* bl = sBattlemasterListStore.LookupEntry(bgTypeId);
             if (bl && bl->HolidayWorldState)
             {
+                // 发送世界状态更新包给所有玩家
                 WorldPackets::WorldState::UpdateWorldState worldstate;
                 worldstate.VariableID = bl->HolidayWorldState;
                 worldstate.Value = Activate ? 1 : 0;
@@ -1596,37 +1907,53 @@ void GameEventMgr::UpdateWorldStates(uint16 event_id, bool Activate)
     }
 }
 
+/**
+ * @brief 默认构造函数
+ */
 GameEventMgr::GameEventMgr() : isSystemInit(false) { }
 
+/**
+ * @brief 处理任务完成
+ * @param quest_id 任务ID
+ *
+ * 当玩家完成与世界事件相关的任务时调用，更新事件条件进度。
+ * 调用时机：玩家完成任务时。
+ *
+ * 处理流程：
+ * 1. 查找任务到事件条件的映射
+ * 2. 更新事件条件进度
+ * 3. 发送世界状态更新
+ * 4. 保存进度到数据库
+ */
 void GameEventMgr::HandleQuestComplete(uint32 quest_id)
 {
-    // translate the quest to event and condition
+    // 查找任务到事件和条件的映射
     QuestIdToEventConditionMap::iterator itr = mQuestToEventConditions.find(quest_id);
-    // quest is registered
+    // 任务已注册
     if (itr != mQuestToEventConditions.end())
     {
         uint16 event_id = itr->second.event_id;
         uint32 condition = itr->second.condition;
         float num = itr->second.num;
 
-        // the event is not active, so return, don't increase condition finishes
+        // 如果事件不活动，直接返回，不增加条件完成数
         if (!IsActiveEvent(event_id))
             return;
-        // not in correct phase, return
+        // 不在正确的阶段，直接返回
         if (mGameEvent[event_id].state != GAMEEVENT_WORLD_CONDITIONS)
             return;
         GameEventConditionMap::iterator citr = mGameEvent[event_id].conditions.find(condition);
-        // condition is registered
+        // 条件已注册
         if (citr != mGameEvent[event_id].conditions.end())
         {
-            // increase the done count, only if less then the req
+            // 增加完成计数，仅当小于要求数时
             if (citr->second.done < citr->second.reqNum)
             {
                 citr->second.done += num;
-                // check max limit
+                // 检查最大限制
                 if (citr->second.done > citr->second.reqNum)
                     citr->second.done = citr->second.reqNum;
-                // save the change to db
+                // 保存更改到数据库
                 CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
 
                 CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_GAME_EVENT_CONDITION_SAVE);
@@ -1640,12 +1967,12 @@ void GameEventMgr::HandleQuestComplete(uint32 quest_id)
                 stmt->setFloat(2, citr->second.done);
                 trans->Append(stmt);
                 CharacterDatabase.CommitTransaction(trans);
-                // check if all conditions are met, if so, update the event state
+                // 检查所有条件是否满足，如果是，更新事件状态
                 if (CheckOneGameEventConditions(event_id))
                 {
-                    // changed, save to DB the gameevent state
+                    // 已改变，保存游戏事件状态到数据库
                     SaveWorldEventStateToDB(event_id);
-                    // force update events to set timer
+                    // 强制更新事件以设置定时器
                     sWorld->ForceGameEventUpdate();
                 }
             }
@@ -1653,15 +1980,23 @@ void GameEventMgr::HandleQuestComplete(uint32 quest_id)
     }
 }
 
+/**
+ * @brief 检查单个游戏事件的条件
+ * @param event_id 事件ID
+ * @return 如果所有条件都满足返回true
+ *
+ * 检查事件的所有条件是否满足。
+ * 如果所有条件都满足，将事件状态设置为NEXTPHASE并设置下一阶段开始时间。
+ */
 bool GameEventMgr::CheckOneGameEventConditions(uint16 event_id)
 {
     for (GameEventConditionMap::const_iterator itr = mGameEvent[event_id].conditions.begin(); itr != mGameEvent[event_id].conditions.end(); ++itr)
         if (itr->second.done < itr->second.reqNum)
-            // return false if a condition doesn't match
+            // 如果条件不匹配则返回false
             return false;
-    // set the phase
+    // 设置阶段
     mGameEvent[event_id].state = GAMEEVENT_WORLD_NEXTPHASE;
-    // set the followup events' start time
+    // 设置后续事件的开始时间
     if (!mGameEvent[event_id].nextstart)
     {
         time_t currenttime = GameTime::GetGameTime();
@@ -1670,6 +2005,12 @@ bool GameEventMgr::CheckOneGameEventConditions(uint16 event_id)
     return true;
 }
 
+/**
+ * @brief 保存世界事件状态到数据库
+ * @param event_id 事件ID
+ *
+ * 将世界事件的状态和进度保存到game_event表。
+ */
 void GameEventMgr::SaveWorldEventStateToDB(uint16 event_id)
 {
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
@@ -1686,23 +2027,43 @@ void GameEventMgr::SaveWorldEventStateToDB(uint16 event_id)
     CharacterDatabase.CommitTransaction(trans);
 }
 
+/**
+ * @brief 发送世界状态更新给玩家
+ * @param player 玩家对象指针
+ * @param event_id 事件ID
+ *
+ * 将事件相关的世界状态变量发送给指定玩家。
+ * 发送条件完成进度和要求值。
+ */
 void GameEventMgr::SendWorldStateUpdate(Player* player, uint16 event_id)
 {
     GameEventConditionMap::const_iterator itr;
     for (itr = mGameEvent[event_id].conditions.begin(); itr !=mGameEvent[event_id].conditions.end(); ++itr)
     {
+        // 发送完成进度
         if (itr->second.done_world_state)
             player->SendUpdateWorldState(itr->second.done_world_state, (uint32)(itr->second.done));
+        // 发送要求数值
         if (itr->second.max_world_state)
             player->SendUpdateWorldState(itr->second.max_world_state, (uint32)(itr->second.reqNum));
     }
 }
 
+/**
+ * @class GameEventAIHookWorker
+ * @brief 游戏事件AI钩子工作者
+ *
+ * 用于遍历地图上的所有生物和游戏对象，触发事件相关的AI脚本
+ */
 class GameEventAIHookWorker
 {
 public:
     GameEventAIHookWorker(uint16 eventId, bool activate) : _eventId(eventId), _activate(activate) { }
 
+    /**
+     * @brief 访问生物容器
+     * @param creatureMap 生物映射
+     */
     void Visit(std::unordered_map<ObjectGuid, Creature*>& creatureMap)
     {
         for (auto const& p : creatureMap)
@@ -1710,6 +2071,10 @@ public:
                 p.second->AI()->OnGameEvent(_activate, _eventId);
     }
 
+    /**
+     * @brief 访问游戏对象容器
+     * @param gameObjectMap 游戏对象映射
+     */
     void Visit(std::unordered_map<ObjectGuid, GameObject*>& gameObjectMap)
     {
         for (auto const& p : gameObjectMap)
@@ -1717,18 +2082,29 @@ public:
                 p.second->AI()->OnGameEvent(_activate, _eventId);
     }
 
+    /**
+     * @brief 模板访问函数（空实现）
+     */
     template<class T>
     void Visit(std::unordered_map<ObjectGuid, T*>&) { }
 
 private:
-    uint16 _eventId;
-    bool _activate;
+    uint16 _eventId;    // 事件ID
+    bool _activate;     // 激活标志
 };
 
+/**
+ * @brief 运行SmartAI脚本
+ * @param event_id 事件ID
+ * @param activate true表示事件开始，false表示事件结束
+ *
+ * 触发SMART_EVENT_GAME_EVENT_START或SMART_EVENT_GAME_EVENT_END事件。
+ * 遍历所有地图上的所有生物和游戏对象，调用它们的AI处理事件。
+ */
 void GameEventMgr::RunSmartAIScripts(uint16 event_id, bool activate)
 {
-    //! Iterate over every supported source type (creature and gameobject)
-    //! Not entirely sure how this will affect units in non-loaded grids.
+    //! 遍历每个支持的源类型（生物和游戏对象）
+    //! 不完全确定这将如何影响非加载格子中的单位
     sMapMgr->DoForAllMaps([event_id, activate](Map* map)
     {
         GameEventAIHookWorker worker(event_id, activate);
@@ -1737,9 +2113,16 @@ void GameEventMgr::RunSmartAIScripts(uint16 event_id, bool activate)
     });
 }
 
+/**
+ * @brief 设置节日事件时间
+ * @param event 事件数据引用
+ *
+ * 根据节日DBC数据计算并设置事件的开始和结束时间。
+ * 处理节日的多阶段和重复周期。
+ */
 void GameEventMgr::SetHolidayEventTime(GameEventData& event)
 {
-    if (!event.holidayStage) // Ignore holiday
+    if (!event.holidayStage) // 忽略节日
         return;
 
     HolidaysEntry const* holiday = sHolidaysStore.LookupEntry(event.holiday_id);
@@ -1749,27 +2132,31 @@ void GameEventMgr::SetHolidayEventTime(GameEventData& event)
         return;
     }
 
+    // 计算阶段索引和长度
     uint8 stageIndex = event.holidayStage - 1;
     event.length = holiday->Duration[stageIndex] * HOUR / MINUTE;
 
+    // 计算阶段偏移时间
     time_t stageOffset = 0;
     for (uint8 i = 0; i < stageIndex; ++i)
         stageOffset += holiday->Duration[i] * HOUR;
 
+    // 根据节日类型设置周期
     switch (holiday->CalendarFilterType)
     {
-        case -1: // Yearly
-            event.occurence = YEAR / MINUTE; // Not all too useful
+        case -1: // 每年
+            event.occurence = YEAR / MINUTE; // 不太有用
             break;
-        case 0: // Weekly
+        case 0: // 每周
             event.occurence = WEEK / MINUTE;
             break;
-        case 1: // Defined dates only (Darkmoon Faire)
+        case 1: // 仅定义日期（暗月马戏团）
             break;
-        case 2: // Only used for looping events (Call to Arms)
+        case 2: // 仅用于循环事件（战吼）
             break;
     }
 
+    // 处理循环事件
     if (holiday->Looping)
     {
         event.occurence = 0;
@@ -1777,9 +2164,11 @@ void GameEventMgr::SetHolidayEventTime(GameEventData& event)
             event.occurence += holiday->Duration[i] * HOUR / MINUTE;
     }
 
-    bool singleDate = ((holiday->Date[0] >> 24) & 0x1F) == 31; // Events with fixed date within year have - 1
+    // 检查是否为单日期事件（年度内固定日期）
+    bool singleDate = ((holiday->Date[0] >> 24) & 0x1F) == 31;
 
     time_t curTime = GameTime::GetGameTime();
+    // 遍历所有日期，找到下一个有效的开始时间
     for (uint8 i = 0; i < MAX_HOLIDAY_DATES && holiday->Date[i]; ++i)
     {
         uint32 date = holiday->Date[i];
@@ -1788,11 +2177,12 @@ void GameEventMgr::SetHolidayEventTime(GameEventData& event)
         if (singleDate)
         {
             localtime_r(&curTime, &timeInfo);
-            timeInfo.tm_year -= 1; // First try last year (event active through New Year)
+            timeInfo.tm_year -= 1; // 先尝试去年（事件跨年）
         }
         else
             timeInfo.tm_year = ((date >> 24) & 0x1F) + 100;
 
+        // 解析日期时间（压缩格式）
         timeInfo.tm_mon = (date >> 20) & 0xF;
         timeInfo.tm_mday = ((date >> 14) & 0x3F) + 1;
         timeInfo.tm_hour = (date >> 6) & 0x1F;
@@ -1802,7 +2192,7 @@ void GameEventMgr::SetHolidayEventTime(GameEventData& event)
         timeInfo.tm_yday = 0;
         timeInfo.tm_isdst = -1;
 
-        // try to get next start time (skip past dates)
+        // 尝试获取下一个开始时间（跳过过去的日期）
         time_t startTime = mktime(&timeInfo);
         if (curTime < startTime + event.length * MINUTE)
         {
@@ -1811,9 +2201,10 @@ void GameEventMgr::SetHolidayEventTime(GameEventData& event)
         }
         else if (singleDate)
         {
+            // 单日期事件，尝试今年
             tm tmCopy;
             localtime_r(&curTime, &tmCopy);
-            int year = tmCopy.tm_year; // This year
+            int year = tmCopy.tm_year; // 今年
             tmCopy = timeInfo;
             tmCopy.tm_year = year;
 
@@ -1822,12 +2213,19 @@ void GameEventMgr::SetHolidayEventTime(GameEventData& event)
         }
         else
         {
-            // date is due and not a singleDate event, try with next DBC date (modified by holiday_dates)
-            // if none is found we don't modify start date and use the one in game_event
+            // 日期已过且不是单日期事件，尝试下一个DBC日期（由holiday_dates修改）
+            // 如果找不到，我们不修改开始日期并使用game_event中的值
         }
     }
 }
 
+/**
+ * @brief 检查节日是否活动
+ * @param id 节日ID
+ * @return 如果节日活动返回true
+ *
+ * 全局辅助函数，检查指定的节日是否有对应的活动事件
+ */
 bool IsHolidayActive(HolidayIds id)
 {
     if (id == HOLIDAY_NONE)
@@ -1836,6 +2234,7 @@ bool IsHolidayActive(HolidayIds id)
     GameEventMgr::GameEventDataMap const& events = sGameEventMgr->GetEventMap();
     GameEventMgr::ActiveEvents const& ae = sGameEventMgr->GetActiveEventList();
 
+    // 遍历所有活动事件，检查是否有匹配的节日ID
     for (GameEventMgr::ActiveEvents::const_iterator itr = ae.begin(); itr != ae.end(); ++itr)
         if (events[*itr].holiday_id == id)
             return true;
@@ -1843,6 +2242,13 @@ bool IsHolidayActive(HolidayIds id)
     return false;
 }
 
+/**
+ * @brief 检查事件是否活动
+ * @param eventId 事件ID
+ * @return 如果事件活动返回true
+ *
+ * 全局辅助函数，检查指定的事件是否在活动事件列表中
+ */
 bool IsEventActive(uint16 eventId)
 {
     GameEventMgr::ActiveEvents const& ae = sGameEventMgr->GetActiveEventList();

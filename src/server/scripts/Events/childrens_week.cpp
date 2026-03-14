@@ -15,6 +15,26 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file    childrens_week.cpp
+ * @brief   儿童周事件脚本模块
+ *
+ * 本模块实现了儿童周（Children's Week）节日相关的游戏机制，包括：
+ * - 孤儿陪同任务：玩家可以收养各种族孤儿并带他们参观世界各地
+ * - 孤儿类型：
+ *   - 神谕者孤儿（Oracle Orphan）- 诺森德
+ *   - 狼獾人孤儿（Wolvar Orphan）- 诺森德
+ *   - 血精灵孤儿（Blood Elf Orphan）- 部落
+ *   - 德莱尼孤儿（Draenei Orphan）- 联盟
+ *   - 人类孤儿（Human Orphan）- 联盟
+ *   - 兽人孤儿（Orcish Orphan）- 部落
+ * - 参观地点任务：带孤儿参观各种著名地点并触发对话
+ * - 玩伴互动：孤儿与其他NPC的互动场景
+ *
+ * 儿童周是一个慈善主题的节日活动，玩家通过完成孤儿任务
+ * 可以获得成就和奖励。
+ */
+
 #include "ScriptMgr.h"
 #include "Containers.h"
 #include "MotionMaster.h"
@@ -23,117 +43,155 @@
 #include "ScriptedCreature.h"
 #include "SpellAuras.h"
 
+/**
+ * @brief 孤儿NPC ID枚举
+ *
+ * 定义了各种族孤儿的NPC标识符
+ */
 enum Orphans
 {
-    ORPHAN_ORACLE                           = 33533,
-    ORPHAN_WOLVAR                           = 33532,
-    ORPHAN_BLOOD_ELF                        = 22817,
-    ORPHAN_DRAENEI                          = 22818,
-    ORPHAN_HUMAN                            = 14305,
-    ORPHAN_ORCISH                           = 14444
+    ORPHAN_ORACLE                           = 33533, ///< 神谕者孤儿（诺森德）
+    ORPHAN_WOLVAR                           = 33532, ///< 狼獾人孤儿（诺森德）
+    ORPHAN_BLOOD_ELF                        = 22817, ///< 血精灵孤儿（部落）
+    ORPHAN_DRAENEI                          = 22818, ///< 德莱尼孤儿（联盟）
+    ORPHAN_HUMAN                            = 14305, ///< 人类孤儿（联盟）
+    ORPHAN_ORCISH                           = 14444  ///< 兽人孤儿（部落）
 };
 
+/**
+ * @brief 对话文本ID枚举
+ *
+ * 定义了各种孤儿和NPC的对话文本标识符
+ */
 enum Texts
 {
-    TEXT_ORACLE_ORPHAN_1                    = 1,
-    TEXT_ORACLE_ORPHAN_2                    = 2,
-    TEXT_ORACLE_ORPHAN_3                    = 3,
-    TEXT_ORACLE_ORPHAN_4                    = 4,
-    TEXT_ORACLE_ORPHAN_5                    = 5,
-    TEXT_ORACLE_ORPHAN_6                    = 6,
-    TEXT_ORACLE_ORPHAN_7                    = 7,
-    TEXT_ORACLE_ORPHAN_8                    = 8,
-    TEXT_ORACLE_ORPHAN_9                    = 9,
-    TEXT_ORACLE_ORPHAN_10                   = 10,
-    TEXT_ORACLE_ORPHAN_11                   = 11,
-    TEXT_ORACLE_ORPHAN_12                   = 12,
-    TEXT_ORACLE_ORPHAN_13                   = 13,
-    TEXT_ORACLE_ORPHAN_14                   = 14,
+    // 神谕者孤儿对话文本
+    TEXT_ORACLE_ORPHAN_1                    = 1,  ///< 神谕者孤儿对话1
+    TEXT_ORACLE_ORPHAN_2                    = 2,  ///< 神谕者孤儿对话2
+    TEXT_ORACLE_ORPHAN_3                    = 3,  ///< 神谕者孤儿对话3
+    TEXT_ORACLE_ORPHAN_4                    = 4,  ///< 神谕者孤儿对话4
+    TEXT_ORACLE_ORPHAN_5                    = 5,  ///< 神谕者孤儿对话5
+    TEXT_ORACLE_ORPHAN_6                    = 6,  ///< 神谕者孤儿对话6
+    TEXT_ORACLE_ORPHAN_7                    = 7,  ///< 神谕者孤儿对话7
+    TEXT_ORACLE_ORPHAN_8                    = 8,  ///< 神谕者孤儿对话8
+    TEXT_ORACLE_ORPHAN_9                    = 9,  ///< 神谕者孤儿对话9
+    TEXT_ORACLE_ORPHAN_10                   = 10, ///< 神谕者孤儿对话10
+    TEXT_ORACLE_ORPHAN_11                   = 11, ///< 神谕者孤儿对话11
+    TEXT_ORACLE_ORPHAN_12                   = 12, ///< 神谕者孤儿对话12
+    TEXT_ORACLE_ORPHAN_13                   = 13, ///< 神谕者孤儿对话13
+    TEXT_ORACLE_ORPHAN_14                   = 14, ///< 神谕者孤儿对话14
 
-    TEXT_WOLVAR_ORPHAN_1                    = 1,
-    TEXT_WOLVAR_ORPHAN_2                    = 2,
-    TEXT_WOLVAR_ORPHAN_3                    = 3,
-    TEXT_WOLVAR_ORPHAN_4                    = 4,
-    TEXT_WOLVAR_ORPHAN_5                    = 5,
+    // 狼獾人孤儿对话文本
+    TEXT_WOLVAR_ORPHAN_1                    = 1,  ///< 狼獾人孤儿对话1
+    TEXT_WOLVAR_ORPHAN_2                    = 2,  ///< 狼獾人孤儿对话2
+    TEXT_WOLVAR_ORPHAN_3                    = 3,  ///< 狼獾人孤儿对话3
+    TEXT_WOLVAR_ORPHAN_4                    = 4,  ///< 狼獾人孤儿对话4
+    TEXT_WOLVAR_ORPHAN_5                    = 5,  ///< 狼獾人孤儿对话5
     // 6 - 9 used in Nesingwary script
-    TEXT_WOLVAR_ORPHAN_10                   = 10,
-    TEXT_WOLVAR_ORPHAN_11                   = 11,
-    TEXT_WOLVAR_ORPHAN_12                   = 12,
-    TEXT_WOLVAR_ORPHAN_13                   = 13,
+    TEXT_WOLVAR_ORPHAN_10                   = 10, ///< 狼獾人孤儿对话10
+    TEXT_WOLVAR_ORPHAN_11                   = 11, ///< 狼獾人孤儿对话11
+    TEXT_WOLVAR_ORPHAN_12                   = 12, ///< 狼獾人孤儿对话12
+    TEXT_WOLVAR_ORPHAN_13                   = 13, ///< 狼獾人孤儿对话13
 
-    TEXT_WINTERFIN_PLAYMATE_1               = 1,
-    TEXT_WINTERFIN_PLAYMATE_2               = 2,
+    // 冬鳍玩伴对话文本
+    TEXT_WINTERFIN_PLAYMATE_1               = 1,  ///< 冬鳍玩伴对话1
+    TEXT_WINTERFIN_PLAYMATE_2               = 2,  ///< 冬鳍玩伴对话2
 
-    TEXT_SNOWFALL_GLADE_PLAYMATE_1          = 1,
-    TEXT_SNOWFALL_GLADE_PLAYMATE_2          = 2,
+    // 雪落空地玩伴对话文本
+    TEXT_SNOWFALL_GLADE_PLAYMATE_1          = 1,  ///< 雪落空地玩伴对话1
+    TEXT_SNOWFALL_GLADE_PLAYMATE_2          = 2,  ///< 雪落空地玩伴对话2
 
-    TEXT_SOO_ROO_1                          = 1,
-    TEXT_ELDER_KEKEK_1                      = 1,
+    // 其他NPC对话文本
+    TEXT_SOO_ROO_1                          = 1,  ///< 苏罗对话1
+    TEXT_ELDER_KEKEK_1                      = 1,  ///< 凯凯克长者对话1
 
-    TEXT_ALEXSTRASZA_2                      = 2,
-    TEXT_KRASUS_8                           = 8
+    TEXT_ALEXSTRASZA_2                      = 2,  ///< 阿莱克丝塔萨对话2
+    TEXT_KRASUS_8                           = 8   ///< 克拉苏斯对话8
 };
 
+/**
+ * @brief 任务ID枚举
+ *
+ * 定义了儿童周相关任务的标识符
+ */
 enum Quests
 {
-    QUEST_PLAYMATE_WOLVAR                   = 13951,
-    QUEST_PLAYMATE_ORACLE                   = 13950,
-    QUEST_THE_BIGGEST_TREE_EVER             = 13929,
-    QUEST_THE_BRONZE_DRAGONSHRINE_ORACLE    = 13933,
-    QUEST_THE_BRONZE_DRAGONSHRINE_WOLVAR    = 13934,
-    QUEST_MEETING_A_GREAT_ONE               = 13956,
-    QUEST_THE_MIGHTY_HEMET_NESINGWARY       = 13957,
-    QUEST_DOWN_AT_THE_DOCKS                 = 910,
-    QUEST_GATEWAY_TO_THE_FRONTIER           = 911,
-    QUEST_BOUGHT_OF_ETERNALS                = 1479,
-    QUEST_SPOOKY_LIGHTHOUSE                 = 1687,
-    QUEST_STONEWROUGHT_DAM                  = 1558,
-    QUEST_DARK_PORTAL_H                     = 10951,
-    QUEST_DARK_PORTAL_A                     = 10952,
-    QUEST_LORDAERON_THRONE_ROOM             = 1800,
-    QUEST_AUCHINDOUN_AND_THE_RING           = 10950,
-    QUEST_TIME_TO_VISIT_THE_CAVERNS_H       = 10963,
-    QUEST_TIME_TO_VISIT_THE_CAVERNS_A       = 10962,
-    QUEST_THE_SEAT_OF_THE_NARUU             = 10956,
-    QUEST_CALL_ON_THE_FARSEER               = 10968,
-    QUEST_JHEEL_IS_AT_AERIS_LANDING         = 10954,
-    QUEST_HCHUU_AND_THE_MUSHROOM_PEOPLE     = 10945,
-    QUEST_VISIT_THE_THRONE_OF_ELEMENTS      = 10953,
-    QUEST_NOW_WHEN_I_GROW_UP                = 11975,
-    QUEST_HOME_OF_THE_BEAR_MEN              = 13930,
-    QUEST_THE_DRAGON_QUEEN_ORACLE           = 13954,
-    QUEST_THE_DRAGON_QUEEN_WOLVAR           = 13955
+    QUEST_PLAYMATE_WOLVAR                   = 13951, ///< 玩伴任务（狼獾人）
+    QUEST_PLAYMATE_ORACLE                   = 13950, ///< 玩伴任务（神谕者）
+    QUEST_THE_BIGGEST_TREE_EVER             = 13929, ///< 最大的树
+    QUEST_THE_BRONZE_DRAGONSHRINE_ORACLE    = 13933, ///< 青铜龙殿（神谕者）
+    QUEST_THE_BRONZE_DRAGONSHRINE_WOLVAR    = 13934, ///< 青铜龙殿（狼獾人）
+    QUEST_MEETING_A_GREAT_ONE               = 13956, ///< 会见伟人
+    QUEST_THE_MIGHTY_HEMET_NESINGWARY       = 13957, ///< 强大的赫米特·奈辛瓦里
+    QUEST_DOWN_AT_THE_DOCKS                 = 910,   ///< 码头边（旧版）
+    QUEST_GATEWAY_TO_THE_FRONTIER           = 911,   ///< 前线之门（旧版）
+    QUEST_BOUGHT_OF_ETERNALS                = 1479,  ///< 永恒之债
+    QUEST_SPOOKY_LIGHTHOUSE                 = 1687,  ///< 诡异的灯塔
+    QUEST_STONEWROUGHT_DAM                  = 1558,  ///< 石坝
+    QUEST_DARK_PORTAL_H                     = 10951, ///< 黑暗之门（部落）
+    QUEST_DARK_PORTAL_A                     = 10952, ///< 黑暗之门（联盟）
+    QUEST_LORDAERON_THRONE_ROOM             = 1800,  ///< 洛丹伦王座大厅
+    QUEST_AUCHINDOUN_AND_THE_RING           = 10950, ///< 奥金顿和环形山
+    QUEST_TIME_TO_VISIT_THE_CAVERNS_H       = 10963, ///< 参观时光之穴（部落）
+    QUEST_TIME_TO_VISIT_THE_CAVERNS_A       = 10962, ///< 参观时光之穴（联盟）
+    QUEST_THE_SEAT_OF_THE_NARUU             = 10956, ///< 纳鲁的宝座
+    QUEST_CALL_ON_THE_FARSEER               = 10968, ///< 拜访先知
+    QUEST_JHEEL_IS_AT_AERIS_LANDING         = 10954, ///< 吉希尔在埃瑞斯码头
+    QUEST_HCHUU_AND_THE_MUSHROOM_PEOPLE     = 10945, ///< 赫楚和蘑菇人
+    QUEST_VISIT_THE_THRONE_OF_ELEMENTS      = 10953, ///< 参观元素王座
+    QUEST_NOW_WHEN_I_GROW_UP                = 11975, ///< 当我长大后
+    QUEST_HOME_OF_THE_BEAR_MEN              = 13930, ///< 熊人的家
+    QUEST_THE_DRAGON_QUEEN_ORACLE           = 13954, ///< 龙女王（神谕者）
+    QUEST_THE_DRAGON_QUEEN_WOLVAR           = 13955  ///< 龙女王（狼獾人）
 };
 
+/**
+ * @brief 区域触发器和触发NPC枚举
+ *
+ * 定义了儿童周任务相关的区域触发器和触发NPC标识符
+ */
 enum Areatriggers
 {
-    AT_DOWN_AT_THE_DOCKS                    = 3551,
-    AT_GATEWAY_TO_THE_FRONTIER              = 3549,
-    AT_LORDAERON_THRONE_ROOM                = 3547,
-    AT_BOUGHT_OF_ETERNALS                   = 3546,
-    AT_SPOOKY_LIGHTHOUSE                    = 3552,
-    AT_STONEWROUGHT_DAM                     = 3548,
-    AT_DARK_PORTAL                          = 4356,
+    AT_DOWN_AT_THE_DOCKS                    = 3551, ///< 码头区域触发器
+    AT_GATEWAY_TO_THE_FRONTIER              = 3549, ///< 前线之门区域触发器
+    AT_LORDAERON_THRONE_ROOM                = 3547, ///< 洛丹伦王座大厅区域触发器
+    AT_BOUGHT_OF_ETERNALS                   = 3546, ///< 永恒之债区域触发器
+    AT_SPOOKY_LIGHTHOUSE                    = 3552, ///< 诡异灯塔区域触发器
+    AT_STONEWROUGHT_DAM                     = 3548, ///< 石坝区域触发器
+    AT_DARK_PORTAL                          = 4356, ///< 黑暗之门区域触发器
 
-    NPC_CAVERNS_OF_TIME_CW_TRIGGER          = 22872,
-    NPC_EXODAR_01_CW_TRIGGER                = 22851,
-    NPC_EXODAR_02_CW_TRIGGER                = 22905,
-    NPC_AERIS_LANDING_CW_TRIGGER            = 22838,
-    NPC_AUCHINDOUN_CW_TRIGGER               = 22831,
-    NPC_SPOREGGAR_CW_TRIGGER                = 22829,
-    NPC_THRONE_OF_ELEMENTS_CW_TRIGGER       = 22839,
-    NPC_SILVERMOON_01_CW_TRIGGER            = 22866,
-    NPC_KRASUS                              = 27990
+    NPC_CAVERNS_OF_TIME_CW_TRIGGER          = 22872, ///< 时光之穴触发NPC
+    NPC_EXODAR_01_CW_TRIGGER                = 22851, ///< 埃索达触发NPC 01
+    NPC_EXODAR_02_CW_TRIGGER                = 22905, ///< 埃索达触发NPC 02
+    NPC_AERIS_LANDING_CW_TRIGGER            = 22838, ///< 埃瑞斯码头触发NPC
+    NPC_AUCHINDOUN_CW_TRIGGER               = 22831, ///< 奥金顿触发NPC
+    NPC_SPOREGGAR_CW_TRIGGER                = 22829, ///< 孢子村触发NPC
+    NPC_THRONE_OF_ELEMENTS_CW_TRIGGER       = 22839, ///< 元素王座触发NPC
+    NPC_SILVERMOON_01_CW_TRIGGER            = 22866, ///< 银月城触发NPC
+    NPC_KRASUS                              = 27990  ///< 克拉苏斯NPC
 };
 
+/**
+ * @brief 杂项数据枚举
+ *
+ * 定义了法术ID和显示模型ID等其他数据
+ */
 enum Misc
 {
-    SPELL_SNOWBALL                          = 21343,
-    SPELL_ORPHAN_OUT                        = 58818,
+    SPELL_SNOWBALL                          = 21343, ///< 雪球法术
+    SPELL_ORPHAN_OUT                        = 58818, ///< 孤儿外出法术
 
-    DISPLAY_INVISIBLE                       = 11686
+    DISPLAY_INVISIBLE                       = 11686  ///< 隐形显示模型ID
 };
 
+/**
+ * @brief 获取玩家的孤儿GUID
+ * @param player 玩家对象
+ * @param orphan 孤儿NPC ID
+ * @return 孤儿的GUID，如果没有对应的孤儿返回空GUID
+ *
+ * 通过检查玩家身上的"孤儿外出"光环来获取孤儿的GUID
+ */
 ObjectGuid getOrphanGUID(Player* player, uint32 orphan)
 {
     if (Aura* orphanOut = player->GetAura(SPELL_ORPHAN_OUT))
@@ -143,6 +201,14 @@ ObjectGuid getOrphanGUID(Player* player, uint32 orphan)
     return ObjectGuid::Empty;
 }
 
+/**
+ * @class npc_winterfin_playmate
+ * @brief 冬鳍玩伴NPC脚本 - 处理神谕者孤儿的玩伴互动任务
+ *
+ * 这个脚本实现了神谕者孤儿的玩伴任务。当玩家带着神谕者孤儿
+ * 接近冬鳍玩伴时，会触发一系列对话和舞蹈互动。
+ * 任务：QUEST_PLAYMATE_ORACLE (13950)
+ */
 /*######
 ## npc_winterfin_playmate
 ######*/
@@ -151,19 +217,30 @@ class npc_winterfin_playmate : public CreatureScript
     public:
         npc_winterfin_playmate() : CreatureScript("npc_winterfin_playmate") { }
 
+        /**
+         * @class npc_winterfin_playmateAI
+         * @brief 冬鳍玩伴AI - 实现玩伴互动的场景脚本
+         */
         struct npc_winterfin_playmateAI : public ScriptedAI
         {
+            /**
+             * @brief 构造函数
+             * @param creature 关联的生物对象
+             */
             npc_winterfin_playmateAI(Creature* creature) : ScriptedAI(creature)
             {
                 Initialize();
             }
 
+            /**
+             * @brief 初始化成员变量
+             */
             void Initialize()
             {
-                timer = 0;
-                phase = 0;
-                playerGUID.Clear();
-                orphanGUID.Clear();
+                timer = 0;       ///< 事件计时器
+                phase = 0;       ///< 当前阶段
+                playerGUID.Clear(); ///< 玩家GUID
+                orphanGUID.Clear(); ///< 孤儿GUID
             }
 
             void Reset() override
@@ -171,6 +248,12 @@ class npc_winterfin_playmate : public CreatureScript
                 Initialize();
             }
 
+            /**
+             * @brief 视线内移动检测 - 触发互动
+             * @param who 进入视线的单位
+             *
+             * 当玩家带着神谕者孤儿接近时，启动互动场景
+             */
             void MoveInLineOfSight(Unit* who) override
             {
                 if (!phase && who && who->GetDistance2d(me) < 10.0f)
@@ -184,6 +267,17 @@ class npc_winterfin_playmate : public CreatureScript
                         }
             }
 
+            /**
+             * @brief 更新AI - 处理分阶段对话和动画
+             * @param diff 时间间隔（毫秒）
+             *
+             * 分阶段执行互动场景：
+             * - 阶段1：孤儿移动到玩伴附近并说话
+             * - 阶段2：玩伴面向孤儿，说话并跳舞
+             * - 阶段3：孤儿回应
+             * - 阶段4：玩伴回应
+             * - 阶段5：孤儿结束对话，任务完成
+             */
             void UpdateAI(uint32 diff) override
             {
                 if (!phase)
@@ -203,25 +297,30 @@ class npc_winterfin_playmate : public CreatureScript
                     switch (phase)
                     {
                         case 1:
+                            // 孤儿移动到玩伴附近并说话
                             orphan->GetMotionMaster()->MovePoint(0, me->GetPositionX() + std::cos(me->GetOrientation()) * 5, me->GetPositionY() + std::sin(me->GetOrientation()) * 5, me->GetPositionZ());
                             orphan->AI()->Talk(TEXT_ORACLE_ORPHAN_1);
                             timer = 3000;
                             break;
                         case 2:
+                            // 玩伴面向孤儿，说话并跳舞
                             orphan->SetFacingToObject(me);
                             Talk(TEXT_WINTERFIN_PLAYMATE_1);
                             me->HandleEmoteCommand(EMOTE_STATE_DANCE);
                             timer = 3000;
                             break;
                         case 3:
+                            // 孤儿回应
                             orphan->AI()->Talk(TEXT_ORACLE_ORPHAN_2);
                             timer = 3000;
                             break;
                         case 4:
+                            // 玩伴回应
                             Talk(TEXT_WINTERFIN_PLAYMATE_2);
                             timer = 5000;
                             break;
                         case 5:
+                            // 孤儿结束对话，任务完成
                             orphan->AI()->Talk(TEXT_ORACLE_ORPHAN_3);
                             me->HandleEmoteCommand(EMOTE_STATE_NONE);
                             player->GroupEventHappens(QUEST_PLAYMATE_ORACLE, me);
@@ -236,10 +335,10 @@ class npc_winterfin_playmate : public CreatureScript
             }
 
         private:
-            uint32 timer;
-            int8 phase;
-            ObjectGuid playerGUID;
-            ObjectGuid orphanGUID;
+            uint32 timer;        ///< 事件计时器
+            int8 phase;          ///< 当前阶段
+            ObjectGuid playerGUID; ///< 玩家GUID
+            ObjectGuid orphanGUID; ///< 孤儿GUID
 
         };
 
@@ -249,6 +348,14 @@ class npc_winterfin_playmate : public CreatureScript
         }
 };
 
+/**
+ * @class npc_snowfall_glade_playmate
+ * @brief 雪落空地玩伴NPC脚本 - 处理狼獾人孤儿的玩伴互动任务
+ *
+ * 这个脚本实现了狼獾人孤儿的玩伴任务。当玩家带着狼獾人孤儿
+ * 接近雪落空地玩伴时，会触发一系列对话和雪球互扔互动。
+ * 任务：QUEST_PLAYMATE_WOLVAR (13951)
+ */
 /*######
 ## npc_snowfall_glade_playmate
 ######*/
@@ -257,6 +364,10 @@ class npc_snowfall_glade_playmate : public CreatureScript
     public:
         npc_snowfall_glade_playmate() : CreatureScript("npc_snowfall_glade_playmate") { }
 
+        /**
+         * @class npc_snowfall_glade_playmateAI
+         * @brief 雪落空地玩伴AI - 实现玩伴互动的场景脚本
+         */
         struct npc_snowfall_glade_playmateAI : public ScriptedAI
         {
             npc_snowfall_glade_playmateAI(Creature* creature) : ScriptedAI(creature)
@@ -277,6 +388,10 @@ class npc_snowfall_glade_playmate : public CreatureScript
                 Initialize();
             }
 
+            /**
+             * @brief 视线内移动检测 - 触发互动
+             * @param who 进入视线的单位
+             */
             void MoveInLineOfSight(Unit* who) override
 
             {
@@ -291,6 +406,17 @@ class npc_snowfall_glade_playmate : public CreatureScript
                         }
             }
 
+            /**
+             * @brief 更新AI - 处理分阶段对话和雪球互扔
+             * @param diff 时间间隔（毫秒）
+             *
+             * 分阶段执行互动场景：
+             * - 阶段1：孤儿移动到玩伴附近并说话
+             * - 阶段2：玩伴向孤儿扔雪球
+             * - 阶段3：玩伴继续对话
+             * - 阶段4：孤儿向玩伴扔回雪球
+             * - 阶段5：孤儿结束对话，任务完成
+             */
             void UpdateAI(uint32 diff) override
             {
                 if (!phase)
@@ -310,26 +436,31 @@ class npc_snowfall_glade_playmate : public CreatureScript
                     switch (phase)
                     {
                         case 1:
+                            // 孤儿移动到玩伴附近并说话
                             orphan->GetMotionMaster()->MovePoint(0, me->GetPositionX() + std::cos(me->GetOrientation()) * 5, me->GetPositionY() + std::sin(me->GetOrientation()) * 5, me->GetPositionZ());
                             orphan->AI()->Talk(TEXT_WOLVAR_ORPHAN_1);
                             timer = 5000;
                             break;
                         case 2:
+                            // 玩伴面向孤儿，说话并扔雪球
                             orphan->SetFacingToObject(me);
                             Talk(TEXT_SNOWFALL_GLADE_PLAYMATE_1);
                             DoCast(orphan, SPELL_SNOWBALL);
                             timer = 5000;
                             break;
                         case 3:
+                            // 玩伴继续对话
                             Talk(TEXT_SNOWFALL_GLADE_PLAYMATE_2);
                             timer = 5000;
                             break;
                         case 4:
+                            // 孤儿向玩伴扔回雪球
                             orphan->AI()->Talk(TEXT_WOLVAR_ORPHAN_2);
                             orphan->CastSpell(me, SPELL_SNOWBALL);
                             timer = 5000;
                             break;
                         case 5:
+                            // 孤儿结束对话，任务完成
                             orphan->AI()->Talk(TEXT_WOLVAR_ORPHAN_3);
                             player->GroupEventHappens(QUEST_PLAYMATE_WOLVAR, me);
                             orphan->GetMotionMaster()->MoveFollow(player, PET_FOLLOW_DIST, PET_FOLLOW_ANGLE);
@@ -343,10 +474,10 @@ class npc_snowfall_glade_playmate : public CreatureScript
             }
 
         private:
-            uint32 timer;
-            int8 phase;
-            ObjectGuid playerGUID;
-            ObjectGuid orphanGUID;
+            uint32 timer;        ///< 事件计时器
+            int8 phase;          ///< 当前阶段
+            ObjectGuid playerGUID; ///< 玩家GUID
+            ObjectGuid orphanGUID; ///< 孤儿GUID
         };
 
         CreatureAI* GetAI(Creature* pCreature) const override
@@ -1074,6 +1205,14 @@ class npc_cw_area_trigger : public CreatureScript
         }
 };
 
+/**
+ * @class npc_grizzlemaw_cw_trigger
+ * @brief 灰熊之丘儿童周触发器NPC脚本 - 处理"熊人的家"任务
+ *
+ * 这个触发器NPC是隐形的，当玩家带着狼獾人孤儿接近时，
+ * 会完成任务并让孤儿发表评论。
+ * 任务：QUEST_HOME_OF_THE_BEAR_MEN (13930)
+ */
 /*######
 ## npc_grizzlemaw_cw_trigger
 ######*/
@@ -1084,11 +1223,21 @@ class npc_grizzlemaw_cw_trigger : public CreatureScript
 
         struct npc_grizzlemaw_cw_triggerAI : public ScriptedAI
         {
+            /**
+             * @brief 构造函数 - 设置隐形显示模型
+             * @param creature 关联的生物对象
+             */
             npc_grizzlemaw_cw_triggerAI(Creature* creature) : ScriptedAI(creature)
             {
                 me->SetDisplayId(DISPLAY_INVISIBLE);
             }
 
+            /**
+             * @brief 视线内移动检测 - 触发任务完成
+             * @param who 进入视线的单位
+             *
+             * 当玩家带着狼獾人孤儿接近时完成任务
+             */
             void MoveInLineOfSight(Unit* who) override
             {
                 if (who && who->GetDistance2d(me) < 10.0f)
@@ -1096,6 +1245,7 @@ class npc_grizzlemaw_cw_trigger : public CreatureScript
                         if (player->GetQuestStatus(QUEST_HOME_OF_THE_BEAR_MEN) == QUEST_STATUS_INCOMPLETE)
                             if (Creature* orphan = ObjectAccessor::GetCreature(*me, getOrphanGUID(player, ORPHAN_WOLVAR)))
                             {
+                                // 完成任务并让孤儿说话
                                 player->AreaExploredOrEventHappens(QUEST_HOME_OF_THE_BEAR_MEN);
                                 orphan->AI()->Talk(TEXT_WOLVAR_ORPHAN_10);
                             }
@@ -1108,16 +1258,25 @@ class npc_grizzlemaw_cw_trigger : public CreatureScript
         }
 };
 
+/**
+ * @brief 注册儿童周事件脚本
+ *
+ * 此函数在服务器启动时被调用，用于注册所有儿童周相关的NPC和区域触发器脚本。
+ * 注册的脚本包括：
+ * - 各种玩伴NPC
+ * - 任务触发器NPC
+ * - 区域触发器
+ */
 void AddSC_event_childrens_week()
 {
-    new npc_elder_kekek();
-    new npc_high_oracle_soo_roo();
-    new npc_winterfin_playmate();
-    new npc_snowfall_glade_playmate();
-    new npc_the_etymidian();
-    new npc_the_biggest_tree();
-    new at_bring_your_orphan_to();
-    new npc_grizzlemaw_cw_trigger();
-    new npc_cw_area_trigger();
-    new npc_alexstraza_the_lifebinder();
+    new npc_elder_kekek();           ///< 凯凯克长者NPC
+    new npc_high_oracle_soo_roo();   ///< 高阶神谕者苏罗NPC
+    new npc_winterfin_playmate();    ///< 冬鳍玩伴NPC
+    new npc_snowfall_glade_playmate(); ///< 雪落空地玩伴NPC
+    new npc_the_etymidian();         ///< 词源者NPC
+    new npc_the_biggest_tree();      ///< 最大的树NPC
+    new at_bring_your_orphan_to();   ///< 带孤儿参观区域触发器
+    new npc_grizzlemaw_cw_trigger(); ///< 灰熊之丘儿童周触发器NPC
+    new npc_cw_area_trigger();       ///< 儿童周区域触发器NPC
+    new npc_alexstraza_the_lifebinder(); ///< 生命缚誓者阿莱克丝塔萨NPC
 }

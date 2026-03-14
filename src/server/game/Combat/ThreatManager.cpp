@@ -15,6 +15,49 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file ThreatManager.cpp
+ * @brief 威胁管理器实现文件 - 实现威胁列表管理和仇恨目标选择的核心逻辑
+ *
+ * 本文件实现了 ThreatManager 和 ThreatReference 的所有功能，提供了游戏中仇恨系统的核心机制。
+ *
+ * 主要实现内容：
+ *   1. ThreatManager 类：
+ *      - 威胁列表的维护和查询
+ *      - 威胁值的添加、修改和重置
+ *      - 当前攻击目标的选择算法
+ *      - 威胁重定向系统
+ *      - 客户端同步消息发送
+ *
+ *   2. ThreatReference 类：
+ *      - 单个威胁关系的管理
+ *      - 在线状态和嘲讽状态的更新
+ *      - 堆结构的维护通知
+ *
+ * 核心算法：
+ *   - ReselectVictim：目标选择算法，考虑在线状态、嘲讽、威胁值、距离等因素
+ *   - CalculateModifiedThreat：威胁值计算，应用法术修正和学校修正
+ *   - AddThreat：威胁添加流程，包括重定向、战斗状态创建、引用管理等
+ *   - CompareReferencesLT：威胁比较算法，用于排序
+ *
+ * 数据结构：
+ *   - Fibonacci Heap：用于维护排序的威胁列表
+ *     * 支持高效的最大值获取（O(1)）
+ *     * 支持高效的插入和删除（O(log n)）
+ *     * 支持高效的优先级调整（O(1) amortized）
+ *
+ * 性能考虑：
+ *   - 使用 Fibonacci Heap 提高性能，优于普通优先队列
+ *   - 威胁更新使用定时器控制，避免频繁更新
+ *   - 单学校威胁修正预计算，减少重复计算
+ *   - 多学校修正按需计算并缓存
+ *
+ * 目标选择策略（110%/130% 规则）：
+ *   - 新目标需要超过当前目标 110% 威胁才能抢夺仇恨（近战范围）
+ *   - 远程目标需要超过 130% 威胁才能抢夺仇恨
+ *   - 这避免了频繁的目标切换
+ */
+
 #include "ThreatManager.h"
 #include "Creature.h"
 #include "CreatureAI.h"
@@ -226,6 +269,15 @@ void ThreatManager::Update(uint32 tdiff)
         _updateTimer -= tdiff;
 }
 
+// ============================================================================
+// 获取当前仇恨目标
+// ============================================================================
+// 职责：从威胁列表中选择当前应该攻击的目标
+// 参数：无
+// 返回值：威胁值最高的有效目标指针，无目标则返回nullptr
+// 调用时机：AI 选择攻击目标时调用
+// 算法：选择威胁值最高的有效目标
+// ============================================================================
 Unit* ThreatManager::GetCurrentVictim()
 {
     if (!_currentVictimRef || _currentVictimRef->ShouldBeOffline())
@@ -355,6 +407,20 @@ void ThreatManager::EvaluateSuppressed(bool canExpire)
     }
 }
 
+// ============================================================================
+// 添加威胁值
+// ============================================================================
+// 职责：向目标的威胁列表添加威胁值，并更新威胁排序
+// 参数：
+//   target - 目标单位
+//   amount - 基础威胁值
+//   spell  - 触发威胁的法术信息（可为nullptr）
+//   ignoreModifiers - 是否忽略威胁修正（默认false）
+//   ignoreRedirects - 是否忽略威胁重定向（默认false）
+// 返回值：无
+// 调用时机：造成伤害、治疗、使用仇恨技能时
+// 注意：威胁值会经过各种修正（距离、光环等），并可能被重定向到其他目标
+// ============================================================================
 void ThreatManager::AddThreat(Unit* target, float amount, SpellInfo const* spell, bool ignoreModifiers, bool ignoreRedirects)
 {
     // step 1: we can shortcut if the spell has one of the NO_THREAT attrs set - nothing will happen
@@ -532,6 +598,15 @@ void ThreatManager::ResetAllThreat()
         pair.second->ScaleThreat(0.0f);
 }
 
+// ============================================================================
+// 清除特定目标的威胁
+// ============================================================================
+// 职责：从威胁列表中移除指定目标
+// 参数：
+//   target - 要移除的目标
+// 返回值：无
+// 调用时机：目标死亡、离开副本、脱战等
+// ============================================================================
 void ThreatManager::ClearThreat(Unit* target)
 {
     auto it = _myThreatListEntries.find(target->GetGUID());
@@ -547,6 +622,14 @@ void ThreatManager::ClearThreat(ThreatReference* ref)
         UpdateVictim();
 }
 
+// ============================================================================
+// 清除所有威胁列表
+// ============================================================================
+// 职责：清空威胁列表，通常用于脱战
+// 参数：无
+// 返回值：无
+// 调用时机：生物脱战、死亡时
+// ============================================================================
 void ThreatManager::ClearAllThreat()
 {
     if (!_myThreatListEntries.empty())
@@ -671,6 +754,17 @@ void ThreatManager::ProcessAIUpdates()
     return (a->GetThreat()*aWeight < b->GetThreat());
 }
 
+// ============================================================================
+// 计算威胁值
+// ============================================================================
+// 职责：计算实际威胁值，应用各种修正系数
+// 参数：
+//   threat - 基础威胁值
+//   victim - 目标单位
+//   spell  - 触发威胁的法术
+// 返回值：修正后的威胁值
+// 修正因素：法术威胁修正、学校伤害修正、光环效果等
+// ============================================================================
 /*static*/ float ThreatManager::CalculateModifiedThreat(float threat, Unit const* victim, SpellInfo const* spell)
 {
     // modifiers by spell

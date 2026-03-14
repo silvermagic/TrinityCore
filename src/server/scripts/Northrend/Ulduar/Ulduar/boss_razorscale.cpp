@@ -15,6 +15,28 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file boss_razorscale.cpp
+ * @brief 锋鳞（Razorscale）Boss 战斗脚本模块
+ *
+ * 模块职责：
+ * 实现奥杜尔副本中锋鳞 Boss 的完整战斗逻辑，包括：
+ * - 锋鳞的主要战斗 AI 和技能系统
+ * - 空中阶段和地面阶段的转换
+ * - 鱼叉炮塔系统的控制和修复
+ * - 熔喉之焰和火焰吐息等主要技能
+ * - 黑铁矮人和铁维库人的召唤机制
+ * - 远征军指挥官和工程师的 AI
+ * - Quick Shave 成就系统
+ *
+ * 战斗机制：
+ * - 战斗分为空中阶段和地面阶段
+ * - 空中阶段：锋鳞飞行并施放火球和熔喉之焰，召唤小怪
+ * - 玩家需要使用鱼叉炮塔将锋鳞击落
+ * - 地面阶段：锋鳞被固定在地面上，玩家可以输出伤害
+ * - 在生命值低于 50% 时，锋鳞永久停留在地面
+ */
+
 #include "ScriptMgr.h"
 #include "GameObject.h"
 #include "GameObjectAI.h"
@@ -33,148 +55,178 @@
 #include "ulduar.h"
 #include <G3D/Vector3.h>
 
+/**
+ * @brief 对话和表情枚举定义
+ *
+ * 定义锋鳞战斗中各种 NPC 的对话和表情文本 ID
+ */
 enum Says
 {
-    // Expedition Commander
-    SAY_COMMANDER_AGGRO             = 0,
-    SAY_COMMANDER_GROUND_PHASE      = 1,
-    SAY_COMMANDER_ENGINEERS_DEAD    = 2,
+    // 远征军指挥官
+    SAY_COMMANDER_AGGRO             = 0,  ///< 指挥官开怪对话
+    SAY_COMMANDER_GROUND_PHASE      = 1,  ///< 指挥官地面阶段对话
+    SAY_COMMANDER_ENGINEERS_DEAD    = 2,  ///< 指挥官工程师死亡对话
 
-    // Expedition Engineer
-    SAY_AGGRO                       = 0,
-    SAY_START_REPAIR                = 1,
-    SAY_REBUILD_TURRETS             = 2,
+    // 远征军工程师
+    SAY_AGGRO                       = 0,  ///< 工程师开怪对话
+    SAY_START_REPAIR                = 1,  ///< 工程师开始修复对话
+    SAY_REBUILD_TURRETS             = 2,  ///< 工程师重建炮塔对话
 
-    // Razorscale Controller
-    EMOTE_HARPOON                   = 0,
+    // 锋鳞控制器
+    EMOTE_HARPOON                   = 0,  ///< 鱼叉表情
 
-    // Razorscale
-    EMOTE_PERMA_GROUND              = 0,
-    EMOTE_BREATH                    = 1,
-    EMOTE_BERSERK                   = 2
+    // 锋鳞
+    EMOTE_PERMA_GROUND              = 0,  ///< 永久落地表情
+    EMOTE_BREATH                    = 1,  ///< 吐息表情
+    EMOTE_BERSERK                   = 2   ///< 狂暴表情
 };
 
+/**
+ * @brief 法术 ID 枚举定义
+ *
+ * 定义锋鳞战斗中使用的所有法术 ID
+ */
 enum Spells
 {
-    SPELL_FIREBALL                          = 63815,
-    SPELL_DEVOURING_FLAME                   = 63236,
-    SPELL_WING_BUFFET                       = 62666,
-    SPELL_FIREBOLT                          = 62669,
-    SPELL_FUSE_ARMOR                        = 64821,
-    SPELL_FUSED_ARMOR                       = 64774,
-    SPELL_STUN_SELF                         = 62794,
-    SPELL_BERSERK                           = 47008,
+    // Boss 技能
+    SPELL_FIREBALL                          = 63815,  ///< 火球术 - 空中阶段对随机目标施放
+    SPELL_DEVOURING_FLAME                   = 63236,  ///< 熔喉之焰 - 在地面留下火焰区域
+    SPELL_WING_BUFFET                       = 62666,  ///< 翼击 - 击退附近玩家
+    SPELL_FIREBOLT                          = 62669,  ///< 火焰箭 - 地面阶段的火焰攻击
+    SPELL_FUSE_ARMOR                        = 64821,  ///< 熔化护甲 - 降低目标护甲
+    SPELL_FUSED_ARMOR                       = 64774,  ///< 已熔化护甲 - 熔化护甲效果
+    SPELL_STUN_SELF                         = 62794,  ///< 自我昏迷 - 锋鳞被击落后的昏迷状态
+    SPELL_BERSERK                           = 47008,  ///< 狂暴 - 战斗超时后的狂暴效果
 
-    // Razorscale Harpoon Fire State
-    SPELL_HARPOON_FIRE_STATE                = 62696,
+    // 锋鳞鱼叉开火状态
+    SPELL_HARPOON_FIRE_STATE                = 62696,  ///< 鱼叉开火状态
 
-    // Harpoon
-    SPELL_HARPOON_TRIGGER                   = 62505,
-    SPELL_HARPOON_SHOT_1                    = 63658,
-    SPELL_HARPOON_SHOT_2                    = 63657,
-    SPELL_HARPOON_SHOT_3                    = 63659,
-    SPELL_HARPOON_SHOT_4                    = 63524,
+    // 鱼叉
+    SPELL_HARPOON_TRIGGER                   = 62505,  ///< 鱼叉触发
+    SPELL_HARPOON_SHOT_1                    = 63658,  ///< 鱼叉射击 1
+    SPELL_HARPOON_SHOT_2                    = 63657,  ///< 鱼叉射击 2
+    SPELL_HARPOON_SHOT_3                    = 63659,  ///< 鱼叉射击 3
+    SPELL_HARPOON_SHOT_4                    = 63524,  ///< 鱼叉射击 4
 
-    // Razorscale Spawner
-    SPELL_SUMMON_MOLE_MACHINE               = 62899,
-    SPELL_SUMMON_IRON_DWARF_GUARDIAN        = 62926,
-    SPELL_TRIGGER_SUMMON_IRON_DWARVES       = 63968,
-    SPELL_TRIGGER_SUMMON_IRON_DWARVES_2     = 63970,
-    SPELL_TRIGGER_SUMMON_IRON_DWARVES_3     = 63969,
-    SPELL_TRIGGER_SUMMON_IRON_VRYKUL        = 63798,
-    SPELL_SUMMON_IRON_DWARF_WATCHER         = 63135,
+    // 锋鳞生成器
+    SPELL_SUMMON_MOLE_MACHINE               = 62899,  ///< 召唤钻地机
+    SPELL_SUMMON_IRON_DWARF_GUARDIAN        = 62926,  ///< 召唤铁矮人守卫
+    SPELL_TRIGGER_SUMMON_IRON_DWARVES       = 63968,  ///< 触发召唤铁矮人
+    SPELL_TRIGGER_SUMMON_IRON_DWARVES_2     = 63970,  ///< 触发召唤铁矮人 2
+    SPELL_TRIGGER_SUMMON_IRON_DWARVES_3     = 63969,  ///< 触发召唤铁矮人 3
+    SPELL_TRIGGER_SUMMON_IRON_VRYKUL        = 63798,  ///< 触发召唤铁维库人
+    SPELL_SUMMON_IRON_DWARF_WATCHER         = 63135,  ///< 召唤铁矮人守望者
 
-    // Dark Rune Guardian
-    SPELL_STORMSTRIKE                       = 64757,
+    // 黑铁符文守卫
+    SPELL_STORMSTRIKE                       = 64757,  ///< 风暴打击
 
-    // Dark Rune Sentinel
-    SPELL_BATTLE_SHOUT                      = 46763,
-    SPELL_HEROIC_STRIKE                     = 45026,
-    SPELL_WHIRLWIND                         = 63808,
+    // 黑铁符文哨兵
+    SPELL_BATTLE_SHOUT                      = 46763,  ///< 战斗怒吼
+    SPELL_HEROIC_STRIKE                     = 45026,  ///< 英勇打击
+    SPELL_WHIRLWIND                         = 63808,  ///< 旋风斩
 
-    // Expedition Defender
-    SPELL_THREAT                            = 65146,
+    // 远征军防御者
+    SPELL_THREAT                            = 65146,  ///< 威胁
 
-    // Expedition Trapper
-    SPELL_SHACKLE                           = 62646
+    // 远征军陷阱师
+    SPELL_SHACKLE                           = 62646   ///< 束缚
 };
 
+/// 熔喉之焰地面效果（根据团队模式）
 #define DEVOURING_FLAME_GROUND RAID_MODE<uint32>(64709, 64734)
+/// 火焰吐息（根据团队模式）
 #define FLAME_BREATH           RAID_MODE<uint32>(63317, 64021)
+/// 闪电链（根据团队模式）
 #define CHAIN_LIGHTNING        RAID_MODE<uint32>(64758, 64759)
+/// 闪电箭（根据团队模式）
 #define LIGHTNING_BOLT         RAID_MODE<uint32>(63809, 64696)
 
+/**
+ * @brief 动作枚举定义
+ *
+ * 定义战斗中各系统之间的通信动作
+ */
 enum Actions
 {
-    ACTION_START_FIGHT = 1,
-    ACTION_FIX_HARPOONS,
-    ACTION_GROUND_PHASE,
-    ACTION_ENGINEER_DEAD,
-    ACTION_SHACKLE_RAZORSCALE,
-    ACTION_START_PERMA_GROUND,
-    ACTION_RETURN_TO_BASE,
-    ACTION_BUILD_HARPOON_1,
-    ACTION_BUILD_HARPOON_2,
-    ACTION_BUILD_HARPOON_3,
-    ACTION_BUILD_HARPOON_4,
-    ACTION_DESTROY_HARPOONS,
-    ACTION_STOP_CONTROLLERS,
-    ACTION_STOP_CAST
+    ACTION_START_FIGHT = 1,       ///< 开始战斗
+    ACTION_FIX_HARPOONS,          ///< 修复鱼叉
+    ACTION_GROUND_PHASE,          ///< 地面阶段
+    ACTION_ENGINEER_DEAD,         ///< 工程师死亡
+    ACTION_SHACKLE_RAZORSCALE,    ///< 束缚锋鳞
+    ACTION_START_PERMA_GROUND,    ///< 开始永久地面阶段
+    ACTION_RETURN_TO_BASE,        ///< 返回基地
+    ACTION_BUILD_HARPOON_1,       ///< 建造鱼叉 1
+    ACTION_BUILD_HARPOON_2,       ///< 建造鱼叉 2
+    ACTION_BUILD_HARPOON_3,       ///< 建造鱼叉 3
+    ACTION_BUILD_HARPOON_4,       ///< 建造鱼叉 4
+    ACTION_DESTROY_HARPOONS,      ///< 摧毁鱼叉
+    ACTION_STOP_CONTROLLERS,      ///< 停止控制器
+    ACTION_STOP_CAST              ///< 停止施法
 };
 
+/**
+ * @brief 事件 ID 枚举定义
+ *
+ * 定义战斗中使用的所有事件 ID，用于事件调度系统
+ */
 enum Events
 {
-    EVENT_BERSERK = 1,
-    EVENT_FIREBALL,
-    EVENT_DEVOURING_FLAME,
-    EVENT_SUMMON_MINIONS,
-    EVENT_SUMMON_MINIONS_2,
-    EVENT_FLAME_BREATH,
-    EVENT_FLAME_BREATH_GROUND,
-    EVENT_WING_BUFFET,
-    EVENT_RESUME_AIR_PHASE,
-    EVENT_FIREBOLT,
-    EVENT_FUSE_ARMOR,
-    EVENT_RESUME_MOVE_CHASE,
+    EVENT_BERSERK = 1,            ///< 狂暴
+    EVENT_FIREBALL,               ///< 火球术
+    EVENT_DEVOURING_FLAME,        ///< 熔喉之焰
+    EVENT_SUMMON_MINIONS,         ///< 召唤仆从
+    EVENT_SUMMON_MINIONS_2,       ///< 召唤仆从 2
+    EVENT_FLAME_BREATH,           ///< 火焰吐息
+    EVENT_FLAME_BREATH_GROUND,    ///< 地面火焰吐息
+    EVENT_WING_BUFFET,            ///< 翼击
+    EVENT_RESUME_AIR_PHASE,       ///< 恢复空中阶段
+    EVENT_FIREBOLT,               ///< 火焰箭
+    EVENT_FUSE_ARMOR,             ///< 熔化护甲
+    EVENT_RESUME_MOVE_CHASE,      ///< 恢复追击移动
 
-    // Expedition Commander
-    EVENT_BUILD_HARPOON_1,
-    EVENT_BUILD_HARPOON_2,
-    EVENT_BUILD_HARPOON_3,
-    EVENT_BUILD_HARPOON_4,
-    EVENT_HANDLE_DESTROY_HARPOON,
+    // 远征军指挥官
+    EVENT_BUILD_HARPOON_1,        ///< 建造鱼叉 1
+    EVENT_BUILD_HARPOON_2,        ///< 建造鱼叉 2
+    EVENT_BUILD_HARPOON_3,        ///< 建造鱼叉 3
+    EVENT_BUILD_HARPOON_4,        ///< 建造鱼叉 4
+    EVENT_HANDLE_DESTROY_HARPOON, ///< 处理摧毁鱼叉
 
-    // Dark Rune Sentinel
-    EVENT_START_COMBAT,
-    EVENT_HEROIC_STRIKE,
-    EVENT_BATTLE_SHOUT,
-    EVENT_WHIRLWIND,
+    // 黑铁符文哨兵
+    EVENT_START_COMBAT,           ///< 开始战斗
+    EVENT_HEROIC_STRIKE,          ///< 英勇打击
+    EVENT_BATTLE_SHOUT,           ///< 战斗怒吼
+    EVENT_WHIRLWIND,              ///< 旋风斩
 
-    // Dark Rune Watcher
-    EVENT_LIGHTNING_BOLT,
-    EVENT_CHAIN_LIGHTNING,
+    // 黑铁符文守望者
+    EVENT_LIGHTNING_BOLT,         ///< 闪电箭
+    EVENT_CHAIN_LIGHTNING,        ///< 闪电链
 
-    // Dark Rune Guardian
-    EVENT_STORMSTRIKE
+    // 黑铁符文守卫
+    EVENT_STORMSTRIKE             ///< 风暴打击
 };
 
+/**
+ * @brief 杂项数据枚举定义
+ *
+ * 定义成就数据、生成数量等杂项常量
+ */
 enum Misc
 {
-    DATA_QUICK_SHAVE                = 29192921, // 2919, 2921 are achievement IDs
-    DATA_IRON_DWARF_MEDIUM_RARE     = 29232924,
-    GOSSIP_START_ENCOUNTER          = 0,
-    DATA_EXPEDITION_NUMBER          = 1,
-    RAZORSCALE_EXPEDITION_GROUP     = 1,
-    RAZORSCALE_FIRE_STATE_10_GROUP  = 2,
-    RAZORSCALE_FIRE_STATE_25_GROUP  = 3,
-    ENGINEER_NORTH                  = 0,
-    ENGINEER_EAST                   = 1,
-    ENGINEER_WEST                   = 2,
-    HARPOON_1                       = 0,
-    HARPOON_2                       = 1,
-    HARPOON_3                       = 2,
-    HARPOON_4                       = 3,
-    WORLD_STATE_RAZORSCALE_MUSIC    = 4162
+    DATA_QUICK_SHAVE                = 29192921,  ///< Quick Shave 成就数据 (2919, 2921 是成就 ID)
+    DATA_IRON_DWARF_MEDIUM_RARE     = 29232924,  ///< Iron Dwarf Medium Rare 成就数据
+    GOSSIP_START_ENCOUNTER          = 0,         ///< 开始遭遇对话选项
+    DATA_EXPEDITION_NUMBER          = 1,         ///< 远征军数量
+    RAZORSCALE_EXPEDITION_GROUP     = 1,         ///< 锋鳞远征军组
+    RAZORSCALE_FIRE_STATE_10_GROUP  = 2,         ///< 锋鳞开火状态 10 人组
+    RAZORSCALE_FIRE_STATE_25_GROUP  = 3,         ///< 锋鳞开火状态 25 人组
+    ENGINEER_NORTH                  = 0,         ///< 工程师北方
+    ENGINEER_EAST                   = 1,         ///< 工程师东方
+    ENGINEER_WEST                   = 2,         ///< 工程师西方
+    HARPOON_1                       = 0,         ///< 鱼叉 1
+    HARPOON_2                       = 1,         ///< 鱼叉 2
+    HARPOON_3                       = 2,         ///< 鱼叉 3
+    HARPOON_4                       = 3,         ///< 鱼叉 4
+    WORLD_STATE_RAZORSCALE_MUSIC    = 4162       ///< 世界状态锋鳞音乐
 };
 
 enum MovePoints

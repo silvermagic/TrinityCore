@@ -15,6 +15,26 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file SocialHandler.cpp
+ * @brief 社交系统网络消息处理器实现文件
+ *
+ * 本文件实现了 WorldSession 类中处理玩家社交功能的网络消息处理函数,
+ * 包括好友列表管理、忽略列表管理以及联系人备注等核心社交功能。
+ *
+ * 主要功能包括:
+ * - 好友列表查询与同步
+ * - 添加/删除好友操作(支持跨阵营权限检查)
+ * - 添加/删除忽略列表操作
+ * - 设置联系人备注
+ *
+ * 所有操作都遵循权限检查(RBAC)和阵营规则,GM账号的好友添加受到特殊限制。
+ * 部分操作采用异步查询方式处理,避免阻塞主线程。
+ *
+ * @see SocialMgr 社交管理器
+ * @see PlayerSocial 玩家社交数据
+ */
+
 #include "WorldSession.h"
 #include "AccountMgr.h"
 #include "CharacterCache.h"

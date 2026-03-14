@@ -15,25 +15,50 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file Grid.h
+ * @brief 游戏世界网格管理模块
+ *
+ * 本文件定义了 Grid 类模板，用于管理游戏世界中的一个逻辑分段。
+ * Grid 是游戏世界中对象存储和访问的基础单元，支持多种类型对象的高效管理。
+ * 网格系统是 TrinityCore 世界分区和对象可见性管理的核心组件。
+ */
+
 #ifndef TRINITY_GRID_H
 #define TRINITY_GRID_H
 
-/*
-  @class Grid
-  Grid is a logical segment of the game world represented inside TrinIty.
-  Grid is bind at compile time to a particular type of object which
-  we call it the object of interested.  There are many types of loader,
-  specially, dynamic loader, static loader, or on-demand loader.  There's
-  a subtle difference between dynamic loader and on-demand loader but
-  this is implementation specific to the loader class.  From the
-  Grid's perspective, the loader meets its API requirement is suffice.
-*/
+/**
+ * @class Grid
+ * @brief 游戏世界网格类，管理游戏世界中的一个逻辑分段
+ *
+ * Grid 是 TrinityCore 中游戏世界的逻辑分段单元，负责存储和管理特定区域内的游戏对象。
+ * 该类模板在编译时绑定到特定类型的对象集合，通过类型容器实现对不同类型对象的高效管理。
+ *
+ * 网格系统支持三种对象类型分类：
+ * - ACTIVE_OBJECT: 活动对象类型，通常是玩家等需要主动更新的对象
+ * - WORLD_OBJECT_TYPES: 世界对象类型集合，包含玩家可见的动态对象
+ * - GRID_OBJECT_TYPES: 网格对象类型集合，包含地形、静态对象等
+ *
+ * 网格加载机制：
+ * - 动态加载器 (Dynamic Loader): 根据玩家位置动态加载和卸载网格
+ * - 静态加载器 (Static Loader): 服务器启动时加载并常驻内存
+ * - 按需加载器 (On-demand Loader): 根据需求实时加载
+ *
+ * 设计模式：
+ * - 使用访问者模式 (Visitor Pattern) 实现对网格内对象的遍历
+ * - 使用类型容器 (TypeContainer) 实现类型安全的对象存储
+ * - 友元类 GridLoader 用于网格的加载和卸载操作
+ *
+ * @tparam ACTIVE_OBJECT 活动对象类型，通常是 Player 等需要主动更新的对象类型
+ * @tparam WORLD_OBJECT_TYPES 世界对象类型集合，使用 TypeList 定义
+ * @tparam GRID_OBJECT_TYPES 网格对象类型集合，使用 TypeList 定义
+ */
 
 #include "Define.h"
 #include "TypeContainer.h"
 #include "TypeContainerVisitor.h"
 
-// forward declaration
+/// 前向声明：GridLoader 类用于网格的加载和卸载
 template<class A, class T, class O> class GridLoader;
 
 template
@@ -44,13 +69,16 @@ class GRID_OBJECT_TYPES
 >
 class Grid
 {
-    // allows the GridLoader to access its internals
+    /// 允许 GridLoader 访问私有成员，用于网格加载和卸载操作
     template<class A, class T, class O> friend class GridLoader;
     public:
 
-        /** destructor to clean up its resources. This includes unloading the
-        grid if it has not been unload.
-        */
+        /**
+         * @brief 析构函数，清理网格资源
+         *
+         * 当网格对象销毁时自动调用，负责释放网格持有的资源。
+         * 注意：析构时不主动卸载网格内的对象，对象的生命周期由上层管理器控制。
+         */
         ~Grid() { }
 
         /** an object of interested enters the grid

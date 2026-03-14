@@ -15,6 +15,29 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file bosses_opera.cpp
+ * @brief 卡拉赞副本 - 歌剧事件BOSS脚本模块
+ *
+ * 本模块实现了卡拉赞歌剧事件的三个可选战斗:
+ *
+ * 1. 绿野仙踪(Wizard of Oz)事件:
+ *    - 多萝西(Dorothee)和托托(Tito)
+ *    - 稻草人(Strawman)
+ *    - 铁皮人(Tinhead)
+ *    - 狮子(Roar)
+ *    - 女巫(Crone) - 最终BOSS
+ *
+ * 2. 小红帽(Red Riding Hood)事件:
+ *    - 大灰狼(Big Bad Wolf)
+ *
+ * 3. 罗密欧与朱丽叶(Romulo and Julianne)事件:
+ *    - 朱丽叶(Julianne)
+ *    - 罗密欧(Romulo)
+ *
+ * 每周随机选择其中一个事件进行战斗
+ */
+
 /* ScriptData
 SDName: Bosses_Opera
 SD%Complete: 90
@@ -37,74 +60,104 @@ EndScriptData */
 /***********************************/
 /*** OPERA WIZARD OF OZ EVENT *****/
 /*********************************/
+
+/**
+ * @brief 绿野仙踪事件台词枚举
+ *
+ * 定义各个角色的台词和表情
+ */
 enum Says
 {
-    SAY_DOROTHEE_DEATH          = 0,
-    SAY_DOROTHEE_SUMMON         = 1,
-    SAY_DOROTHEE_TITO_DEATH     = 2,
-    SAY_DOROTHEE_AGGRO          = 3,
+    // 多萝西台词
+    SAY_DOROTHEE_DEATH          = 0,  ///< 多萝西死亡台词
+    SAY_DOROTHEE_SUMMON         = 1,  ///< 多萝西召唤托托台词
+    SAY_DOROTHEE_TITO_DEATH     = 2,  ///< 托托死亡时多萝西的台词
+    SAY_DOROTHEE_AGGRO          = 3,  ///< 多萝西进入战斗台词
 
-    SAY_ROAR_AGGRO              = 0,
-    SAY_ROAR_DEATH              = 1,
-    SAY_ROAR_SLAY               = 2,
+    // 狮子台词
+    SAY_ROAR_AGGRO              = 0,  ///< 狮子进入战斗台词
+    SAY_ROAR_DEATH              = 1,  ///< 狮子死亡台词
+    SAY_ROAR_SLAY               = 2,  ///< 狮子击杀玩家台词
 
-    SAY_STRAWMAN_AGGRO          = 0,
-    SAY_STRAWMAN_DEATH          = 1,
-    SAY_STRAWMAN_SLAY           = 2,
+    // 稻草人台词
+    SAY_STRAWMAN_AGGRO          = 0,  ///< 稻草人进入战斗台词
+    SAY_STRAWMAN_DEATH          = 1,  ///< 稻草人死亡台词
+    SAY_STRAWMAN_SLAY           = 2,  ///< 稻草人击杀玩家台词
 
-    SAY_TINHEAD_AGGRO           = 0,
-    SAY_TINHEAD_DEATH           = 1,
-    SAY_TINHEAD_SLAY            = 2,
-    EMOTE_RUST                  = 3,
+    // 铁皮人台词
+    SAY_TINHEAD_AGGRO           = 0,  ///< 铁皮人进入战斗台词
+    SAY_TINHEAD_DEATH           = 1,  ///< 铁皮人死亡台词
+    SAY_TINHEAD_SLAY            = 2,  ///< 铁皮人击杀玩家台词
+    EMOTE_RUST                  = 3,  ///< 铁皮人生锈表情
 
-    SAY_CRONE_AGGRO             = 0,
-    SAY_CRONE_DEATH             = 1,
-    SAY_CRONE_SLAY              = 2,
+    // 女巫台词
+    SAY_CRONE_AGGRO             = 0,  ///< 女巫进入战斗台词
+    SAY_CRONE_DEATH             = 1,  ///< 女巫死亡台词
+    SAY_CRONE_SLAY              = 2,  ///< 女巫击杀玩家台词
 };
 
+/**
+ * @brief 绿野仙踪事件法术ID枚举
+ *
+ * 定义所有角色使用的法术技能ID
+ */
 enum Spells
 {
-    // Dorothee
-    SPELL_WATERBOLT         = 31012,
-    SPELL_SCREAM            = 31013,
-    SPELL_SUMMONTITO        = 31014,
+    // 多萝西技能
+    SPELL_WATERBOLT         = 31012,  ///< 水箭：对目标造成冰霜伤害
+    SPELL_SCREAM            = 31013,  ///< 尖叫：恐惧效果
+    SPELL_SUMMONTITO        = 31014,  ///< 召唤托托
 
-    // Tito
-    SPELL_YIPPING           = 31015,
+    // 托托技能
+    SPELL_YIPPING           = 31015,  ///< 吠叫：对目标造成伤害
 
-    // Strawman
-    SPELL_BRAIN_BASH        = 31046,
-    SPELL_BRAIN_WIPE        = 31069,
-    SPELL_BURNING_STRAW     = 31075,
+    // 稻草人技能
+    SPELL_BRAIN_BASH        = 31046,  ///< 脑部重击：使目标昏迷
+    SPELL_BRAIN_WIPE        = 31069,  ///< 脑部清除：清空目标法力值
+    SPELL_BURNING_STRAW     = 31075,  ///< 燃烧稻草：被火焰法术击中时触发
 
-    // Tinhead
-    SPELL_CLEAVE            = 31043,
-    SPELL_RUST              = 31086,
+    // 铁皮人技能
+    SPELL_CLEAVE            = 31043,  ///< 顺劈斩：前方范围伤害
+    SPELL_RUST              = 31086,  ///< 生锈：降低移动速度
 
-    // Roar
-    SPELL_MANGLE            = 31041,
-    SPELL_SHRED             = 31042,
-    SPELL_FRIGHTENED_SCREAM = 31013,
+    // 狮子技能
+    SPELL_MANGLE            = 31041,  ///< 撕裂：对目标造成伤害并降低护甲
+    SPELL_SHRED             = 31042,  ///< 撕碎：对目标造成伤害
+    SPELL_FRIGHTENED_SCREAM = 31013,  ///< 恐惧尖叫：恐惧效果
 
-    // Crone
-    SPELL_CHAIN_LIGHTNING   = 32337,
+    // 女巫技能
+    SPELL_CHAIN_LIGHTNING   = 32337,  ///< 闪电链：连锁闪电伤害
 
-    // Cyclone
-    SPELL_KNOCKBACK         = 32334,
-    SPELL_CYCLONE_VISUAL    = 32332,
+    // 旋风技能
+    SPELL_KNOCKBACK         = 32334,  ///< 击退：将玩家击退
+    SPELL_CYCLONE_VISUAL    = 32332,  ///< 旋风视觉效果
 };
 
+/**
+ * @brief 绿野仙踪事件生物ID枚举
+ */
 enum Creatures
 {
-    CREATURE_TITO           = 17548,
-    CREATURE_CYCLONE        = 18412,
-    CREATURE_CRONE          = 18168,
+    CREATURE_TITO           = 17548,  ///< 托托(小狗)NPC ID
+    CREATURE_CYCLONE        = 18412,  ///< 旋风NPC ID
+    CREATURE_CRONE          = 18168,  ///< 女巫NPC ID
 };
 
+/**
+ * @brief 如果所有前置BOSS已死亡，召唤女巫
+ * @param instance 副本实例脚本指针
+ * @param creature 召唤者生物指针
+ *
+ * 功能:
+ * - 每次调用增加死亡计数
+ * - 当死亡计数达到4时(多萝西、稻草人、铁皮人、狮子全部死亡)，召唤女巫
+ * - 女巫是绿野仙踪事件的最终BOSS
+ */
 void SummonCroneIfReady(InstanceScript* instance, Creature* creature)
 {
-    instance->SetData(DATA_OPERA_OZ_DEATHCOUNT, SPECIAL);  // Increment DeathCount
+    instance->SetData(DATA_OPERA_OZ_DEATHCOUNT, SPECIAL);  // 增加死亡计数
 
+    // 当4个前置BOSS全部死亡时，召唤女巫
     if (instance->GetData(DATA_OPERA_OZ_DEATHCOUNT) == 4)
     {
         if (Creature* pCrone = creature->SummonCreature(CREATURE_CRONE, -10891.96f, -1755.95f, creature->GetPositionZ(), 4.64f, TEMPSUMMON_TIMED_OR_DEAD_DESPAWN, 2h))
@@ -115,57 +168,114 @@ void SummonCroneIfReady(InstanceScript* instance, Creature* creature)
     }
 }
 
+/**
+ * @class boss_dorothee
+ * @brief 多萝西BOSS脚本类
+ *
+ * 继承自CreatureScript，用于注册多萝西BOSS的AI脚本
+ * 多萝西是绿野仙踪事件的第一个BOSS，会召唤她的小狗托托
+ */
 class boss_dorothee : public CreatureScript
 {
 public:
+    /**
+     * @brief 构造函数
+     *
+     * 注册多萝西脚本名称
+     */
     boss_dorothee() : CreatureScript("boss_dorothee") { }
 
+    /**
+     * @brief 获取AI实例
+     * @param creature 生物对象指针
+     * @return 返回多萝西AI实例
+     */
     CreatureAI* GetAI(Creature* creature) const override
     {
         return GetKarazhanAI<boss_dorotheeAI>(creature);
     }
 
+    /**
+     * @struct boss_dorotheeAI
+     * @brief 多萝西BOSS的AI实现
+     *
+     * 继承自ScriptedAI，实现多萝西的战斗逻辑:
+     * - 使用水箭攻击随机目标
+     * - 周期性施放恐惧尖叫
+     * - 召唤小狗托托协助战斗
+     * - 托托死亡后加快施法速度
+     */
     struct boss_dorotheeAI : public ScriptedAI
     {
+        /**
+         * @brief 构造函数
+         * @param creature 生物对象指针
+         *
+         * 初始化多萝西AI并设置副本脚本
+         */
         boss_dorotheeAI(Creature* creature) : ScriptedAI(creature)
         {
             Initialize();
             instance = creature->GetInstanceScript();
         }
 
+        /**
+         * @brief 初始化成员变量
+         *
+         * 功能: 设置所有计时器和状态标志的初始值
+         */
         void Initialize()
         {
-            AggroTimer = 500;
+            AggroTimer = 500;  ///< 激活计时器(0.5秒后可被攻击)
 
-            WaterBoltTimer = 5000;
-            FearTimer = 15000;
-            SummonTitoTimer = 47500;
+            WaterBoltTimer = 5000;    ///< 水箭计时器(5秒)
+            FearTimer = 15000;        ///< 恐惧计时器(15秒)
+            SummonTitoTimer = 47500;  ///< 召唤托托计时器(47.5秒)
 
-            SummonedTito = false;
-            TitoDied = false;
+            SummonedTito = false;  ///< 是否已召唤托托
+            TitoDied = false;      ///< 托托是否死亡
         }
 
-        InstanceScript* instance;
+        InstanceScript* instance;  ///< 副本实例脚本指针
 
-        uint32 AggroTimer;
+        uint32 AggroTimer;         ///< 激活计时器
 
-        uint32 WaterBoltTimer;
-        uint32 FearTimer;
-        uint32 SummonTitoTimer;
+        uint32 WaterBoltTimer;     ///< 水箭施法计时器
+        uint32 FearTimer;          ///< 恐惧施法计时器
+        uint32 SummonTitoTimer;    ///< 召唤托托计时器
 
-        bool SummonedTito;
-        bool TitoDied;
+        bool SummonedTito;         ///< 是否已召唤托托
+        bool TitoDied;             ///< 托托是否死亡
 
+        /**
+         * @brief 重置BOSS状态
+         *
+         * 调用时机: BOSS脱离战斗或重置时
+         * 功能: 初始化所有成员变量
+         */
         void Reset() override
         {
             Initialize();
         }
 
+        /**
+         * @brief 进入战斗回调
+         * @param who 进入战斗的目标(未使用)
+         *
+         * 调用时机: 多萝西进入战斗时
+         * 功能: 播放战斗开始台词
+         */
         void JustEngagedWith(Unit* /*who*/) override
         {
             Talk(SAY_DOROTHEE_AGGRO);
         }
 
+        /**
+         * @brief 返回出生点回调
+         *
+         * 调用时机: 多萝西脱离战斗返回出生点时
+         * 功能: 消失多萝西
+         */
         void JustReachedHome() override
         {
             me->DespawnOrUnsummon();
@@ -173,6 +283,13 @@ public:
 
         void SummonTito();
 
+        /**
+         * @brief 死亡回调
+         * @param killer 击杀者(未使用)
+         *
+         * 调用时机: 多萝西死亡时
+         * 功能: 播放死亡台词，检查是否召唤女巫
+         */
         void JustDied(Unit* /*killer*/) override
         {
             Talk(SAY_DOROTHEE_DEATH);
@@ -180,6 +297,13 @@ public:
             SummonCroneIfReady(instance, me);
         }
 
+        /**
+         * @brief 开始攻击
+         * @param who 攻击目标
+         *
+         * 调用时机: 开始攻击目标时
+         * 功能: 如果处于不可攻击状态，不进行攻击
+         */
         void AttackStart(Unit* who) override
         {
             if (me->HasUnitFlag(UNIT_FLAG_NON_ATTACKABLE))
@@ -188,6 +312,13 @@ public:
             ScriptedAI::AttackStart(who);
         }
 
+        /**
+         * @brief 视线检测
+         * @param who 进入视线的单位
+         *
+         * 调用时机: 单位进入视线范围时
+         * 功能: 如果处于不可攻击状态，不进入战斗
+         */
         void MoveInLineOfSight(Unit* who) override
 
         {
@@ -197,8 +328,21 @@ public:
             ScriptedAI::MoveInLineOfSight(who);
         }
 
+        /**
+         * @brief 更新AI
+         * @param diff 距离上次更新的时间差(毫秒)
+         *
+         * 调用时机: 每个游戏循环 tick
+         * 功能:
+         * - 处理激活计时器
+         * - 施放水箭攻击
+         * - 施放恐惧尖叫
+         * - 召唤托托
+         * - 执行近战攻击
+         */
         void UpdateAI(uint32 diff) override
         {
+            // 激活计时器：0.5秒后移除不可攻击标志
             if (AggroTimer)
             {
                 if (AggroTimer <= diff)
@@ -211,18 +355,21 @@ public:
             if (!UpdateVictim())
                 return;
 
+            // 水箭：托托死亡后施法频率加快
             if (WaterBoltTimer <= diff)
             {
                 DoCast(SelectTarget(SelectTargetMethod::Random, 0), SPELL_WATERBOLT);
                 WaterBoltTimer = TitoDied ? 1500 : 5000;
             } else WaterBoltTimer -= diff;
 
+            // 恐惧尖叫
             if (FearTimer <= diff)
             {
                 DoCastVictim(SPELL_SCREAM);
                 FearTimer = 30000;
             } else FearTimer -= diff;
 
+            // 召唤托托
             if (!SummonedTito)
             {
                 if (SummonTitoTimer <= diff)

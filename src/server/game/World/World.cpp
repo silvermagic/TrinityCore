@@ -15,9 +15,24 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-/** \file
-    \ingroup world
-*/
+/**
+ * @file World.cpp
+ * @ingroup world
+ *
+ * @brief 世界管理器实现文件
+ *
+ * 本文件实现了 World 类，这是 TrinityCore 服务器的核心组件，负责：
+ * - 管理所有玩家会话（WorldSession）
+ * - 处理世界更新循环（Update 循环）
+ * - 管理服务器配置和倍率设置
+ * - 处理服务器关闭和重启逻辑
+ * - 管理定时任务（拍卖行更新、尸体清理、游戏事件等）
+ * - 处理全局消息广播
+ * - 初始化游戏世界（加载 DBC、数据库数据等）
+ *
+ * @note 本文件包含服务器启动的核心流程，加载超过 100 种不同的数据表
+ * @note 主要更新循环每帧调用 Update() 方法，处理所有会话和定时器
+ */
 
 #include "World.h"
 #include "AccountMgr.h"
@@ -92,93 +107,186 @@
 #include <boost/asio/ip/address.hpp>
 #include <boost/algorithm/string.hpp>
 
+// ============================================================================
+// 静态成员变量初始化
+// ============================================================================
+
+/// 停止事件标志 - 当设置为 true 时，主循环将退出
 TC_GAME_API std::atomic<bool> World::m_stopEvent(false);
+
+/// 退出代码 - 用于指示服务器关闭的原因
 TC_GAME_API uint8 World::m_ExitCode = SHUTDOWN_EXIT_CODE;
 
+/// 世界循环计数器 - 用于性能统计和调试
 TC_GAME_API std::atomic<uint32> World::m_worldLoopCounter(0);
 
+// ============================================================================
+// 可见性距离静态成员 - 控制玩家能看到其他对象的距离
+// ============================================================================
+
+/// 大陆上的最大可见距离（户外世界）
 TC_GAME_API float World::m_MaxVisibleDistanceOnContinents = DEFAULT_VISIBILITY_DISTANCE;
+
+/// 副本中的最大可见距离
 TC_GAME_API float World::m_MaxVisibleDistanceInInstances  = DEFAULT_VISIBILITY_INSTANCE;
+
+/// 战场中的最大可见距离
 TC_GAME_API float World::m_MaxVisibleDistanceInBG         = DEFAULT_VISIBILITY_BGARENAS;
+
+/// 竞技场中的最大可见距离
 TC_GAME_API float World::m_MaxVisibleDistanceInArenas     = DEFAULT_VISIBILITY_BGARENAS;
 
+// ============================================================================
+// 可见性通知周期静态成员 - 控制多久检查一次可见性更新
+// ============================================================================
+
+/// 大陆上的可见性通知周期（毫秒）
 TC_GAME_API int32 World::m_visibility_notify_periodOnContinents = DEFAULT_VISIBILITY_NOTIFY_PERIOD;
+
+/// 副本中的可见性通知周期（毫秒）
 TC_GAME_API int32 World::m_visibility_notify_periodInInstances  = DEFAULT_VISIBILITY_NOTIFY_PERIOD;
+
+/// 战场中的可见性通知周期（毫秒）
 TC_GAME_API int32 World::m_visibility_notify_periodInBG         = DEFAULT_VISIBILITY_NOTIFY_PERIOD;
+
+/// 竞技场中的可见性通知周期（毫秒）
 TC_GAME_API int32 World::m_visibility_notify_periodInArenas     = DEFAULT_VISIBILITY_NOTIFY_PERIOD;
 
-/// World constructor
+/**
+ * @brief World 构造函数
+ *
+ * 初始化世界管理器的所有成员变量为默认值。
+ * 这是服务器启动的第一步，在 main() 函数中调用。
+ *
+ * 初始化内容包括：
+ * - 玩家限制和安全等级
+ * - 会话计数器
+ * - 定时器
+ * - 配置数组
+ * - GUID 警告系统
+ *
+ * @note 此构造函数不加载任何数据，仅初始化变量
+ * @see SetInitialWorldSettings() 加载实际游戏数据
+ */
 World::World()
 {
-    m_playerLimit = 0;
-    m_allowedSecurityLevel = SEC_PLAYER;
-    m_allowMovement = true;
-    m_ShutdownMask = 0;
-    m_ShutdownTimer = 0;
+    // 玩家限制和安全等级
+    m_playerLimit = 0;                          // 玩家数量限制（0 = 无限制）
+    m_allowedSecurityLevel = SEC_PLAYER;        // 允许登录的最低安全等级
+    m_allowMovement = true;                     // 是否允许生物移动（调试用）
 
-    m_maxActiveSessionCount = 0;
-    m_maxQueuedSessionCount = 0;
-    m_PlayerCount = 0;
-    m_MaxPlayerCount = 0;
-    m_NextDailyQuestReset = 0;
-    m_NextWeeklyQuestReset = 0;
-    m_NextMonthlyQuestReset = 0;
-    m_NextRandomBGReset = 0;
-    m_NextCalendarOldEventsDeletionTime = 0;
-    m_NextGuildReset = 0;
+    // 关闭和重启相关
+    m_ShutdownMask = 0;                         // 关闭掩码（重启、空闲关闭等）
+    m_ShutdownTimer = 0;                        // 关闭倒计时（秒）
 
-    m_defaultDbcLocale = LOCALE_enUS;
-    m_availableDbcLocaleMask = 0;
+    // 会话统计
+    m_maxActiveSessionCount = 0;                // 最大活跃会话数（统计用）
+    m_maxQueuedSessionCount = 0;                // 最大排队会话数（统计用）
+    m_PlayerCount = 0;                          // 当前在线玩家数
+    m_MaxPlayerCount = 0;                       // 最大在线玩家数（统计用）
 
-    mail_timer = 0;
-    mail_timer_expires = 0;
+    // 任务重置时间
+    m_NextDailyQuestReset = 0;                  // 下次日常任务重置时间
+    m_NextWeeklyQuestReset = 0;                 // 下次周常任务重置时间
+    m_NextMonthlyQuestReset = 0;                // 下次月常任务重置时间
+    m_NextRandomBGReset = 0;                    // 下次随机战场重置时间
+    m_NextCalendarOldEventsDeletionTime = 0;    // 下次日历旧事件删除时间
+    m_NextGuildReset = 0;                       // 下次公会重置时间
 
-    m_isClosed = false;
+    // 语言设置
+    m_defaultDbcLocale = LOCALE_enUS;           // 默认 DBC 语言（美式英语）
+    m_availableDbcLocaleMask = 0;               // 可用的 DBC 语言掩码
 
-    m_CleaningFlags = 0;
+    // 邮件系统定时器
+    mail_timer = 0;                             // 邮件定时器
+    mail_timer_expires = 0;                     // 邮件定时器过期时间
 
-    memset(rate_values, 0, sizeof(rate_values));
-    memset(m_int_configs, 0, sizeof(m_int_configs));
-    memset(m_bool_configs, 0, sizeof(m_bool_configs));
-    memset(m_float_configs, 0, sizeof(m_float_configs));
+    // 服务器状态
+    m_isClosed = false;                         // 服务器是否关闭（拒绝新连接）
 
-    _guidWarn = false;
-    _guidAlert = false;
-    _warnDiff = 0;
-    _warnShutdownTime = GameTime::GetGameTime();
+    // 清理标志
+    m_CleaningFlags = 0;                        // 数据库清理标志
+
+    // 初始化所有配置数组为 0
+    memset(rate_values, 0, sizeof(rate_values));          // 倍率值数组
+    memset(m_int_configs, 0, sizeof(m_int_configs));      // 整数配置数组
+    memset(m_bool_configs, 0, sizeof(m_bool_configs));    // 布尔配置数组
+    memset(m_float_configs, 0, sizeof(m_float_configs));  // 浮点数配置数组
+
+    // GUID 警告系统
+    _guidWarn = false;                          // GUID 警告标志（接近上限）
+    _guidAlert = false;                         // GUID 警报标志（严重接近上限）
+    _warnDiff = 0;                              // 警告间隔计数器
+    _warnShutdownTime = GameTime::GetGameTime();// 警告关闭时间
 }
 
-/// World destructor
+/**
+ * @brief World 析构函数
+ *
+ * 清理世界管理器资源，包括：
+ * - 删除所有剩余的会话对象
+ * - 清理 CLI 命令队列
+ * - 释放 VMap 和 MMap 资源
+ *
+ * @note 此函数在服务器关闭时调用
+ * @warning 必须确保所有地图和会话已经正确清理
+ */
 World::~World()
 {
-    ///- Empty the kicked session set
+    /// 清空踢出的会话集合
+    /// 删除所有剩余的会话对象
     while (!m_sessions.empty())
     {
-        // not remove from queue, prevent loading new sessions
+        // 不从队列中移除，防止加载新会话
         delete m_sessions.begin()->second;
         m_sessions.erase(m_sessions.begin());
     }
 
+    // 清理 CLI 命令队列
     CliCommandHolder* command = nullptr;
     while (cliCmdQueue.next(command))
         delete command;
 
+    // 清理 VMap（视线碰撞检测）资源
     VMAP::VMapFactory::clear();
+    // 清理 MMap（寻路网格）资源
     MMAP::MMapFactory::clear();
 
-    /// @todo free addSessQueue
+    /// @todo 释放 addSessQueue（异步会话添加队列）
 }
 
+/**
+ * @brief 获取世界实例（单例模式）
+ *
+ * 返回 World 类的唯一实例。使用静态局部变量实现线程安全的单例模式。
+ *
+ * @return World* 世界管理器的唯一实例指针
+ *
+ * @note 此方法是获取世界管理器的唯一方式
+ * @note 通过 sWorld 宏可以更方便地访问
+ */
 World* World::instance()
 {
     static World instance;
     return &instance;
 }
 
-/// Find a player in a specified zone
+/**
+ * @brief 在指定区域查找玩家
+ *
+ * 遍历所有活跃会话，查找第一个位于指定区域的玩家。
+ *
+ * @param zone 区域 ID（AreaTable.dbc 中的 ID）
+ * @return Player* 找到的玩家指针，如果未找到则返回 nullptr
+ *
+ * @note 此方法用于检查特定区域是否有玩家在线
+ * @note 只返回第一个找到的玩家
+ *
+ * @性能 遍历所有会话，时间复杂度 O(n)
+ */
 Player* World::FindPlayerInZone(uint32 zone)
 {
-    ///- circle through active sessions and return the first player found in the zone
+    ///- 遍历所有活跃会话，返回第一个在指定区域的玩家
     SessionMap::const_iterator itr;
     for (itr = m_sessions.begin(); itr != m_sessions.end(); ++itr)
     {
@@ -189,25 +297,55 @@ Player* World::FindPlayerInZone(uint32 zone)
         if (!player)
             continue;
 
+        // 检查玩家是否在世界中且在指定区域
         if (player->IsInWorld() && player->GetZoneId() == zone)
             return player;
     }
     return nullptr;
 }
 
+/**
+ * @brief 检查服务器是否已关闭
+ *
+ * 返回服务器的关闭状态。当服务器关闭时，拒绝新的客户端连接。
+ *
+ * @return true 服务器已关闭，拒绝新连接
+ * @return false 服务器开放，接受新连接
+ *
+ * @note 可通过 SetClosed() 方法设置关闭状态
+ */
 bool World::IsClosed() const
 {
     return m_isClosed;
 }
 
+/**
+ * @brief 设置服务器关闭状态
+ *
+ * 设置服务器的关闭状态，并触发脚本事件。
+ *
+ * @param val true 表示关闭服务器（拒绝新连接），false 表示开放服务器
+ *
+ * @note 会触发脚本回调 OnOpenStateChange
+ * @note 值会被反转传递给脚本（方便脚本编写者）
+ */
 void World::SetClosed(bool val)
 {
     m_isClosed = val;
 
-    // Invert the value, for simplicity for scripters.
+    // 反转值，简化脚本编写者的使用
     sScriptMgr->OnOpenStateChange(!val);
 }
 
+/**
+ * @brief 从数据库加载允许的安全等级
+ *
+ * 从登录数据库的 realmlist 表加载此领域允许的最低安全等级。
+ * 用于限制只有特定 GM 等级以上的账号才能登录。
+ *
+ * @note 如果数据库中没有记录，则使用默认值 SEC_PLAYER
+ * @note 在服务器启动时调用
+ */
 void World::LoadDBAllowedSecurityLevel()
 {
     LoginDatabasePreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_SEL_REALMLIST_SECURITY_LEVEL);
@@ -218,61 +356,129 @@ void World::LoadDBAllowedSecurityLevel()
         SetPlayerSecurityLimit(AccountTypes(result->Fetch()->GetUInt8()));
 }
 
+/**
+ * @brief 设置玩家安全等级限制
+ *
+ * 设置允许登录的最低安全等级。如果新等级更严格，会踢出当前在线的低等级账号。
+ *
+ * @param _sec 安全等级（AccountTypes 枚举）
+ *
+ * @note 等级必须是 SEC_PLAYER 到 SEC_CONSOLE 之间
+ * @note 如果新等级比当前更严格，会踢出所有低于新等级的玩家
+ */
 void World::SetPlayerSecurityLimit(AccountTypes _sec)
 {
+    // 确保等级在有效范围内（最大为 SEC_PLAYER）
     AccountTypes sec = _sec < SEC_CONSOLE ? _sec : SEC_PLAYER;
     bool update = sec > m_allowedSecurityLevel;
     m_allowedSecurityLevel = sec;
+    // 如果需要更新且新等级更严格，踢出所有低于新等级的玩家
     if (update)
         KickAllLess(m_allowedSecurityLevel);
 }
 
+// ============================================================================
+// GUID 警告和警报系统
+// ============================================================================
+
+/**
+ * @brief 触发 GUID 警告
+ *
+ * 当 GUID 使用量接近上限时触发警告，安排服务器在安静时间重启。
+ * 这是预防性措施，防止 GUID 耗尽导致服务器崩溃。
+ *
+ * @note GUID 是游戏中所有对象的唯一标识符
+ * @note 警告等级通常设置为 1200 万（上限 1677 万）
+ * @note 会在安静时间（凌晨）安排重启
+ *
+ * @性能 使用互斥锁防止多个地图同时触发
+ */
 void World::TriggerGuidWarning()
 {
-    // Lock this only to prevent multiple maps triggering at the same time
+    // 锁定互斥锁，防止多个地图同时触发
     std::lock_guard<std::mutex> lock(_guidAlertLock);
 
     time_t gameTime = GameTime::GetGameTime();
     time_t today = (gameTime / DAY) * DAY;
 
-    // Check if our window to restart today has passed. 5 mins until quiet time
+    // 检查今天的重启窗口是否已过（安静时间前 5 分钟）
     while (gameTime >= GetLocalHourTimestamp(today, getIntConfig(CONFIG_RESPAWN_RESTARTQUIETTIME)) - 1810)
         today += DAY;
 
-    // Schedule restart for 30 minutes before quiet time, or as long as we have
+    // 安排在安静时间前 30 分钟重启
     _warnShutdownTime = GetLocalHourTimestamp(today, getIntConfig(CONFIG_RESPAWN_RESTARTQUIETTIME)) - 1800;
 
     _guidWarn = true;
     SendGuidWarning();
 }
 
+/**
+ * @brief 触发 GUID 警报
+ *
+ * 当 GUID 使用量非常接近上限时触发警报，立即安排紧急重启。
+ * 这是紧急措施，必须在短时间内重启服务器。
+ *
+ * @note 警报等级通常设置为 1600 万（上限 1677 万）
+ * @note 会在 5 分钟内强制重启服务器
+ *
+ * @性能 使用互斥锁防止多个地图同时触发
+ */
 void World::TriggerGuidAlert()
 {
-    // Lock this only to prevent multiple maps triggering at the same time
+    // 锁定互斥锁，防止多个地图同时触发
     std::lock_guard<std::mutex> lock(_guidAlertLock);
 
+    // 执行紧急重启（5 分钟倒计时）
     DoGuidAlertRestart();
     _guidAlert = true;
     _guidWarn = false;
 }
 
+/**
+ * @brief 执行 GUID 警告重启
+ *
+ * 如果当前没有正在进行的关闭流程，启动 30 分钟倒计时的重启。
+ * 这是正常的预防性重启。
+ *
+ * @note 只在警告等级触发，给玩家足够时间准备
+ */
 void World::DoGuidWarningRestart()
 {
+    // 如果已经有关闭流程在进行，直接返回
     if (m_ShutdownTimer)
         return;
 
+    // 启动 30 分钟倒计时重启
     ShutdownServ(1800, SHUTDOWN_MASK_RESTART, RESTART_EXIT_CODE);
-    _warnShutdownTime += HOUR;
+    _warnShutdownTime += HOUR;  // 推迟警告时间，避免重复触发
 }
 
+/**
+ * @brief 执行 GUID 警报重启
+ *
+ * 如果当前没有正在进行的关闭流程，启动 5 分钟倒计时的紧急重启。
+ * 这是紧急重启，必须尽快执行。
+ *
+ * @note 只在警报等级触发，时间紧迫
+ */
 void World::DoGuidAlertRestart()
 {
+    // 如果已经有关闭流程在进行，直接返回
     if (m_ShutdownTimer)
         return;
 
+    // 启动 5 分钟紧急重启
     ShutdownServ(300, SHUTDOWN_MASK_RESTART, RESTART_EXIT_CODE, _alertRestartReason);
 }
 
+/**
+ * @brief 发送 GUID 警告消息
+ *
+ * 向所有在线玩家发送 GUID 警告消息，通知即将进行的维护重启。
+ *
+ * @note 只有在警告标志设置且没有关闭流程时才发送
+ * @note 消息频率由 CONFIG_RESPAWN_GUIDWARNING_FREQUENCY 控制
+ */
 void World::SendGuidWarning()
 {
     if (!m_ShutdownTimer && _guidWarn && getIntConfig(CONFIG_RESPAWN_GUIDWARNING_FREQUENCY) > 0)
@@ -280,83 +486,140 @@ void World::SendGuidWarning()
     _warnDiff = 0;
 }
 
-/// Find a session by its id
+// ============================================================================
+// 会话管理
+// ============================================================================
+
+/**
+ * @brief 根据账号 ID 查找会话
+ *
+ * 在会话映射中查找指定账号 ID 的会话对象。
+ *
+ * @param id 账号 ID
+ * @return WorldSession* 会话指针，如果未找到则返回 nullptr
+ *
+ * @note 可能返回 nullptr（被踢出的会话）
+ *
+ * @性能 使用 unordered_map，平均时间复杂度 O(1)
+ */
 WorldSession* World::FindSession(uint32 id) const
 {
     SessionMap::const_iterator itr = m_sessions.find(id);
 
     if (itr != m_sessions.end())
-        return itr->second;                                 // also can return nullptr for kicked session
+        return itr->second;                                 // 也可能返回 nullptr（被踢出的会话）
     else
         return nullptr;
 }
 
-/// Remove a given session
+/**
+ * @brief 移除指定会话
+ *
+ * 根据账号 ID 移除会话。会先踢出玩家，但不会立即删除会话对象
+ * （在下次世界更新时删除）。
+ *
+ * @param id 账号 ID
+ * @return true 成功移除或会话不存在
+ * @return false 玩家正在加载中，无法移除
+ *
+ * @note 如果玩家正在加载中，会返回 false 以防止数据损坏
+ * @note 会话对象不会立即删除，而是标记为待删除
+ */
 bool World::RemoveSession(uint32 id)
 {
-    ///- Find the session, kick the user, but we can't delete session at this moment to prevent iterator invalidation
+    ///- 查找会话，踢出用户，但不能立即删除会话以防止迭代器失效
     SessionMap::const_iterator itr = m_sessions.find(id);
 
     if (itr != m_sessions.end() && itr->second)
     {
+        // 如果玩家正在加载中，返回 false
         if (itr->second->PlayerLoading())
             return false;
 
+        // 踢出玩家
         itr->second->KickPlayer("World::RemoveSession");
     }
 
     return true;
 }
 
+/**
+ * @brief 添加会话到异步队列
+ *
+ * 将新会话添加到异步队列中，在下次世界更新时处理。
+ * 这样可以避免在 socket 线程中直接操作会话映射。
+ *
+ * @param s 要添加的会话指针
+ *
+ * @note 线程安全：可以从任何线程调用
+ * @see AddSession_() 实际处理会话的方法
+ */
 void World::AddSession(WorldSession* s)
 {
     addSessQueue.add(s);
 }
 
+/**
+ * @brief 实际添加会话到世界（内部实现）
+ *
+ * 处理会话添加的核心逻辑：
+ * 1. 踢出已存在的同名账号会话
+ * 2. 检查服务器是否已满
+ * 3. 如果已满，将玩家加入队列
+ * 4. 否则初始化会话
+ *
+ * @param s 要添加的会话指针
+ *
+ * @warning 此方法必须在世界更新线程中调用
+ * @note 会检查玩家数量限制和排队机制
+ *
+ * @性能 可能触发数据库查询（更新在线计数）
+ */
 void World::AddSession_(WorldSession* s)
 {
     ASSERT(s);
 
-    //NOTE - Still there is race condition in WorldSession* being used in the Sockets
+    // 注意 - WorldSession* 在 Socket 中仍存在竞争条件
 
-    ///- kick already loaded player with same account (if any) and remove session
-    ///- if player is in loading and want to load again, return
+    ///- 踢出已存在的同名账号会话（如果有的话）
+    ///- 如果玩家正在加载中又尝试加载，直接返回
     if (!RemoveSession(s->GetAccountId()))
     {
         s->KickPlayer("World::AddSession_ Couldn't remove the other session while on loading screen");
-        delete s;                                           // session not added yet in session list, so not listed in queue
+        delete s;                                           // 会话还未加入会话列表，所以不在队列中
         return;
     }
 
-    // decrease session counts only at not reconnection case
+    // 只在非重连情况下减少会话计数
     bool decrease_session = true;
 
-    // if session already exist, prepare to it deleting at next world update
-    // NOTE - KickPlayer() should be called on "old" in RemoveSession()
+    // 如果会话已存在，准备在下次世界更新时删除
+    // 注意 - KickPlayer() 应该在 RemoveSession() 中对"旧"会话调用
     {
         SessionMap::const_iterator old = m_sessions.find(s->GetAccountId());
 
         if (old != m_sessions.end())
         {
-            // prevent decrease sessions count if session queued
+            // 如果会话在队列中，不减少会话计数
             if (RemoveQueuedPlayer(old->second))
                 decrease_session = false;
-            // not remove replaced session form queue if listed
+            // 不从队列中移除被替换的会话（如果已列出）
             delete old->second;
         }
     }
 
+    // 将会话添加到映射
     m_sessions[s->GetAccountId()] = s;
 
     uint32 Sessions = GetActiveAndQueuedSessionCount();
     uint32 pLimit = GetPlayerAmountLimit();
-    uint32 QueueSize = GetQueuedSessionCount(); //number of players in the queue
+    uint32 QueueSize = GetQueuedSessionCount(); // 队列中的玩家数量
 
-    //so we don't count the user trying to
-    //login as a session and queue the socket that we are using
+    // 不计算正在尝试登录的用户为会话
     if (decrease_session)
         --Sessions;
 
+    // 检查是否需要排队
     if (pLimit > 0 && Sessions >= pLimit && !s->HasPermission(rbac::RBAC_PERM_SKIP_QUEUE) && !HasRecentlyDisconnected(s))
     {
         AddQueuedPlayer(s);
@@ -365,20 +628,34 @@ void World::AddSession_(WorldSession* s)
         return;
     }
 
+    // 初始化会话（发送角色列表等）
     s->InitializeSession();
 
     UpdateMaxSessionCounters();
 
-    // Updates the population
+    // 更新人口统计
     if (pLimit > 0)
     {
-        float popu = (float)GetActiveSessionCount();              // updated number of users on the server
+        float popu = (float)GetActiveSessionCount();              // 更新后的用户数量
         popu /= pLimit;
         popu *= 2;
         TC_LOG_INFO("misc", "Server Population ({}).", popu);
     }
 }
 
+/**
+ * @brief 检查会话是否最近断开连接
+ *
+ * 检查指定账号是否在断开连接容忍时间内。
+ * 如果是，则允许直接重新连接而无需排队。
+ *
+ * @param session 要检查的会话
+ * @return true 最近断开连接（可跳过排队）
+ * @return false 未在容忍时间内断开连接
+ *
+ * @note 容忍时间由 CONFIG_INTERVAL_DISCONNECT_TOLERANCE 配置
+ * @note 用于处理短暂断线重连的情况
+ */
 bool World::HasRecentlyDisconnected(WorldSession* session)
 {
     if (!session)
@@ -395,12 +672,22 @@ bool World::HasRecentlyDisconnected(WorldSession* session)
                 ++i;
             }
             else
-                m_disconnects.erase(i++);
+                m_disconnects.erase(i++);  // 移除过期的断开连接记录
         }
     }
     return false;
  }
 
+/**
+ * @brief 获取玩家在队列中的位置
+ *
+ * 遍历排队队列，查找指定会话的位置。
+ *
+ * @param sess 要查找的会话
+ * @return int32 队列位置（从 1 开始），如果不在队列中则返回 0
+ *
+ * @性能 遍历队列，时间复杂度 O(n)
+ */
 int32 World::GetQueuePos(WorldSession* sess)
 {
     uint32 position = 1;
@@ -412,24 +699,46 @@ int32 World::GetQueuePos(WorldSession* sess)
     return 0;
 }
 
+/**
+ * @brief 添加玩家到排队队列
+ *
+ * 当服务器已满时，将玩家添加到等待队列中。
+ * 会发送排队通知给客户端。
+ *
+ * @param sess 要添加的会话
+ *
+ * @note 队列中的玩家会定期收到位置更新
+ */
 void World::AddQueuedPlayer(WorldSession* sess)
 {
     sess->SetInQueue(true);
     m_QueuedPlayer.push_back(sess);
 
-    // The 1st SMSG_AUTH_RESPONSE needs to contain other info too.
+    // 第一个 SMSG_AUTH_RESPONSE 需要包含其他信息
     sess->SendAuthResponse(AUTH_WAIT_QUEUE, false, GetQueuePos(sess));
 }
 
+/**
+ * @brief 从排队队列移除玩家
+ *
+ * 从队列中移除指定会话，并处理队列中的下一个玩家。
+ *
+ * @param sess 要移除的会话
+ * @return true 成功从队列中移除
+ * @return false 会话不在队列中
+ *
+ * @note 如果有空位，会让队列中的下一个玩家进入游戏
+ * @note 会更新队列中所有后续玩家的位置
+ */
 bool World::RemoveQueuedPlayer(WorldSession* sess)
 {
-    // sessions count including queued to remove (if removed_session set)
+    // 包括要移除的排队会话的会话计数
     uint32 sessions = GetActiveSessionCount();
 
     uint32 position = 1;
     Queue::iterator iter = m_QueuedPlayer.begin();
 
-    // search to remove and count skipped positions
+    // 搜索并移除，同时计数跳过的位置
     bool found = false;
 
     for (; iter != m_QueuedPlayer.end(); ++iter, ++position)
@@ -439,41 +748,67 @@ bool World::RemoveQueuedPlayer(WorldSession* sess)
             sess->SetInQueue(false);
             sess->ResetTimeOutTime(false);
             iter = m_QueuedPlayer.erase(iter);
-            found = true;                                   // removing queued session
+            found = true;                                   // 移除排队的会话
             break;
         }
     }
 
-    // iter point to next socked after removed or end()
-    // position store position of removed socket and then new position next socket after removed
+    // iter 指向移除后的下一个 socket 或 end()
+    // position 存储移除的 socket 的位置，然后是下一个 socket 的新位置
 
-    // if session not queued then we need decrease sessions count
+    // 如果会话不在队列中，需要减少会话计数
     if (!found && sessions)
         --sessions;
 
-    // accept first in queue
+    // 接受队列中的第一个玩家
     if ((!m_playerLimit || sessions < m_playerLimit) && !m_QueuedPlayer.empty())
     {
         WorldSession* pop_sess = m_QueuedPlayer.front();
         pop_sess->InitializeSession();
         m_QueuedPlayer.pop_front();
 
-        // update iter to point first queued socket or end() if queue is empty now
+        // 更新 iter 指向第一个排队 socket，如果队列空了则指向 end()
         iter = m_QueuedPlayer.begin();
         position = 1;
     }
 
-    // update position from iter to end()
-    // iter point to first not updated socket, position store new position
+    // 从 iter 到 end() 更新位置
+    // iter 指向第一个未更新的 socket，position 存储新位置
     for (; iter != m_QueuedPlayer.end(); ++iter, ++position)
         (*iter)->SendAuthWaitQueue(position);
 
     return found;
 }
 
-/// Initialize config values
+/**
+ * @brief 初始化配置设置
+ *
+ * 从 worldserver.conf 配置文件加载所有服务器配置项。
+ * 包括玩家限制、倍率、游戏规则、PvP 设置等数百个配置项。
+ *
+ * @param reload 是否为重新加载配置（true）或首次加载（false）
+ *
+ * @调用时机：
+ * - 服务器启动时（reload = false）
+ * - 执行 .reload config 命令时（reload = true）
+ *
+ * @主要配置分类：
+ * 1. 玩家限制和欢迎消息
+ * 2. 倍率设置（经验、金币、声望等）
+ * 3. 角色创建规则
+ * 4. GM 权限设置
+ * 5. 战场和竞技场设置
+ * 6. 服务器性能参数
+ * 7. 反作弊和 Warden 设置
+ *
+ * @note 某些配置项不能在运行时修改（如端口、数据路径等）
+ * @note 重新加载会触发脚本回调 OnConfigLoad
+ *
+ * @性能 加载数百个配置项，首次加载较慢
+ */
 void World::LoadConfigSettings(bool reload)
 {
+    // 如果是重新加载，先重新加载配置文件
     if (reload)
     {
         std::vector<std::string> configErrors;
@@ -484,19 +819,20 @@ void World::LoadConfigSettings(bool reload)
 
             return;
         }
+        // 重新加载日志和监控配置
         sLog->LoadFromConfig();
         sMetric->LoadFromConfigs();
     }
 
-    ///- Read the player limit and the Message of the day from the config file
+    ///- 从配置文件读取玩家限制和今日消息（MOTD）
     SetPlayerAmountLimit(sConfigMgr->GetIntDefault("PlayerLimit", 100));
     Motd::SetMotd(sConfigMgr->GetStringDefault("Motd", "Welcome to a Trinity Core Server."));
 
-    ///- Read ticket system setting from the config file
+    ///- 从配置文件读取工单系统设置
     m_bool_configs[CONFIG_ALLOW_TICKETS] = sConfigMgr->GetBoolDefault("AllowTickets", true);
     m_bool_configs[CONFIG_DELETE_CHARACTER_TICKET_TRACE] = sConfigMgr->GetBoolDefault("DeletedCharacterTicketTrace", false);
 
-    ///- Get string for new logins (newly created characters)
+    ///- 获取新登录角色的欢迎字符串（首次创建角色时显示）
     SetNewCharString(sConfigMgr->GetStringDefault("PlayerStart.String", ""));
 
     ///- Send server info on login?
@@ -1573,686 +1909,733 @@ void World::LoadConfigSettings(bool reload)
 }
 
 /// Initialize the World
+// === 世界初始化设置 ===
+// 职责：执行游戏世界的完整初始化流程，加载所有必要的游戏数据
+// 调用时机：在 worldserver 启动时，由 main() 函数调用
+// 主要步骤：
+//   1. 配置和随机数初始化
+//   2. DBC 数据加载（法术、技能、物品等游戏数据）
+//   3. 数据库数据加载（任务、生物、游戏对象等）
+//   4. 脚本系统初始化
+// 注意：此函数包含 100+ 个加载步骤，启动时间通常需要数十秒
 void World::SetInitialWorldSettings()
 {
+    // 设置 Realm ID（用于日志记录）
     if (uint32 realmId = sConfigMgr->GetIntDefault("RealmID", 0)) // 0 reserved for auth
         sLog->SetRealmId(realmId);
 
-    ///- Server startup begin
+    ///- Server startup begin - 记录启动开始时间
     uint32 startupBegin = getMSTime();
 
-    ///- Initialize the random number generator
+    ///- 初始化随机数生成器（用于游戏中的随机事件）
     srand((unsigned int)GameTime::GetGameTime());
 
-    ///- Initialize detour memory management
+    ///- 初始化 Detour 内存管理（寻路系统的内存分配器）
     dtAllocSetCustom(dtCustomAlloc, dtCustomFree);
 
-    ///- Initialize VMapManager function pointers (to untangle game/collision circular deps)
+    ///- 初始化 VMapManager 函数指针（解决游戏/碰撞检测的循环依赖）
     VMAP::VMapManager2* vmmgr2 = VMAP::VMapFactory::createOrGetVMapManager();
     vmmgr2->GetLiquidFlagsPtr = &GetLiquidFlags;
     vmmgr2->IsVMAPDisabledForPtr = &DisableMgr::IsVMAPDisabledFor;
 
-    ///- Initialize config settings
+    ///- 加载配置设置（从 worldserver.conf）
     LoadConfigSettings();
 
-    ///- Initialize Allowed Security Level
+    ///- 加载允许的安全等级（GM 权限等级）
     LoadDBAllowedSecurityLevel();
 
-    ///- Init highest guids before any table loading to prevent using not initialized guids in some code.
+    ///- 在任何表加载之前初始化最高 GUID，防止某些代码使用未初始化的 GUID
     sObjectMgr->SetHighestGuids();
 
-    ///- Check the existence of the map files for all races' startup areas.
-    if (!MapManager::ExistMapAndVMap(0, -6240.32f, 331.033f)
-        || !MapManager::ExistMapAndVMap(0, -8949.95f, -132.493f)
-        || !MapManager::ExistMapAndVMap(1, -618.518f, -4251.67f)
-        || !MapManager::ExistMapAndVMap(0, 1676.35f, 1677.45f)
-        || !MapManager::ExistMapAndVMap(1, 10311.3f, 832.463f)
-        || !MapManager::ExistMapAndVMap(1, -2917.58f, -257.98f)
-        || (m_int_configs[CONFIG_EXPANSION] && (
-            !MapManager::ExistMapAndVMap(530, 10349.6f, -6357.29f) ||
-            !MapManager::ExistMapAndVMap(530, -3961.64f, -13931.2f))))
+    ///- 检查所有种族出生点地图文件是否存在（关键启动区域）
+    if (!MapManager::ExistMapAndVMap(0, -6240.32f, 331.033f)      // 人类出生点（艾尔文森林）
+        || !MapManager::ExistMapAndVMap(0, -8949.95f, -132.493f)  // 兽人出生点（杜隆塔尔）
+        || !MapManager::ExistMapAndVMap(1, -618.518f, -4251.67f)  // 暗夜精灵出生点（泰达希尔）
+        || !MapManager::ExistMapAndVMap(0, 1676.35f, 1677.45f)    // 矮人出生点（丹莫罗）
+        || !MapManager::ExistMapAndVMap(1, 10311.3f, 832.463f)    // 牛头人出生点（莫高雷）
+        || !MapManager::ExistMapAndVMap(1, -2917.58f, -257.98f)   // 亡灵出生点（提瑞斯法）
+        || (m_int_configs[CONFIG_EXPANSION] && (                   // 资料片出生点（如果启用）
+            !MapManager::ExistMapAndVMap(530, 10349.6f, -6357.29f) ||  // 血精灵出生点（永歌森林）
+            !MapManager::ExistMapAndVMap(530, -3961.64f, -13931.2f))))  // 德莱尼出生点（秘蓝岛）
     {
         TC_LOG_FATAL("server.loading", "Unable to load critical files - server shutting down !!!");
         exit(1);
     }
 
-    ///- Initialize pool manager
+    ///- 初始化对象池管理器（用于生成点、矿点等刷新池）
     sPoolMgr->Initialize();
 
-    ///- Initialize game event manager
+    ///- 初始化游戏事件管理器（节日事件、世界事件等）
     sGameEventMgr->Initialize();
 
-    ///- Loading strings. Getting no records means core load has to be canceled because no error message can be output.
-
+    ///- 加载 Trinity 字符串（错误消息、系统消息等）
+    ///  如果没有记录，服务器必须停止，因为无法输出错误消息
     TC_LOG_INFO("server.loading", "Loading Trinity strings...");
     if (!sObjectMgr->LoadTrinityStrings())
-        exit(1);                                            // Error message displayed in function already
+        exit(1);                                            // 错误消息已在函数中显示
 
-    ///- Update the realm entry in the database with the realm type from the config file
-    //No SQL injection as values are treated as integers
-
-    // not send custom type REALM_FFA_PVP to realm list
+    ///- 更新数据库中的 Realm 条目（服务器类型和时区）
+    ///  无 SQL 注入风险，因为值被当作整数处理
+    // 不发送自定义类型 REALM_FFA_PVP 到 Realm 列表
     uint32 server_type = IsFFAPvPRealm() ? uint32(REALM_TYPE_PVP) : getIntConfig(CONFIG_GAME_TYPE);
     uint32 realm_zone = getIntConfig(CONFIG_REALM_ZONE);
 
-    LoginDatabase.PExecute("UPDATE realmlist SET icon = {}, timezone = {} WHERE id = '{}'", server_type, realm_zone, realm.Id.Realm);      // One-time query
+    LoginDatabase.PExecute("UPDATE realmlist SET icon = {}, timezone = {} WHERE id = '{}'", server_type, realm_zone, realm.Id.Realm);      // 一次性查询
 
-    ///- Load the DBC files
+    ///- 加载 DBC 文件（客户端数据文件：法术、技能、物品等）
     TC_LOG_INFO("server.loading", "Initialize data stores...");
     LoadDBCStores(m_dataPath);
     DetectDBCLang();
 
-    // Load cinematic cameras
+    // 加载过场动画摄像机数据
     LoadM2Cameras(m_dataPath);
 
-    // Load IP Location Database
+    // 加载 IP 地理位置数据库（用于显示玩家地理位置）
     sIPLocation->Load();
 
+    // 初始化 VMap 和 MMap（碰撞检测和寻路地图）
     std::vector<uint32> mapIds;
     for (uint32 mapId = 0; mapId < sMapStore.GetNumRows(); mapId++)
         if (sMapStore.LookupEntry(mapId))
             mapIds.push_back(mapId);
 
-    vmmgr2->InitializeThreadUnsafe(mapIds);
+    vmmgr2->InitializeThreadUnsafe(mapIds);  // 初始化 VMap（视线碰撞）
 
     MMAP::MMapManager* mmmgr = MMAP::MMapFactory::createOrGetMMapManager();
-    mmmgr->InitializeThreadUnsafe(mapIds);
+    mmmgr->InitializeThreadUnsafe(mapIds);  // 初始化 MMap（寻路网格）
 
     TC_LOG_INFO("server.loading", "Initializing PlayerDump tables...");
-    PlayerDump::InitializeTables();
+    PlayerDump::InitializeTables();  // 初始化角色导出表
 
-    ///- Initialize static helper structures
+    ///- 初始化静态辅助结构（AI 注册表）
     AIRegistry::Initialize();
 
+    // ========== 法术系统加载 ==========
     TC_LOG_INFO("server.loading", "Loading SpellInfo store...");
-    sSpellMgr->LoadSpellInfoStore();
+    sSpellMgr->LoadSpellInfoStore();  // 加载法术信息存储（从 DBC）
 
     TC_LOG_INFO("server.loading", "Loading SpellInfo corrections...");
-    sSpellMgr->LoadSpellInfoCorrections();
+    sSpellMgr->LoadSpellInfoCorrections();  // 加载法术修正数据（数据库覆盖）
 
     TC_LOG_INFO("server.loading", "Loading SkillLineAbilityMultiMap Data...");
-    sSpellMgr->LoadSkillLineAbilityMap();
+    sSpellMgr->LoadSkillLineAbilityMap();  // 加载技能线能力映射（技能与法术的关联）
 
     TC_LOG_INFO("server.loading", "Loading SpellInfo custom attributes...");
-    sSpellMgr->LoadSpellInfoCustomAttributes();
+    sSpellMgr->LoadSpellInfoCustomAttributes();  // 加载自定义法术属性
 
     TC_LOG_INFO("server.loading", "Loading SpellInfo diminishing infos...");
-    sSpellMgr->LoadSpellInfoDiminishing();
+    sSpellMgr->LoadSpellInfoDiminishing();  // 加载递减效果信息（PVP 递减）
 
     TC_LOG_INFO("server.loading", "Loading SpellInfo immunity infos...");
-    sSpellMgr->LoadSpellInfoImmunities();
+    sSpellMgr->LoadSpellInfoImmunities();  // 加载免疫信息
 
     TC_LOG_INFO("server.loading", "Loading Player Totem models...");
-    sObjectMgr->LoadPlayerTotemModels();
+    sObjectMgr->LoadPlayerTotemModels();  // 加载玩家图腾模型
 
     TC_LOG_INFO("server.loading", "Loading GameObject models...");
-    LoadGameObjectModelList(m_dataPath);
+    LoadGameObjectModelList(m_dataPath);  // 加载游戏对象模型（碰撞检测用）
 
+    // ========== 脚本和实例系统加载 ==========
     TC_LOG_INFO("server.loading", "Loading Script Names...");
-    sObjectMgr->LoadScriptNames();
+    sObjectMgr->LoadScriptNames();  // 加载脚本名称
 
     TC_LOG_INFO("server.loading", "Loading Instance Template...");
-    sObjectMgr->LoadInstanceTemplate();
+    sObjectMgr->LoadInstanceTemplate();  // 加载副本模板
 
-    // Must be called before `respawn` data
+    // 必须在加载重生数据之前调用
     TC_LOG_INFO("server.loading", "Loading instances...");
-    sInstanceSaveMgr->LoadInstances();
+    sInstanceSaveMgr->LoadInstances();  // 加载副本保存数据
 
-    // Load before guilds and arena teams
+    // 必须在公会和竞技场队伍之前加载
     TC_LOG_INFO("server.loading", "Loading character cache store...");
-    sCharacterCache->LoadCharacterCacheStorage();
+    sCharacterCache->LoadCharacterCacheStorage();  // 加载角色缓存（快速查询）
 
     TC_LOG_INFO("server.loading", "Loading Broadcast texts...");
-    sObjectMgr->LoadBroadcastTexts();
-    sObjectMgr->LoadBroadcastTextLocales();
+    sObjectMgr->LoadBroadcastTexts();  // 加载广播文本
+    sObjectMgr->LoadBroadcastTextLocales();  // 加载广播文本本地化
 
+    // ========== 本地化字符串加载 ==========
     TC_LOG_INFO("server.loading", "Loading Localization strings...");
     uint32 oldMSTime = getMSTime();
-    sObjectMgr->LoadCreatureLocales();
-    sObjectMgr->LoadGameObjectLocales();
-    sObjectMgr->LoadItemLocales();
-    sObjectMgr->LoadItemSetNameLocales();
-    sObjectMgr->LoadQuestLocales();
-    sObjectMgr->LoadQuestOfferRewardLocale();
-    sObjectMgr->LoadQuestRequestItemsLocale();
-    sObjectMgr->LoadNpcTextLocales();
-    sObjectMgr->LoadPageTextLocales();
-    sObjectMgr->LoadGossipMenuItemsLocales();
-    sObjectMgr->LoadPointOfInterestLocales();
-    sObjectMgr->LoadQuestGreetingLocales();
+    sObjectMgr->LoadCreatureLocales();  // 加载生物本地化名称
+    sObjectMgr->LoadGameObjectLocales();  // 加载游戏对象本地化名称
+    sObjectMgr->LoadItemLocales();  // 加载物品本地化名称
+    sObjectMgr->LoadItemSetNameLocales();  // 加载套装名称本地化
+    sObjectMgr->LoadQuestLocales();  // 加载任务本地化
+    sObjectMgr->LoadQuestOfferRewardLocale();  // 加载任务奖励本地化
+    sObjectMgr->LoadQuestRequestItemsLocale();  // 加载任务需求物品本地化
+    sObjectMgr->LoadNpcTextLocales();  // 加载 NPC 文本本地化
+    sObjectMgr->LoadPageTextLocales();  // 加载书本页面本地化
+    sObjectMgr->LoadGossipMenuItemsLocales();  // 加载菜单项本地化
+    sObjectMgr->LoadPointOfInterestLocales();  // 加载兴趣点本地化
+    sObjectMgr->LoadQuestGreetingLocales();  // 加载任务问候语本地化
 
-    sObjectMgr->SetDBCLocaleIndex(GetDefaultDbcLocale());        // Get once for all the locale index of DBC language (console/broadcasts)
+    sObjectMgr->SetDBCLocaleIndex(GetDefaultDbcLocale());        // 获取 DBC 语言的区域索引（控制台/广播）
     TC_LOG_INFO("server.loading", ">> Localization strings loaded in {} ms", GetMSTimeDiffToNow(oldMSTime));
 
+    // ========== 账号和权限系统加载 ==========
     TC_LOG_INFO("server.loading", "Loading Account Roles and Permissions...");
-    sAccountMgr->LoadRBAC();
+    sAccountMgr->LoadRBAC();  // 加载基于角色的访问控制（RBAC）
 
+    // ========== 页面文本和游戏对象加载 ==========
     TC_LOG_INFO("server.loading", "Loading Page Texts...");
-    sObjectMgr->LoadPageTexts();
+    sObjectMgr->LoadPageTexts();  // 加载书本页面文本
 
-    TC_LOG_INFO("server.loading", "Loading Game Object Templates...");         // must be after LoadPageTexts
-    sObjectMgr->LoadGameObjectTemplate();
+    TC_LOG_INFO("server.loading", "Loading Game Object Templates...");         // 必须在 LoadPageTexts 之后
+    sObjectMgr->LoadGameObjectTemplate();  // 加载游戏对象模板（箱子、门、矿点等）
 
     TC_LOG_INFO("server.loading", "Loading Game Object template addons...");
-    sObjectMgr->LoadGameObjectTemplateAddons();
+    sObjectMgr->LoadGameObjectTemplateAddons();  // 加载游戏对象模板附加数据
 
     TC_LOG_INFO("server.loading", "Loading Transport templates...");
-    sTransportMgr->LoadTransportTemplates();
+    sTransportMgr->LoadTransportTemplates();  // 加载交通工具模板（船只、飞艇等）
 
     TC_LOG_INFO("server.loading", "Loading Transport animations and rotations...");
-    sTransportMgr->LoadTransportAnimationAndRotation();
+    sTransportMgr->LoadTransportAnimationAndRotation();  // 加载交通工具动画和旋转
 
+    // ========== 法术系统详细加载 ==========
     TC_LOG_INFO("server.loading", "Loading Spell Rank Data...");
-    sSpellMgr->LoadSpellRanks();
+    sSpellMgr->LoadSpellRanks();  // 加载法术等级数据
 
     TC_LOG_INFO("server.loading", "Loading Spell Required Data...");
-    sSpellMgr->LoadSpellRequired();
+    sSpellMgr->LoadSpellRequired();  // 加载法术需求（前置法术）
 
     TC_LOG_INFO("server.loading", "Loading Spell Group types...");
-    sSpellMgr->LoadSpellGroups();
+    sSpellMgr->LoadSpellGroups();  // 加载法术分组（同名法术不同等级）
 
     TC_LOG_INFO("server.loading", "Loading Spell Learn Skills...");
-    sSpellMgr->LoadSpellLearnSkills();                           // must be after LoadSpellRanks
+    sSpellMgr->LoadSpellLearnSkills();                           // 必须在 LoadSpellRanks 之后
 
     TC_LOG_INFO("server.loading", "Loading SpellInfo SpellSpecific and AuraState...");
-    sSpellMgr->LoadSpellInfoSpellSpecificAndAuraState();         // must be after LoadSpellRanks
+    sSpellMgr->LoadSpellInfoSpellSpecificAndAuraState();         // 必须在 LoadSpellRanks 之后
 
     TC_LOG_INFO("server.loading", "Loading Spell Learn Spells...");
-    sSpellMgr->LoadSpellLearnSpells();
+    sSpellMgr->LoadSpellLearnSpells();  // 加载法术学习关联（学习时自动学会的法术）
 
     TC_LOG_INFO("server.loading", "Loading Spell Proc conditions and data...");
-    sSpellMgr->LoadSpellProcs();
+    sSpellMgr->LoadSpellProcs();  // 加载触发法术条件和数据
 
     TC_LOG_INFO("server.loading", "Loading Spell Bonus Data...");
-    sSpellMgr->LoadSpellBonuses();
+    sSpellMgr->LoadSpellBonuses();  // 加载法术奖励数据（法术强度加成）
 
     TC_LOG_INFO("server.loading", "Loading Aggro Spells Definitions...");
-    sSpellMgr->LoadSpellThreats();
+    sSpellMgr->LoadSpellThreats();  // 加载产生威胁的法术定义
 
     TC_LOG_INFO("server.loading", "Loading Spell Group Stack Rules...");
-    sSpellMgr->LoadSpellGroupStackRules();
+    sSpellMgr->LoadSpellGroupStackRules();  // 加载法术组叠加规则
 
+    // ========== NPC 文本和物品系统加载 ==========
     TC_LOG_INFO("server.loading", "Loading NPC Texts...");
-    sObjectMgr->LoadGossipText();
+    sObjectMgr->LoadGossipText();  // 加载 NPC 对话文本
 
     TC_LOG_INFO("server.loading", "Loading Enchant Spells Proc datas...");
-    sSpellMgr->LoadSpellEnchantProcData();
+    sSpellMgr->LoadSpellEnchantProcData();  // 加载附魔触发法术数据
 
     TC_LOG_INFO("server.loading", "Loading Item Random Enchantments Table...");
-    LoadRandomEnchantmentsTable();
+    LoadRandomEnchantmentsTable();  // 加载物品随机附魔表
 
-    TC_LOG_INFO("server.loading", "Loading Disables");                         // must be before loading quests and items
-    DisableMgr::LoadDisables();
+    TC_LOG_INFO("server.loading", "Loading Disables");                         // 必须在加载任务和物品之前
+    DisableMgr::LoadDisables();  // 加载禁用项（禁用的任务、物品、法术等）
 
-    TC_LOG_INFO("server.loading", "Loading Items...");                         // must be after LoadRandomEnchantmentsTable and LoadPageTexts
-    sObjectMgr->LoadItemTemplates();
+    TC_LOG_INFO("server.loading", "Loading Items...");                         // 必须在 LoadRandomEnchantmentsTable 和 LoadPageTexts 之后
+    sObjectMgr->LoadItemTemplates();  // 加载物品模板（所有物品数据）
 
-    TC_LOG_INFO("server.loading", "Loading Item set names...");                // must be after LoadItemPrototypes
-    sObjectMgr->LoadItemSetNames();
+    TC_LOG_INFO("server.loading", "Loading Item set names...");                // 必须在 LoadItemPrototypes 之后
+    sObjectMgr->LoadItemSetNames();  // 加载套装名称
 
+    // ========== 生物系统加载 ==========
     TC_LOG_INFO("server.loading", "Loading Creature Model Based Info Data...");
-    sObjectMgr->LoadCreatureModelInfo();
+    sObjectMgr->LoadCreatureModelInfo();  // 加载生物模型信息（血量、伤害等）
 
     TC_LOG_INFO("server.loading", "Loading Creature templates...");
-    sObjectMgr->LoadCreatureTemplates();
+    sObjectMgr->LoadCreatureTemplates();  // 加载生物模板（所有生物定义）
 
-    TC_LOG_INFO("server.loading", "Loading Equipment templates...");           // must be after LoadCreatureTemplates
-    sObjectMgr->LoadEquipmentTemplates();
+    TC_LOG_INFO("server.loading", "Loading Equipment templates...");           // 必须在 LoadCreatureTemplates 之后
+    sObjectMgr->LoadEquipmentTemplates();  // 加载装备模板（生物装备）
 
     TC_LOG_INFO("server.loading", "Loading Creature template addons...");
-    sObjectMgr->LoadCreatureTemplateAddons();
+    sObjectMgr->LoadCreatureTemplateAddons();  // 加载生物模板附加数据
 
+    // ========== 声望系统和兴趣点加载 ==========
     TC_LOG_INFO("server.loading", "Loading Reputation Reward Rates...");
-    sObjectMgr->LoadReputationRewardRate();
+    sObjectMgr->LoadReputationRewardRate();  // 加载声望奖励率
 
     TC_LOG_INFO("server.loading", "Loading Creature Reputation OnKill Data...");
-    sObjectMgr->LoadReputationOnKill();
+    sObjectMgr->LoadReputationOnKill();  // 加载击杀生物获得的声望
 
     TC_LOG_INFO("server.loading", "Loading Reputation Spillover Data...");
-    sObjectMgr->LoadReputationSpilloverTemplate();
+    sObjectMgr->LoadReputationSpilloverTemplate();  // 加载声望溢出模板（阵营声望关联）
 
     TC_LOG_INFO("server.loading", "Loading Points Of Interest Data...");
-    sObjectMgr->LoadPointsOfInterest();
+    sObjectMgr->LoadPointsOfInterest();  // 加载兴趣点（地图标记）
 
     TC_LOG_INFO("server.loading", "Loading Creature Base Stats...");
-    sObjectMgr->LoadCreatureClassLevelStats();
+    sObjectMgr->LoadCreatureClassLevelStats();  // 加载生物基础属性（职业等级属性）
 
     TC_LOG_INFO("server.loading", "Loading Spawn Group Templates...");
-    sObjectMgr->LoadSpawnGroupTemplates();
+    sObjectMgr->LoadSpawnGroupTemplates();  // 加载生成组模板
 
+    // ========== 生物生成数据加载 ==========
     TC_LOG_INFO("server.loading", "Loading Creature Data...");
-    sObjectMgr->LoadCreatures();
+    sObjectMgr->LoadCreatures();  // 加载生物生成数据（所有地图中的生物）
 
     TC_LOG_INFO("server.loading", "Loading Temporary Summon Data...");
-    sObjectMgr->LoadTempSummons();                               // must be after LoadCreatureTemplates() and LoadGameObjectTemplates()
+    sObjectMgr->LoadTempSummons();                               // 必须在 LoadCreatureTemplates() 和 LoadGameObjectTemplates() 之后
 
     TC_LOG_INFO("server.loading", "Loading pet levelup spells...");
-    sSpellMgr->LoadPetLevelupSpellMap();
+    sSpellMgr->LoadPetLevelupSpellMap();  // 加载宠物升级法术
 
     TC_LOG_INFO("server.loading", "Loading pet default spells additional to levelup spells...");
-    sSpellMgr->LoadPetDefaultSpells();
+    sSpellMgr->LoadPetDefaultSpells();  // 加载宠物默认法术
 
     TC_LOG_INFO("server.loading", "Loading Creature Addon Data...");
-    sObjectMgr->LoadCreatureAddons();                            // must be after LoadCreatureTemplates() and LoadCreatures()
+    sObjectMgr->LoadCreatureAddons();                            // 必须在 LoadCreatureTemplates() 和 LoadCreatures() 之后
 
     TC_LOG_INFO("server.loading", "Loading Creature Movement Overrides...");
-    sObjectMgr->LoadCreatureMovementOverrides();                 // must be after LoadCreatures()
+    sObjectMgr->LoadCreatureMovementOverrides();                 // 必须在 LoadCreatures() 之后
 
+    // ========== 游戏对象生成数据加载 ==========
     TC_LOG_INFO("server.loading", "Loading Gameobject Data...");
-    sObjectMgr->LoadGameObjects();
+    sObjectMgr->LoadGameObjects();  // 加载游戏对象生成数据（所有地图中的对象）
 
     TC_LOG_INFO("server.loading", "Loading Spawn Group Data...");
-    sObjectMgr->LoadSpawnGroups();
+    sObjectMgr->LoadSpawnGroups();  // 加载生成组数据
 
     TC_LOG_INFO("server.loading", "Loading instance spawn groups...");
-    sObjectMgr->LoadInstanceSpawnGroups();
+    sObjectMgr->LoadInstanceSpawnGroups();  // 加载副本生成组
 
     TC_LOG_INFO("server.loading", "Loading GameObject Addon Data...");
-    sObjectMgr->LoadGameObjectAddons();                          // must be after LoadGameObjects()
+    sObjectMgr->LoadGameObjectAddons();                          // 必须在 LoadGameObjects() 之后
 
     TC_LOG_INFO("server.loading", "Loading GameObject faction and flags overrides...");
-    sObjectMgr->LoadGameObjectOverrides();                       // must be after LoadGameObjects()
+    sObjectMgr->LoadGameObjectOverrides();                       // 必须在 LoadGameObjects() 之后
 
     TC_LOG_INFO("server.loading", "Loading GameObject Quest Items...");
-    sObjectMgr->LoadGameObjectQuestItems();
+    sObjectMgr->LoadGameObjectQuestItems();  // 加载游戏对象任务物品
 
     TC_LOG_INFO("server.loading", "Loading Creature Quest Items...");
-    sObjectMgr->LoadCreatureQuestItems();
+    sObjectMgr->LoadCreatureQuestItems();  // 加载生物任务物品
 
     TC_LOG_INFO("server.loading", "Loading Creature Linked Respawn...");
-    sObjectMgr->LoadLinkedRespawn();                             // must be after LoadCreatures(), LoadGameObjects()
+    sObjectMgr->LoadLinkedRespawn();                             // 必须在 LoadCreatures(), LoadGameObjects() 之后
 
+    // ========== 天气和任务系统加载 ==========
     TC_LOG_INFO("server.loading", "Loading Weather Data...");
-    WeatherMgr::LoadWeatherData();
+    WeatherMgr::LoadWeatherData();  // 加载天气数据
 
     TC_LOG_INFO("server.loading", "Loading Quests...");
-    sObjectMgr->LoadQuests();                                    // must be loaded after DBCs, creature_template, item_template, gameobject tables
+    sObjectMgr->LoadQuests();                                    // 必须在 DBCs、creature_template、item_template、gameobject 表之后加载
 
     TC_LOG_INFO("server.loading", "Checking Quest Disables");
-    DisableMgr::CheckQuestDisables();                           // must be after loading quests
+    DisableMgr::CheckQuestDisables();                           // 必须在加载任务之后
 
     TC_LOG_INFO("server.loading", "Loading Quest POI");
-    sObjectMgr->LoadQuestPOI();
+    sObjectMgr->LoadQuestPOI();  // 加载任务兴趣点（地图标记）
 
     TC_LOG_INFO("server.loading", "Loading Quests Starters and Enders...");
-    sObjectMgr->LoadQuestStartersAndEnders();                    // must be after quest load
+    sObjectMgr->LoadQuestStartersAndEnders();                    // 必须在任务加载之后
 
     TC_LOG_INFO("server.loading", "Loading Quests Greetings...");
-    sObjectMgr->LoadQuestGreetings();                           // must be loaded after creature_template, gameobject_template tables
+    sObjectMgr->LoadQuestGreetings();                           // 必须在 creature_template、gameobject_template 表之后加载
 
+    // ========== 对象池和游戏事件系统加载 ==========
     TC_LOG_INFO("server.loading", "Loading Objects Pooling Data...");
-    sPoolMgr->LoadFromDB();
+    sPoolMgr->LoadFromDB();  // 加载对象池数据（刷新池）
     TC_LOG_INFO("server.loading", "Loading Quest Pooling Data...");
-    sQuestPoolMgr->LoadFromDB();                                // must be after quest templates
+    sQuestPoolMgr->LoadFromDB();                                // 必须在任务模板之后
 
-    TC_LOG_INFO("server.loading", "Loading Game Event Data...");               // must be after loading pools fully
-    sGameEventMgr->LoadHolidayDates();                           // Must be after loading DBC
-    sGameEventMgr->LoadFromDB();                                 // Must be after loading holiday dates
+    TC_LOG_INFO("server.loading", "Loading Game Event Data...");               // 必须在完全加载池之后
+    sGameEventMgr->LoadHolidayDates();                           // 必须在加载 DBC 之后
+    sGameEventMgr->LoadFromDB();                                 // 必须在加载节日日期之后
 
-    TC_LOG_INFO("server.loading", "Loading UNIT_NPC_FLAG_SPELLCLICK Data..."); // must be after LoadQuests
-    sObjectMgr->LoadNPCSpellClickSpells();
+    // ========== 车辆系统加载 ==========
+    TC_LOG_INFO("server.loading", "Loading UNIT_NPC_FLAG_SPELLCLICK Data..."); // 必须在 LoadQuests 之后
+    sObjectMgr->LoadNPCSpellClickSpells();  // 加载 NPC 点击法术数据
 
     TC_LOG_INFO("server.loading", "Loading Vehicle Templates...");
-    sObjectMgr->LoadVehicleTemplate();                          // must be after LoadCreatureTemplates()
+    sObjectMgr->LoadVehicleTemplate();                          // 必须在 LoadCreatureTemplates() 之后
 
     TC_LOG_INFO("server.loading", "Loading Vehicle Template Accessories...");
-    sObjectMgr->LoadVehicleTemplateAccessories();                // must be after LoadCreatureTemplates() and LoadNPCSpellClickSpells()
+    sObjectMgr->LoadVehicleTemplateAccessories();                // 必须在 LoadCreatureTemplates() 和 LoadNPCSpellClickSpells() 之后
 
     TC_LOG_INFO("server.loading", "Loading Vehicle Accessories...");
-    sObjectMgr->LoadVehicleAccessories();                       // must be after LoadCreatureTemplates() and LoadNPCSpellClickSpells()
+    sObjectMgr->LoadVehicleAccessories();                       // 必须在 LoadCreatureTemplates() 和 LoadNPCSpellClickSpells() 之后
 
     TC_LOG_INFO("server.loading", "Loading Vehicle Seat Addon Data...");
-    sObjectMgr->LoadVehicleSeatAddon();                         // must be after loading DBC
+    sObjectMgr->LoadVehicleSeatAddon();                         // 必须在加载 DBC 之后
 
-    TC_LOG_INFO("server.loading", "Loading SpellArea Data...");                // must be after quest load
-    sSpellMgr->LoadSpellAreas();
+    // ========== 区域触发和副本系统加载 ==========
+    TC_LOG_INFO("server.loading", "Loading SpellArea Data...");                // 必须在任务加载之后
+    sSpellMgr->LoadSpellAreas();  // 加载法术区域数据
 
     TC_LOG_INFO("server.loading", "Loading Area Trigger Teleports definitions...");
-    sObjectMgr->LoadAreaTriggerTeleports();
+    sObjectMgr->LoadAreaTriggerTeleports();  // 加载区域触发传送定义
 
     TC_LOG_INFO("server.loading", "Loading Access Requirements...");
-    sObjectMgr->LoadAccessRequirements();                        // must be after item template load
+    sObjectMgr->LoadAccessRequirements();                        // 必须在物品模板加载之后
 
     TC_LOG_INFO("server.loading", "Loading Quest Area Triggers...");
-    sObjectMgr->LoadQuestAreaTriggers();                         // must be after LoadQuests
+    sObjectMgr->LoadQuestAreaTriggers();                         // 必须在 LoadQuests 之后
 
     TC_LOG_INFO("server.loading", "Loading Tavern Area Triggers...");
-    sObjectMgr->LoadTavernAreaTriggers();
+    sObjectMgr->LoadTavernAreaTriggers();  // 加载旅店区域触发（休息区）
 
     TC_LOG_INFO("server.loading", "Loading AreaTrigger script names...");
-    sObjectMgr->LoadAreaTriggerScripts();
+    sObjectMgr->LoadAreaTriggerScripts();  // 加载区域触发脚本名称
 
-    TC_LOG_INFO("server.loading", "Loading LFG entrance positions..."); // Must be after areatriggers
-    sLFGMgr->LoadLFGDungeons();
+    TC_LOG_INFO("server.loading", "Loading LFG entrance positions..."); // 必须在区域触发之后
+    sLFGMgr->LoadLFGDungeons();  // 加载随机副本入口位置
 
     TC_LOG_INFO("server.loading", "Loading Dungeon boss data...");
-    sObjectMgr->LoadInstanceEncounters();
+    sObjectMgr->LoadInstanceEncounters();  // 加载副本 BOSS 数据
 
     TC_LOG_INFO("server.loading", "Loading LFG rewards...");
-    sLFGMgr->LoadRewards();
+    sLFGMgr->LoadRewards();  // 加载随机副本奖励
 
     TC_LOG_INFO("server.loading", "Loading Graveyard-zone links...");
-    sObjectMgr->LoadGraveyardZones();
+    sObjectMgr->LoadGraveyardZones();  // 加载墓地-区域关联（死亡复活点）
 
+    // ========== 法术附加数据加载 ==========
     TC_LOG_INFO("server.loading", "Loading spell pet auras...");
-    sSpellMgr->LoadSpellPetAuras();
+    sSpellMgr->LoadSpellPetAuras();  // 加载法术宠物光环
 
     TC_LOG_INFO("server.loading", "Loading Spell target coordinates...");
-    sSpellMgr->LoadSpellTargetPositions();
+    sSpellMgr->LoadSpellTargetPositions();  // 加载法术目标坐标（传送法术等）
 
     TC_LOG_INFO("server.loading", "Loading enchant custom attributes...");
-    sSpellMgr->LoadEnchantCustomAttr();
+    sSpellMgr->LoadEnchantCustomAttr();  // 加载附魔自定义属性
 
     TC_LOG_INFO("server.loading", "Loading linked spells...");
-    sSpellMgr->LoadSpellLinked();
+    sSpellMgr->LoadSpellLinked();  // 加载关联法术（触发链）
 
+    // ========== 玩家和宠物数据加载 ==========
     TC_LOG_INFO("server.loading", "Loading Player Create Data...");
-    sObjectMgr->LoadPlayerInfo();
+    sObjectMgr->LoadPlayerInfo();  // 加载玩家创建数据（初始装备、技能等）
 
     TC_LOG_INFO("server.loading", "Loading Exploration BaseXP Data...");
-    sObjectMgr->LoadExplorationBaseXP();
+    sObjectMgr->LoadExplorationBaseXP();  // 加载探索基础经验值
 
     TC_LOG_INFO("server.loading", "Loading Pet Name Parts...");
-    sObjectMgr->LoadPetNames();
+    sObjectMgr->LoadPetNames();  // 加载宠物名称部件
 
-    CharacterDatabaseCleaner::CleanDatabase();
+    CharacterDatabaseCleaner::CleanDatabase();  // 清理角色数据库（删除过期数据）
 
     TC_LOG_INFO("server.loading", "Loading the max pet number...");
-    sObjectMgr->LoadPetNumber();
+    sObjectMgr->LoadPetNumber();  // 加载最大宠物编号
 
     TC_LOG_INFO("server.loading", "Loading pet level stats...");
-    sObjectMgr->LoadPetLevelInfo();
+    sObjectMgr->LoadPetLevelInfo();  // 加载宠物等级属性
 
     TC_LOG_INFO("server.loading", "Loading Player level dependent mail rewards...");
-    sObjectMgr->LoadMailLevelRewards();
+    sObjectMgr->LoadMailLevelRewards();  // 加载玩家等级邮件奖励
 
-    // Loot tables
-    LoadLootTables();
+    // ========== 掉落表和技能系统加载 ==========
+    LoadLootTables();  // 加载所有掉落表（生物、物品、钓鱼等）
 
     TC_LOG_INFO("server.loading", "Loading Skill Discovery Table...");
-    LoadSkillDiscoveryTable();
+    LoadSkillDiscoveryTable();  // 加载技能发现表（技能揭示配方）
 
     TC_LOG_INFO("server.loading", "Loading Skill Extra Item Table...");
-    LoadSkillExtraItemTable();
+    LoadSkillExtraItemTable();  // 加载技能额外物品表（制造额外物品）
 
     TC_LOG_INFO("server.loading", "Loading Skill Perfection Data Table...");
-    LoadSkillPerfectItemTable();
+    LoadSkillPerfectItemTable();  // 加载技能完美数据表（完美制造）
 
     TC_LOG_INFO("server.loading", "Loading Skill Fishing base level requirements...");
-    sObjectMgr->LoadFishingBaseSkillLevel();
+    sObjectMgr->LoadFishingBaseSkillLevel();  // 加载钓鱼技能基础等级需求
 
+    // ========== 成就系统加载 ==========
     TC_LOG_INFO("server.loading", "Loading Achievements...");
-    sAchievementMgr->LoadAchievementReferenceList();
+    sAchievementMgr->LoadAchievementReferenceList();  // 加载成就引用列表
     TC_LOG_INFO("server.loading", "Loading Achievement Criteria Lists...");
-    sAchievementMgr->LoadAchievementCriteriaList();
+    sAchievementMgr->LoadAchievementCriteriaList();  // 加载成就标准列表
     TC_LOG_INFO("server.loading", "Loading Achievement Criteria Data...");
-    sAchievementMgr->LoadAchievementCriteriaData();
+    sAchievementMgr->LoadAchievementCriteriaData();  // 加载成就标准数据
     TC_LOG_INFO("server.loading", "Loading Achievement Rewards...");
-    sAchievementMgr->LoadRewards();
+    sAchievementMgr->LoadRewards();  // 加载成就奖励
     TC_LOG_INFO("server.loading", "Loading Achievement Reward Locales...");
-    sAchievementMgr->LoadRewardLocales();
+    sAchievementMgr->LoadRewardLocales();  // 加载成就奖励本地化
     TC_LOG_INFO("server.loading", "Loading Completed Achievements...");
-    sAchievementMgr->LoadCompletedAchievements();
+    sAchievementMgr->LoadCompletedAchievements();  // 加载已完成成就
 
-    ///- Load dynamic data tables from the database
+    ///- 从数据库加载动态数据表
     TC_LOG_INFO("server.loading", "Loading Item Auctions...");
-    sAuctionMgr->LoadAuctionItems();
+    sAuctionMgr->LoadAuctionItems();  // 加载拍卖物品
 
     TC_LOG_INFO("server.loading", "Loading Auctions...");
-    sAuctionMgr->LoadAuctions();
+    sAuctionMgr->LoadAuctions();  // 加载拍卖行数据
 
     TC_LOG_INFO("server.loading", "Loading Guilds...");
-    sGuildMgr->LoadGuilds();
+    sGuildMgr->LoadGuilds();  // 加载公会数据
 
     TC_LOG_INFO("server.loading", "Loading ArenaTeams...");
-    sArenaTeamMgr->LoadArenaTeams();
+    sArenaTeamMgr->LoadArenaTeams();  // 加载竞技场队伍
 
     TC_LOG_INFO("server.loading", "Loading Groups...");
-    sGroupMgr->LoadGroups();
+    sGroupMgr->LoadGroups();  // 加载队伍数据
 
     TC_LOG_INFO("server.loading", "Loading ReservedNames...");
-    sObjectMgr->LoadReservedPlayersNames();
+    sObjectMgr->LoadReservedPlayersNames();  // 加载保留的角色名称
 
     TC_LOG_INFO("server.loading", "Loading GameObjects for quests...");
-    sObjectMgr->LoadGameObjectForQuests();
+    sObjectMgr->LoadGameObjectForQuests();  // 加载任务相关的游戏对象
 
     TC_LOG_INFO("server.loading", "Loading BattleMasters...");
-    sBattlegroundMgr->LoadBattleMastersEntry();                 // must be after load CreatureTemplate
+    sBattlegroundMgr->LoadBattleMastersEntry();                 // 必须在加载 CreatureTemplate 之后
 
     TC_LOG_INFO("server.loading", "Loading GameTeleports...");
-    sObjectMgr->LoadGameTele();
+    sObjectMgr->LoadGameTele();  // 加载游戏传送点（GM 传送）
 
-    TC_LOG_INFO("server.loading", "Loading Trainers...");       // must be after LoadCreatureTemplates
-    sObjectMgr->LoadTrainers();
+    TC_LOG_INFO("server.loading", "Loading Trainers...");       // 必须在 LoadCreatureTemplates 之后
+    sObjectMgr->LoadTrainers();  // 加载训练师数据
 
     TC_LOG_INFO("server.loading", "Loading Creature default trainers...");
-    sObjectMgr->LoadCreatureDefaultTrainers();
+    sObjectMgr->LoadCreatureDefaultTrainers();  // 加载生物默认训练师
 
     TC_LOG_INFO("server.loading", "Loading Gossip menu...");
-    sObjectMgr->LoadGossipMenu();
+    sObjectMgr->LoadGossipMenu();  // 加载对话菜单
 
     TC_LOG_INFO("server.loading", "Loading Gossip menu options...");
-    sObjectMgr->LoadGossipMenuItems();                           // must be after LoadTrainers
+    sObjectMgr->LoadGossipMenuItems();                           // 必须在 LoadTrainers 之后
 
     TC_LOG_INFO("server.loading", "Loading Vendors...");
-    sObjectMgr->LoadVendors();                                   // must be after load CreatureTemplate and ItemTemplate
+    sObjectMgr->LoadVendors();                                   // 必须在加载 CreatureTemplate 和 ItemTemplate 之后
 
+    // ========== 移动和阵型系统加载 ==========
     TC_LOG_INFO("server.loading", "Loading Waypoints...");
-    sWaypointMgr->Load();
+    sWaypointMgr->Load();  // 加载路径点
 
     TC_LOG_INFO("server.loading", "Loading SmartAI Waypoints...");
-    sSmartWaypointMgr->LoadFromDB();
+    sSmartWaypointMgr->LoadFromDB();  // 加载 SmartAI 路径点
 
     TC_LOG_INFO("server.loading", "Loading Creature Formations...");
-    sFormationMgr->LoadCreatureFormations();
+    sFormationMgr->LoadCreatureFormations();  // 加载生物阵型
 
-    TC_LOG_INFO("server.loading", "Loading World States...");              // must be loaded before battleground, outdoor PvP and conditions
-    LoadWorldStates();
+    // ========== 世界状态和条件系统加载 ==========
+    TC_LOG_INFO("server.loading", "Loading World States...");              // 必须在战场、户外 PVP 和条件之前加载
+    LoadWorldStates();  // 加载世界状态
 
     TC_LOG_INFO("server.loading", "Loading Conditions...");
-    sConditionMgr->LoadConditions();
+    sConditionMgr->LoadConditions();  // 加载条件系统
 
+    // ========== 阵营转换系统加载 ==========
     TC_LOG_INFO("server.loading", "Loading faction change achievement pairs...");
-    sObjectMgr->LoadFactionChangeAchievements();
+    sObjectMgr->LoadFactionChangeAchievements();  // 加载阵营转换成就配对
 
     TC_LOG_INFO("server.loading", "Loading faction change spell pairs...");
-    sObjectMgr->LoadFactionChangeSpells();
+    sObjectMgr->LoadFactionChangeSpells();  // 加载阵营转换法术配对
 
     TC_LOG_INFO("server.loading", "Loading faction change quest pairs...");
-    sObjectMgr->LoadFactionChangeQuests();
+    sObjectMgr->LoadFactionChangeQuests();  // 加载阵营转换任务配对
 
     TC_LOG_INFO("server.loading", "Loading faction change item pairs...");
-    sObjectMgr->LoadFactionChangeItems();
+    sObjectMgr->LoadFactionChangeItems();  // 加载阵营转换物品配对
 
     TC_LOG_INFO("server.loading", "Loading faction change reputation pairs...");
-    sObjectMgr->LoadFactionChangeReputations();
+    sObjectMgr->LoadFactionChangeReputations();  // 加载阵营转换声望配对
 
     TC_LOG_INFO("server.loading", "Loading faction change title pairs...");
-    sObjectMgr->LoadFactionChangeTitles();
+    sObjectMgr->LoadFactionChangeTitles();  // 加载阵营转换头衔配对
 
+    // ========== GM 工具和插件系统加载 ==========
     TC_LOG_INFO("server.loading", "Loading GM tickets...");
-    sTicketMgr->LoadTickets();
+    sTicketMgr->LoadTickets();  // 加载 GM 工单
 
     TC_LOG_INFO("server.loading", "Loading GM surveys...");
-    sTicketMgr->LoadSurveys();
+    sTicketMgr->LoadSurveys();  // 加载 GM 调查问卷
 
     TC_LOG_INFO("server.loading", "Loading client addons...");
-    AddonMgr::LoadFromDB();
+    AddonMgr::LoadFromDB();  // 加载客户端插件数据
 
-    ///- Handle outdated emails (delete/return)
+    ///- 处理过期邮件（删除/退回）
     TC_LOG_INFO("server.loading", "Returning old mails...");
-    sObjectMgr->ReturnOrDeleteOldMails(false);
+    sObjectMgr->ReturnOrDeleteOldMails(false);  // 退回或删除过期邮件
 
     TC_LOG_INFO("server.loading", "Loading Autobroadcasts...");
-    LoadAutobroadcasts();
+    LoadAutobroadcasts();  // 加载自动广播消息
 
-    ///- Load and initialize scripts
-    sObjectMgr->LoadSpellScripts();                              // must be after load Creature/Gameobject(Template/Data)
-    sObjectMgr->LoadEventScripts();                              // must be after load Creature/Gameobject(Template/Data)
-    sObjectMgr->LoadWaypointScripts();
+    ///- 加载并初始化脚本系统
+    sObjectMgr->LoadSpellScripts();                              // 必须在加载 Creature/Gameobject(Template/Data) 之后
+    sObjectMgr->LoadEventScripts();                              // 必须在加载 Creature/Gameobject(Template/Data) 之后
+    sObjectMgr->LoadWaypointScripts();  // 加载路径点脚本
 
     TC_LOG_INFO("server.loading", "Loading spell script names...");
-    sObjectMgr->LoadSpellScriptNames();
+    sObjectMgr->LoadSpellScriptNames();  // 加载法术脚本名称
 
     TC_LOG_INFO("server.loading", "Loading Creature Texts...");
-    sCreatureTextMgr->LoadCreatureTexts();
+    sCreatureTextMgr->LoadCreatureTexts();  // 加载生物文本
 
     TC_LOG_INFO("server.loading", "Loading Creature Text Locales...");
-    sCreatureTextMgr->LoadCreatureTextLocales();
+    sCreatureTextMgr->LoadCreatureTextLocales();  // 加载生物文本本地化
 
     TC_LOG_INFO("server.loading", "Initializing Scripts...");
-    sScriptMgr->Initialize();
-    sScriptMgr->OnConfigLoad(false);                                // must be done after the ScriptMgr has been properly initialized
+    sScriptMgr->Initialize();  // 初始化脚本管理器
+    sScriptMgr->OnConfigLoad(false);                                // 必须在 ScriptMgr 正确初始化后执行
 
     TC_LOG_INFO("server.loading", "Validating spell scripts...");
-    sObjectMgr->ValidateSpellScripts();
+    sObjectMgr->ValidateSpellScripts();  // 验证法术脚本
 
     TC_LOG_INFO("server.loading", "Loading SmartAI scripts...");
-    sSmartScriptMgr->LoadSmartAIFromDB();
+    sSmartScriptMgr->LoadSmartAIFromDB();  // 加载 SmartAI 脚本
 
     TC_LOG_INFO("server.loading", "Loading Calendar data...");
-    sCalendarMgr->LoadFromDB();
+    sCalendarMgr->LoadFromDB();  // 加载日历数据
 
     TC_LOG_INFO("server.loading", "Loading Petitions...");
-    sPetitionMgr->LoadPetitions();
+    sPetitionMgr->LoadPetitions();  // 加载请愿书（公会创建申请）
 
     TC_LOG_INFO("server.loading", "Loading Signatures...");
-    sPetitionMgr->LoadSignatures();
+    sPetitionMgr->LoadSignatures();  // 加载签名
 
     TC_LOG_INFO("server.loading", "Loading Item loot...");
-    sLootItemStorage->LoadStorageFromDB();
+    sLootItemStorage->LoadStorageFromDB();  // 加载物品掉落存储
 
     TC_LOG_INFO("server.loading", "Initialize query data...");
-    sObjectMgr->InitializeQueriesData(QUERY_DATA_ALL);
+    sObjectMgr->InitializeQueriesData(QUERY_DATA_ALL);  // 初始化查询数据（预编译查询）
 
     TC_LOG_INFO("server.loading", "Initialize commands...");
-    Trinity::ChatCommands::LoadCommandMap();
+    Trinity::ChatCommands::LoadCommandMap();  // 初始化聊天命令映射
 
-    ///- Initialize game time and timers
+    ///- 初始化游戏时间和定时器
     TC_LOG_INFO("server.loading", "Initialize game time and timers");
-    GameTime::UpdateGameTimers();
+    GameTime::UpdateGameTimers();  // 更新游戏计时器
 
+    // 记录服务器启动时间到数据库
     LoginDatabase.PExecute("INSERT INTO uptime (realmid, starttime, uptime, revision) VALUES({}, {}, 0, '{}')",
-                            realm.Id.Realm, uint32(GameTime::GetStartTime()), GitRevision::GetFullVersion());       // One-time query
+                            realm.Id.Realm, uint32(GameTime::GetStartTime()), GitRevision::GetFullVersion());       // 一次性查询
 
+    // ========== 初始化世界定时器 ==========
+    // 拍卖行更新定时器（每 1 分钟）
     m_timers[WUPDATE_AUCTIONS].SetInterval(MINUTE*IN_MILLISECONDS);
+    // 拍卖行待处理更新定时器（每 250 毫秒）
     m_timers[WUPDATE_AUCTIONS_PENDING].SetInterval(250);
+    // 运行时间更新定时器（根据配置，默认每 10 分钟）
     m_timers[WUPDATE_UPTIME].SetInterval(m_int_configs[CONFIG_UPTIME_UPDATE]*MINUTE*IN_MILLISECONDS);
-                                                            //Update "uptime" table based on configuration entry in minutes.
+                                                            // 根据配置项更新 "uptime" 表（分钟）
+    // 尸体清理定时器（每 20 分钟）
     m_timers[WUPDATE_CORPSES].SetInterval(20 * MINUTE * IN_MILLISECONDS);
-                                                            //erase corpses every 20 minutes
+                                                            // 每 20 分钟清理尸体
+    // 数据库清理定时器（根据配置，默认每 14 天）
     m_timers[WUPDATE_CLEANDB].SetInterval(m_int_configs[CONFIG_LOGDB_CLEARINTERVAL]*MINUTE*IN_MILLISECONDS);
-                                                            // clean logs table every 14 days by default
+                                                            // 默认每 14 天清理日志表
+    // 自动广播定时器（根据配置间隔）
     m_timers[WUPDATE_AUTOBROADCAST].SetInterval(getIntConfig(CONFIG_AUTOBROADCAST_INTERVAL));
-    m_timers[WUPDATE_DELETECHARS].SetInterval(DAY*IN_MILLISECONDS); // check for chars to delete every day
+    // 角色删除检查定时器（每天）
+    m_timers[WUPDATE_DELETECHARS].SetInterval(DAY*IN_MILLISECONDS); // 每天检查待删除角色
 
-    // for AhBot
-    m_timers[WUPDATE_AHBOT].SetInterval(getIntConfig(CONFIG_AHBOT_UPDATE_INTERVAL) * IN_MILLISECONDS); // every 20 sec
+    // 拍卖行机器人定时器（根据配置，默认每 20 秒）
+    m_timers[WUPDATE_AHBOT].SetInterval(getIntConfig(CONFIG_AHBOT_UPDATE_INTERVAL) * IN_MILLISECONDS); // 每 20 秒
 
-    m_timers[WUPDATE_PINGDB].SetInterval(getIntConfig(CONFIG_DB_PING_INTERVAL)*MINUTE*IN_MILLISECONDS);    // Mysql ping time in minutes
+    // 数据库心跳定时器（根据配置，默认每 30 分钟）
+    m_timers[WUPDATE_PINGDB].SetInterval(getIntConfig(CONFIG_DB_PING_INTERVAL)*MINUTE*IN_MILLISECONDS);    // MySQL 心跳时间（分钟）
 
+    // 文件变更检查定时器（每 500 毫秒）
     m_timers[WUPDATE_CHECK_FILECHANGES].SetInterval(500);
 
-    m_timers[WUPDATE_WHO_LIST].SetInterval(5 * IN_MILLISECONDS); // update who list cache every 5 seconds
+    // 在线列表缓存更新定时器（每 5 秒）
+    m_timers[WUPDATE_WHO_LIST].SetInterval(5 * IN_MILLISECONDS); // 每 5 秒更新在线列表缓存
 
+    // 自定义频道保存定时器（根据配置）
     m_timers[WUPDATE_CHANNEL_SAVE].SetInterval(getIntConfig(CONFIG_PRESERVE_CUSTOM_CHANNEL_INTERVAL) * MINUTE * IN_MILLISECONDS);
 
-    //to set mailtimer to return mails every day between 4 and 5 am
-    //mailtimer is increased when updating auctions
-    //one second is 1000 -(tested on win system)
-    /// @todo Get rid of magic numbers
+    // 设置邮件定时器，每天凌晨 4-5 点之间退回邮件
+    // 邮件定时器在更新拍卖行时增加
+    // 一秒等于 1000 毫秒（在 Windows 系统上测试）
+    /// @todo 移除魔法数字
     tm localTm;
     time_t gameTime = GameTime::GetGameTime();
     localtime_r(&gameTime, &localTm);
     uint8 CleanOldMailsTime = getIntConfig(CONFIG_CLEAN_OLD_MAIL_TIME);
     mail_timer = ((((localTm.tm_hour + (24 - CleanOldMailsTime)) % 24)* HOUR * IN_MILLISECONDS) / m_timers[WUPDATE_AUCTIONS].GetInterval());
-                                                            //1440
+                                                            // 1440
     mail_timer_expires = ((DAY * IN_MILLISECONDS) / (m_timers[WUPDATE_AUCTIONS].GetInterval()));
     TC_LOG_INFO("server.loading", "Mail timer set to: {}, mail return is called every {} minutes", uint64(mail_timer), uint64(mail_timer_expires));
 
-    ///- Initialize MapManager
+    ///- 初始化地图管理器
     TC_LOG_INFO("server.loading", "Starting Map System");
-    sMapMgr->Initialize();
+    sMapMgr->Initialize();  // 初始化地图系统
 
     TC_LOG_INFO("server.loading", "Starting Game Event system...");
-    uint32 nextGameEvent = sGameEventMgr->StartSystem();
-    m_timers[WUPDATE_EVENTS].SetInterval(nextGameEvent);    //depend on next event
+    uint32 nextGameEvent = sGameEventMgr->StartSystem();  // 启动游戏事件系统
+    m_timers[WUPDATE_EVENTS].SetInterval(nextGameEvent);    // 依赖下一个事件
 
-    // Delete all characters which have been deleted X days before
+    // 删除 X 天前已删除的角色
     Player::DeleteOldCharacters();
 
     TC_LOG_INFO("server.loading", "Initialize AuctionHouseBot...");
-    sAuctionBot->Initialize();
+    sAuctionBot->Initialize();  // 初始化拍卖行机器人
 
     TC_LOG_INFO("server.loading", "Initializing chat channels...");
-    ChannelMgr::LoadFromDB();
+    ChannelMgr::LoadFromDB();  // 从数据库加载聊天频道
 
     TC_LOG_INFO("server.loading", "Initializing Opcodes...");
-    opcodeTable.Initialize();
+    opcodeTable.Initialize();  // 初始化操作码表（网络包处理）
 
     TC_LOG_INFO("server.loading", "Starting Arena Season...");
-    sGameEventMgr->StartArenaSeason();
+    sGameEventMgr->StartArenaSeason();  // 启动竞技场赛季
 
-    sTicketMgr->Initialize();
+    sTicketMgr->Initialize();  // 初始化 GM 工单管理器
 
-    ///- Initialize Battlegrounds
+    ///- 初始化战场系统
     TC_LOG_INFO("server.loading", "Starting Battleground System");
-    sBattlegroundMgr->LoadBattlegroundTemplates();
-    sBattlegroundMgr->InitAutomaticArenaPointDistribution();
+    sBattlegroundMgr->LoadBattlegroundTemplates();  // 加载战场模板
+    sBattlegroundMgr->InitAutomaticArenaPointDistribution();  // 初始化自动竞技场点数分配
 
-    ///- Initialize outdoor pvp
+    ///- 初始化户外 PVP
     TC_LOG_INFO("server.loading", "Starting Outdoor PvP System");
-    sOutdoorPvPMgr->InitOutdoorPvP();
+    sOutdoorPvPMgr->InitOutdoorPvP();  // 初始化户外 PVP 系统
 
-    ///- Initialize Battlefield
+    ///- 初始化战场
     TC_LOG_INFO("server.loading", "Starting Battlefield System");
-    sBattlefieldMgr->InitBattlefield();
+    sBattlefieldMgr->InitBattlefield();  // 初始化战场系统（冬拥湖等）
 
     TC_LOG_INFO("server.loading", "Loading Transports...");
-    sTransportMgr->SpawnContinentTransports();
+    sTransportMgr->SpawnContinentTransports();  // 生成大陆交通工具（船只、飞艇）
 
-    ///- Initialize Warden
+    ///- 初始化 Warden 反作弊系统
     TC_LOG_INFO("server.loading", "Loading Warden Checks...");
-    sWardenCheckMgr->LoadWardenChecks();
+    sWardenCheckMgr->LoadWardenChecks();  // 加载 Warden 检查项
 
     TC_LOG_INFO("server.loading", "Loading Warden Action Overrides...");
-    sWardenCheckMgr->LoadWardenOverrides();
+    sWardenCheckMgr->LoadWardenOverrides();  // 加载 Warden 动作覆盖
 
     TC_LOG_INFO("server.loading", "Deleting expired bans...");
-    LoginDatabase.Execute("DELETE FROM ip_banned WHERE unbandate <= UNIX_TIMESTAMP() AND unbandate<>bandate");      // One-time query
+    LoginDatabase.Execute("DELETE FROM ip_banned WHERE unbandate <= UNIX_TIMESTAMP() AND unbandate<>bandate");      // 一次性查询，删除过期封禁
 
     TC_LOG_INFO("server.loading", "Initializing quest reset times...");
-    InitQuestResetTimes();
-    CheckQuestResetTimes();
+    InitQuestResetTimes();  // 初始化任务重置时间
+    CheckQuestResetTimes();  // 检查任务重置时间
 
     TC_LOG_INFO("server.loading", "Calculate random battleground reset time...");
-    InitRandomBGResetTime();
+    InitRandomBGResetTime();  // 计算随机战场重置时间
 
     TC_LOG_INFO("server.loading", "Calculate deletion of old calendar events time...");
-    InitCalendarOldEventsDeletionTime();
+    InitCalendarOldEventsDeletionTime();  // 计算删除旧日历事件的时间
 
     TC_LOG_INFO("server.loading", "Calculate guild limitation(s) reset time...");
-    InitGuildResetTime();
+    InitGuildResetTime();  // 计算公会限制重置时间
 
-    // Preload all cells, if required for the base maps
+    // 如果配置要求，预加载基础地图的所有网格
     if (sWorld->getBoolConfig(CONFIG_BASEMAP_LOAD_GRIDS))
     {
         sMapMgr->DoForAllMaps([](Map* map)
         {
-            if (!map->Instanceable())
+            if (!map->Instanceable())  // 只处理非副本地图
             {
                 TC_LOG_INFO("server.loading", "Pre-loading base map data for map {}", map->GetId());
-                map->LoadAllCells();
+                map->LoadAllCells();  // 预加载所有单元格（提高性能但消耗内存）
             }
         });
     }
 
+    // 计算并输出启动耗时
     uint32 startupDuration = GetMSTimeDiffToNow(startupBegin);
 
     TC_LOG_INFO("server.worldserver", "World initialized in {} minutes {} seconds", (startupDuration / 60000), ((startupDuration % 60000) / 1000));
 
     TC_METRIC_EVENT("events", "World initialized", "World initialized in " + std::to_string(startupDuration / 60000) + " minutes " + std::to_string((startupDuration % 60000) / 1000) + " seconds");
 }
+// === World::SetInitialWorldSettings() 函数结束 ===
 
 void World::DetectDBCLang()
 {
@@ -2335,30 +2718,36 @@ void World::LoadAutobroadcasts()
 }
 
 /// Update the World !
+// === 世界更新主循环 ===
+// 职责：驱动整个游戏世界的更新，是主循环的核心入口
+// 参数：diff - 距离上一帧的时间差（毫秒）
+// 调用时机：在 WorldUpdateLoop() 中每帧调用一次，默认 50ms (20 FPS)
+// 性能注意：此函数是性能关键路径，应避免阻塞操作
 void World::Update(uint32 diff)
 {
     TC_METRIC_TIMER("world_update_time_total");
-    ///- Update the game time and check for shutdown time
+
+    ///- 更新游戏时间并检查关闭时间
     _UpdateGameTime();
     time_t currentGameTime = GameTime::GetGameTime();
 
     sWorldUpdateTime.UpdateWithDiff(diff);
 
-    ///- Update the different timers
+    ///- 更新所有定时器（拍卖行、邮件、尸体清理等）
     for (int i = 0; i < WUPDATE_COUNT; ++i)
     {
         if (m_timers[i].GetCurrent() >= 0)
-            m_timers[i].Update(diff);
+            m_timers[i].Update(diff);  // 减少计时器
         else
-            m_timers[i].SetCurrent(0);
+            m_timers[i].SetCurrent(0);  // 重置为 0
     }
 
-    ///- Update Who List Storage
+    ///- 更新在线玩家列表（每 5 秒）
     if (m_timers[WUPDATE_WHO_LIST].Passed())
     {
         TC_METRIC_TIMER("world_update_time", TC_METRIC_TAG("type", "Update who list"));
-        m_timers[WUPDATE_WHO_LIST].Reset();
-        sWhoListStorageMgr->Update();
+        m_timers[WUPDATE_WHO_LIST].Reset();  // 重置定时器
+        sWhoListStorageMgr->Update();         // 更新在线列表
     }
 
     if (IsStopped() || m_timers[WUPDATE_CHANNEL_SAVE].Passed())
@@ -2399,21 +2788,20 @@ void World::Update(uint32 diff)
         ResetGuildCap();
     }
 
-    /// <ul><li> Handle auctions when the timer has passed
+    ///- 处理拍卖行（每 1 分钟）
     if (m_timers[WUPDATE_AUCTIONS].Passed())
     {
         TC_METRIC_TIMER("world_update_time", TC_METRIC_TAG("type", "Update expired auctions"));
         m_timers[WUPDATE_AUCTIONS].Reset();
 
-        ///- Update mails (return old mails with item, or delete them)
-        //(tested... works on win)
+        ///- 更新邮件（退回或删除过期邮件）
         if (++mail_timer > mail_timer_expires)
         {
             mail_timer = 0;
             sObjectMgr->ReturnOrDeleteOldMails(true);
         }
 
-        ///- Handle expired auctions
+        ///- 处理过期拍卖
         sAuctionMgr->Update();
     }
 
@@ -2442,7 +2830,8 @@ void World::Update(uint32 diff)
     }
 
     {
-        /// <li> Handle session updates when the timer has passed
+        ///- 更新所有玩家会话（关键路径，每帧执行）
+        ///  这是核心更新路径之一，处理所有在线玩家的数据包和状态更新
         TC_METRIC_TIMER("world_update_time", TC_METRIC_TAG("type", "Update sessions"));
         UpdateSessions(diff);
     }
@@ -2484,8 +2873,9 @@ void World::Update(uint32 diff)
         }
     }
 
-    /// <li> Handle all other objects
-    ///- Update objects when the timer has passed (maps, transport, creatures, ...)
+    ///- 更新所有地图（关键路径，并行执行）
+    ///  这是核心更新路径之一，使用线程池并行更新所有地图
+    ///  每个地图独立更新：生物、游戏对象、玩家、脚本等
     {
         TC_METRIC_TIMER("world_update_time", TC_METRIC_TAG("type", "Update maps"));
         sMapMgr->Update(diff);

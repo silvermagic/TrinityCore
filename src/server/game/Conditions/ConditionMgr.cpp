@@ -15,6 +15,26 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file ConditionMgr.cpp
+ * @brief 条件管理器实现文件 - 实现条件系统的核心逻辑
+ *
+ * 本文件实现了条件管理器的所有功能，包括：
+ * - 从数据库加载条件定义
+ * - 条件验证和错误检查
+ * - 各种条件类型的判断逻辑
+ * - 条件分组和引用处理
+ *
+ * 主要数据流：
+ * 1. 服务器启动时调用LoadConditions()从conditions表加载数据
+ * 2. 将条件按源类型和条目ID存储到相应的容器中
+ * 3. 游戏运行时通过IsObjectMeetToConditions等接口进行条件判断
+ *
+ * 性能考虑：
+ * - 条件判断是高频操作，使用哈希表快速查找
+ * - 条件结果不缓存，每次都实时判断（因为状态可能变化）
+ */
+
 #include "ConditionMgr.h"
 #include "AchievementMgr.h"
 #include "DatabaseEnv.h"
@@ -33,123 +53,140 @@
 #include "SpellMgr.h"
 #include "World.h"
 
+// 条件源类型名称数组 - 用于日志输出和调试
 char const* const ConditionMgr::StaticSourceTypeData[CONDITION_SOURCE_TYPE_MAX] =
 {
-    "None",
-    "Creature Loot",
-    "Disenchant Loot",
-    "Fishing Loot",
-    "GameObject Loot",
-    "Item Loot",
-    "Mail Loot",
-    "Milling Loot",
-    "Pickpocketing Loot",
-    "Prospecting Loot",
-    "Reference Loot",
-    "Skinning Loot",
-    "Spell Loot",
-    "Spell Impl. Target",
-    "Gossip Menu",
-    "Gossip Menu Option",
-    "Creature Vehicle",
-    "Spell Expl. Target",
-    "Spell Click Event",
-    "Quest Accept",
-    "Quest Show Mark",
-    "Vehicle Spell",
-    "SmartScript",
-    "Npc Vendor",
-    "Spell Proc",
-    "Terrain Swap",
-    "Phase"
+    "None",                    // 无
+    "Creature Loot",           // 生物战利品
+    "Disenchant Loot",         // 分解战利品
+    "Fishing Loot",            // 钓鱼战利品
+    "GameObject Loot",         // 游戏对象战利品
+    "Item Loot",               // 物品战利品
+    "Mail Loot",               // 邮件战利品
+    "Milling Loot",            // 研磨战利品
+    "Pickpocketing Loot",      // 搜索战利品
+    "Prospecting Loot",        // 探矿战利品
+    "Reference Loot",          // 引用战利品
+    "Skinning Loot",           // 剥皮战利品
+    "Spell Loot",              // 法术战利品
+    "Spell Impl. Target",      // 法术隐式目标
+    "Gossip Menu",             // 对话菜单
+    "Gossip Menu Option",      // 对话菜单选项
+    "Creature Vehicle",        // 生物载具
+    "Spell Expl. Target",      // 法术显式目标
+    "Spell Click Event",       // 法术点击事件
+    "Quest Accept",            // 任务接受
+    "Quest Show Mark",         // 任务显示标记
+    "Vehicle Spell",           // 载具法术
+    "SmartScript",             // 智能脚本
+    "Npc Vendor",              // NPC商人
+    "Spell Proc",              // 法术触发
+    "Terrain Swap",            // 地形交换
+    "Phase"                    // 相位
 };
 
+// 条件类型信息数组 - 定义每种条件类型的参数需求
+// 数组元素格式：{名称, 是否使用值1, 是否使用值2, 是否使用值3}
 ConditionMgr::ConditionTypeInfo const ConditionMgr::StaticConditionTypeData[CONDITION_MAX] =
 {
-    { "None",                     false, false, false },
-    { "Aura",                      true, true,  true  },
-    { "Item Stored",               true, true,  true  },
-    { "Item Equipped",             true, false, false },
-    { "Zone",                      true, false, false },
-    { "Reputation",                true, true,  false },
-    { "Team",                      true, false, false },
-    { "Skill",                     true, true,  false },
-    { "Quest Rewarded",            true, false, false },
-    { "Quest Taken",               true, false, false },
-    { "Drunken",                   true, false, false },
-    { "WorldState",                true, true,  false },
-    { "Active Event",              true, false, false },
-    { "Instance Info",             true, true,  true  },
-    { "Quest None",                true, false, false },
-    { "Class",                     true, false, false },
-    { "Race",                      true, false, false },
-    { "Achievement",               true, false, false },
-    { "Title",                     true, false, false },
-    { "SpawnMask",                 true, false, false },
-    { "Gender",                    true, false, false },
-    { "Unit State",                true, false, false },
-    { "Map",                       true, false, false },
-    { "Area",                      true, false, false },
-    { "CreatureType",              true, false, false },
-    { "Spell Known",               true, false, false },
-    { "PhaseMask",                 true, false, false },
-    { "Level",                     true, true,  false },
-    { "Quest Completed",           true, false, false },
-    { "Near Creature",             true, true,  true  },
-    { "Near GameObject",           true, true,  false },
-    { "Object Entry or Guid",      true, true,  true  },
-    { "Object TypeMask",           true, false, false },
-    { "Relation",                  true, true,  false },
-    { "Reaction",                  true, true,  false },
-    { "Distance",                  true, true,  true  },
-    { "Alive",                    false, false, false },
-    { "Health Value",              true, true,  false },
-    { "Health Pct",                true, true,  false },
-    { "Realm Achievement",         true, false, false },
-    { "In Water",                 false, false, false },
-    { "Terrain Swap",             false, false, false },
-    { "Sit/stand state",           true, true,  false },
-    { "Daily Quest Completed",     true, false, false },
-    { "Charmed",                  false, false, false },
-    { "Pet type",                  true, false, false },
-    { "On Taxi",                  false, false, false },
-    { "Quest state mask",          true, true,  false },
-    { "Quest objective progress",  true, true,   true },
-    { "Map difficulty",            true, false, false },
-    { "Is Gamemaster",             true, false, false },
-    { "Object Entry or Guid",      true, true,  true  },
-    { "Object TypeMask",           true, false, false }
+    { "None",                     false, false, false }, // 无条件
+    { "Aura",                      true, true,  true  }, // 光环条件：需要法术ID、效果索引、是否使用目标
+    { "Item Stored",               true, true,  true  }, // 物品存储：需要物品ID、数量、是否包含银行
+    { "Item Equipped",             true, false, false }, // 物品装备：需要物品ID
+    { "Zone",                      true, false, false }, // 区域：需要区域ID
+    { "Reputation",                true, true,  false }, // 声望：需要阵营ID、声望等级掩码
+    { "Team",                      true, false, false }, // 阵营：需要阵营ID
+    { "Skill",                     true, true,  false }, // 技能：需要技能ID、技能值
+    { "Quest Rewarded",            true, false, false }, // 任务已奖励：需要任务ID
+    { "Quest Taken",               true, false, false }, // 任务已接取：需要任务ID
+    { "Drunken",                   true, false, false }, // 醉酒状态：需要醉酒等级
+    { "WorldState",                true, true,  false }, // 世界状态：需要索引、值
+    { "Active Event",              true, false, false }, // 激活事件：需要事件ID
+    { "Instance Info",             true, true,  true  }, // 副本信息：需要条目、数据、类型
+    { "Quest None",                true, false, false }, // 无任务：需要任务ID
+    { "Class",                     true, false, false }, // 职业：需要职业掩码
+    { "Race",                      true, false, false }, // 种族：需要种族掩码
+    { "Achievement",               true, false, false }, // 成就：需要成就ID
+    { "Title",                     true, false, false }, // 称号：需要称号ID
+    { "SpawnMask",                 true, false, false }, // 生成掩码：需要掩码值
+    { "Gender",                    true, false, false }, // 性别：需要性别值
+    { "Unit State",                true, false, false }, // 单位状态：需要状态值
+    { "Map",                       true, false, false }, // 地图：需要地图ID
+    { "Area",                      true, false, false }, // 区域：需要区域ID
+    { "CreatureType",              true, false, false }, // 生物类型：需要类型值
+    { "Spell Known",               true, false, false }, // 已知法术：需要法术ID
+    { "PhaseMask",                 true, false, false }, // 相位掩码：需要掩码值
+    { "Level",                     true, true,  false }, // 等级：需要等级、比较类型
+    { "Quest Completed",           true, false, false }, // 任务完成：需要任务ID
+    { "Near Creature",             true, true,  true  }, // 附近生物：需要生物条目、距离、是否死亡
+    { "Near GameObject",           true, true,  false }, // 附近游戏对象：需要对象条目、距离
+    { "Object Entry or Guid",      true, true,  true  }, // 对象条目或GUID：需要类型ID、条目、GUID
+    { "Object TypeMask",           true, false, false }, // 对象类型掩码：需要掩码值
+    { "Relation",                  true, true,  false }, // 关系：需要目标索引、关系类型
+    { "Reaction",                  true, true,  false }, // 反应：需要目标索引、等级掩码
+    { "Distance",                  true, true,  true  }, // 距离：需要目标索引、距离、比较类型
+    { "Alive",                    false, false, false }, // 存活：无需参数
+    { "Health Value",              true, true,  false }, // 生命值：需要值、比较类型
+    { "Health Pct",                true, true,  false }, // 生命值百分比：需要百分比、比较类型
+    { "Realm Achievement",         true, false, false }, // 服务器成就：需要成就ID
+    { "In Water",                 false, false, false }, // 在水中：无需参数
+    { "Terrain Swap",             false, false, false }, // 地形交换：仅master分支
+    { "Sit/stand state",           true, true,  false }, // 坐/站状态：需要状态类型、状态值
+    { "Daily Quest Completed",     true, false, false }, // 日常任务完成：需要任务ID
+    { "Charmed",                  false, false, false }, // 魅惑状态：无需参数
+    { "Pet type",                  true, false, false }, // 宠物类型：需要类型掩码
+    { "On Taxi",                  false, false, false }, // 在飞行中：无需参数
+    { "Quest state mask",          true, true,  false }, // 任务状态掩码：需要任务ID、状态掩码
+    { "Quest objective progress",  true, true,   true }, // 任务目标进度：需要任务ID、目标索引、进度值
+    { "Map difficulty",            true, false, false }, // 地图难度：需要难度ID
+    { "Is Gamemaster",             true, false, false }, // 是否GM：是否可以是GM
+    { "Object Entry or Guid",      true, true,  true  }, // 对象条目或GUID（master分支）
+    { "Object TypeMask",           true, false, false }  // 对象类型掩码（master分支）
 };
 
-// Checks if object meets the condition
-// Can have CONDITION_SOURCE_TYPE_NONE && !mReferenceId if called from a special event (ie: eventAI)
+/**
+ * @brief 检查对象是否满足条件
+ * @param sourceInfo 条件源信息，包含目标对象数组
+ * @return 条件是否满足
+ *
+ * 这是条件判断的核心函数，根据ConditionType执行不同的判断逻辑。
+ *
+ * 特殊说明：
+ * - 可以有CONDITION_SOURCE_TYPE_NONE && !mReferenceId的情况（如从特殊事件调用，如eventAI）
+ * - 如果目标对象不存在，返回false
+ */
 bool Condition::Meets(ConditionSourceInfo& sourceInfo) const
 {
+    // 确保条件目标索引有效
     ASSERT(ConditionTarget < MAX_CONDITION_TARGETS);
     WorldObject* object = sourceInfo.mConditionTargets[ConditionTarget];
-    // object not present, return false
+
+    // 对象不存在，返回false
     if (!object)
     {
         TC_LOG_DEBUG("condition", "Condition object not found for {}", ToString());
         return false;
     }
+
     bool condMeets = false;
     switch (ConditionType)
     {
         case CONDITION_NONE:
-            condMeets = true;                                    // empty condition, always met
+            condMeets = true;                                    // 空条件，总是满足
             break;
         case CONDITION_AURA:
         {
+            // 检查单位是否拥有指定光环效果
             if (Unit* unit = object->ToUnit())
                 condMeets = unit->HasAuraEffect(ConditionValue1, ConditionValue2);
             break;
         }
         case CONDITION_ITEM:
         {
+            // 检查玩家是否拥有指定数量的物品
             if (Player* player = object->ToPlayer())
             {
-                // don't allow 0 items (it's checked during table load)
+                // 不允许0个物品（在表加载时已检查）
                 ASSERT(ConditionValue2);
                 bool checkBank = ConditionValue3 ? true : false;
                 condMeets = player->HasItemCount(ConditionValue1, ConditionValue2, checkBank);
@@ -158,15 +195,18 @@ bool Condition::Meets(ConditionSourceInfo& sourceInfo) const
         }
         case CONDITION_ITEM_EQUIPPED:
         {
+            // 检查玩家是否装备了指定物品
             if (Player* player = object->ToPlayer())
                 condMeets = player->HasItemOrGemWithIdEquipped(ConditionValue1, 1);
             break;
         }
         case CONDITION_ZONEID:
+            // 检查是否在指定区域
             condMeets = object->GetZoneId() == ConditionValue1;
             break;
         case CONDITION_REPUTATION_RANK:
         {
+            // 检查玩家是否达到指定声望等级
             if (Player* player = object->ToPlayer())
             {
                 if (FactionEntry const* faction = sFactionStore.LookupEntry(ConditionValue1))
@@ -546,83 +586,96 @@ bool Condition::Meets(ConditionSourceInfo& sourceInfo) const
     return condMeets && sScriptMgr->OnConditionCheck(this, sourceInfo); // Returns true by default.;
 }
 
+/**
+ * @brief 获取条件的搜索者类型掩码
+ * @return 搜索者类型掩码
+ *
+ * 此函数用于构建条件可以返回true的对象类型掩码，
+ * 主要用于加速网格搜索（gridsearch）。
+ *
+ * 例如：
+ * - CONDITION_AURA只适用于单位（生物和玩家）
+ * - CONDITION_ITEM只适用于玩家
+ * - CONDITION_NONE适用于所有对象
+ */
 uint32 Condition::GetSearcherTypeMaskForCondition() const
 {
-    // build mask of types for which condition can return true
-    // this is used for speeding up gridsearches
+    // 构建条件可以返回true的对象类型掩码
+    // 用于加速网格搜索
     if (NegativeCondition)
         return (GRID_MAP_TYPE_MASK_ALL);
+
     uint32 mask = 0;
     switch (ConditionType)
     {
         case CONDITION_NONE:
-            mask |= GRID_MAP_TYPE_MASK_ALL;
+            mask |= GRID_MAP_TYPE_MASK_ALL;  // 无条件适用于所有对象
             break;
         case CONDITION_AURA:
-            mask |= GRID_MAP_TYPE_MASK_CREATURE | GRID_MAP_TYPE_MASK_PLAYER;
+            mask |= GRID_MAP_TYPE_MASK_CREATURE | GRID_MAP_TYPE_MASK_PLAYER;  // 光环仅适用于单位
             break;
         case CONDITION_ITEM:
-            mask |= GRID_MAP_TYPE_MASK_PLAYER;
+            mask |= GRID_MAP_TYPE_MASK_PLAYER;  // 物品检查仅适用于玩家
             break;
         case CONDITION_ITEM_EQUIPPED:
-            mask |= GRID_MAP_TYPE_MASK_PLAYER;
+            mask |= GRID_MAP_TYPE_MASK_PLAYER;  // 装备检查仅适用于玩家
             break;
         case CONDITION_ZONEID:
-            mask |= GRID_MAP_TYPE_MASK_ALL;
+            mask |= GRID_MAP_TYPE_MASK_ALL;  // 区域检查适用于所有对象
             break;
         case CONDITION_REPUTATION_RANK:
-            mask |= GRID_MAP_TYPE_MASK_PLAYER;
+            mask |= GRID_MAP_TYPE_MASK_PLAYER;  // 声望检查仅适用于玩家
             break;
         case CONDITION_ACHIEVEMENT:
-            mask |= GRID_MAP_TYPE_MASK_PLAYER;
+            mask |= GRID_MAP_TYPE_MASK_PLAYER;  // 成就检查仅适用于玩家
             break;
         case CONDITION_TEAM:
-            mask |= GRID_MAP_TYPE_MASK_PLAYER;
+            mask |= GRID_MAP_TYPE_MASK_PLAYER;  // 阵营检查仅适用于玩家
             break;
         case CONDITION_CLASS:
-            mask |= GRID_MAP_TYPE_MASK_CREATURE | GRID_MAP_TYPE_MASK_PLAYER;
+            mask |= GRID_MAP_TYPE_MASK_CREATURE | GRID_MAP_TYPE_MASK_PLAYER;  // 职业检查适用于单位
             break;
         case CONDITION_RACE:
-            mask |= GRID_MAP_TYPE_MASK_CREATURE | GRID_MAP_TYPE_MASK_PLAYER;
+            mask |= GRID_MAP_TYPE_MASK_CREATURE | GRID_MAP_TYPE_MASK_PLAYER;  // 种族检查适用于单位
             break;
         case CONDITION_SKILL:
-            mask |= GRID_MAP_TYPE_MASK_PLAYER;
+            mask |= GRID_MAP_TYPE_MASK_PLAYER;  // 技能检查仅适用于玩家
             break;
         case CONDITION_QUESTREWARDED:
-            mask |= GRID_MAP_TYPE_MASK_PLAYER;
+            mask |= GRID_MAP_TYPE_MASK_PLAYER;  // 任务奖励检查仅适用于玩家
             break;
         case CONDITION_QUESTTAKEN:
-            mask |= GRID_MAP_TYPE_MASK_PLAYER;
+            mask |= GRID_MAP_TYPE_MASK_PLAYER;  // 任务接取检查仅适用于玩家
             break;
         case CONDITION_QUEST_COMPLETE:
-            mask |= GRID_MAP_TYPE_MASK_PLAYER;
+            mask |= GRID_MAP_TYPE_MASK_PLAYER;  // 任务完成检查仅适用于玩家
             break;
         case CONDITION_QUEST_NONE:
-            mask |= GRID_MAP_TYPE_MASK_PLAYER;
+            mask |= GRID_MAP_TYPE_MASK_PLAYER;  // 无任务检查仅适用于玩家
             break;
         case CONDITION_ACTIVE_EVENT:
-            mask |= GRID_MAP_TYPE_MASK_ALL;
+            mask |= GRID_MAP_TYPE_MASK_ALL;  // 活动事件检查适用于所有对象
             break;
         case CONDITION_INSTANCE_INFO:
-            mask |= GRID_MAP_TYPE_MASK_ALL;
+            mask |= GRID_MAP_TYPE_MASK_ALL;  // 副本信息检查适用于所有对象
             break;
         case CONDITION_MAPID:
-            mask |= GRID_MAP_TYPE_MASK_ALL;
+            mask |= GRID_MAP_TYPE_MASK_ALL;  // 地图ID检查适用于所有对象
             break;
         case CONDITION_AREAID:
-            mask |= GRID_MAP_TYPE_MASK_ALL;
+            mask |= GRID_MAP_TYPE_MASK_ALL;  // 区域ID检查适用于所有对象
             break;
         case CONDITION_SPELL:
-            mask |= GRID_MAP_TYPE_MASK_PLAYER;
+            mask |= GRID_MAP_TYPE_MASK_PLAYER;  // 法术检查仅适用于玩家
             break;
         case CONDITION_LEVEL:
-            mask |= GRID_MAP_TYPE_MASK_CREATURE | GRID_MAP_TYPE_MASK_PLAYER;
+            mask |= GRID_MAP_TYPE_MASK_CREATURE | GRID_MAP_TYPE_MASK_PLAYER;  // 等级检查适用于单位
             break;
         case CONDITION_DRUNKENSTATE:
-            mask |= GRID_MAP_TYPE_MASK_PLAYER;
+            mask |= GRID_MAP_TYPE_MASK_PLAYER;  // 醉酒状态检查仅适用于玩家
             break;
         case CONDITION_NEAR_CREATURE:
-            mask |= GRID_MAP_TYPE_MASK_ALL;
+            mask |= GRID_MAP_TYPE_MASK_ALL;  // 附近生物检查适用于所有对象
             break;
         case CONDITION_NEAR_GAMEOBJECT:
             mask |= GRID_MAP_TYPE_MASK_ALL;
@@ -831,45 +884,70 @@ uint32 ConditionMgr::GetSearcherTypeMaskForConditionList(ConditionContainer cons
     return mask;
 }
 
+/**
+ * @brief 检查对象是否满足条件列表（核心实现）
+ * @param sourceInfo 条件源信息
+ * @param conditions 条件列表
+ * @return 是否满足条件
+ *
+ * ElseGroup逻辑说明：
+ * - 同一ElseGroup内的条件为AND关系（所有条件都必须满足）
+ * - 不同ElseGroup之间为OR关系（任意一个ElseGroup满足即可）
+ * - 如果没有ElseGroup（都为0），则所有条件必须满足
+ *
+ * 示例：
+ * 条件1: ElseGroup=0, 需要等级>=10
+ * 条件2: ElseGroup=0, 需要职业=战士   (与条件1为AND关系)
+ * 条件3: ElseGroup=1, 需要等级>=20
+ * 条件4: ElseGroup=1, 需要职业=法师   (与条件3为AND关系)
+ *
+ * 结果：(等级>=10 AND 职业=战士) OR (等级>=20 AND 职业=法师)
+ */
 bool ConditionMgr::IsObjectMeetToConditionList(ConditionSourceInfo& sourceInfo, ConditionContainer const& conditions) const
 {
-    //     groupId, groupCheckPassed
+    // ElseGroup存储：key=组ID, value=该组是否通过检查
     std::map<uint32, bool> elseGroupStore;
+
+    // 遍历所有条件
     for (Condition const* condition : conditions)
     {
         TC_LOG_DEBUG("condition", "ConditionMgr::IsPlayerMeetToConditionList {} val1: {}", condition->ToString(), condition->ConditionValue1);
         if (condition->isLoaded())
         {
-            //! Find ElseGroup in ElseGroupStore
+            // 查找ElseGroup在存储中的状态
             std::map<uint32, bool>::const_iterator itr = elseGroupStore.find(condition->ElseGroup);
-            //! If not found, add an entry in the store and set to true (placeholder)
+            // 如果未找到，添加一个条目并设置为true（占位符）
             if (itr == elseGroupStore.end())
                 elseGroupStore[condition->ElseGroup] = true;
-            else if (!(*itr).second) //! If another condition in this group was unmatched before this, don't bother checking (the group is false anyway)
+            else if (!(*itr).second) // 如果该组已有条件不满足，跳过后续检查（该组已经失败）
                 continue;
 
-            if (condition->ReferenceId)//handle reference
+            // 处理条件引用
+            if (condition->ReferenceId)
             {
                 ConditionReferenceContainer::const_iterator ref = ConditionReferenceStore.find(condition->ReferenceId);
                 if (ref != ConditionReferenceStore.end())
                 {
+                    // 递归检查引用的条件列表
                     if (!IsObjectMeetToConditionList(sourceInfo, ref->second))
                         elseGroupStore[condition->ElseGroup] = false;
                 }
                 else
                 {
                     TC_LOG_DEBUG("condition", "ConditionMgr::IsPlayerMeetToConditionList {} Reference template -{} not found",
-                        condition->ToString(), condition->ReferenceId); // checked at loading, should never happen
+                        condition->ToString(), condition->ReferenceId); // 加载时已检查，不应发生
                 }
 
             }
-            else //handle normal condition
+            else // 处理普通条件
             {
                 if (!condition->Meets(sourceInfo))
                     elseGroupStore[condition->ElseGroup] = false;
             }
         }
     }
+
+    // 检查是否有任何一个ElseGroup通过
     for (std::map<uint32, bool>::const_iterator i = elseGroupStore.begin(); i != elseGroupStore.end(); ++i)
         if (i->second)
             return true;
@@ -877,18 +955,39 @@ bool ConditionMgr::IsObjectMeetToConditionList(ConditionSourceInfo& sourceInfo, 
     return false;
 }
 
+/**
+ * @brief 检查对象是否满足条件列表（单对象版本）
+ * @param object 要检查的对象
+ * @param conditions 条件列表
+ * @return 是否满足所有条件
+ */
 bool ConditionMgr::IsObjectMeetToConditions(WorldObject* object, ConditionContainer const& conditions) const
 {
     ConditionSourceInfo srcInfo = ConditionSourceInfo(object);
     return IsObjectMeetToConditions(srcInfo, conditions);
 }
 
+/**
+ * @brief 检查对象是否满足条件列表（双对象版本）
+ * @param object1 第一个对象
+ * @param object2 第二个对象
+ * @param conditions 条件列表
+ * @return 是否满足所有条件
+ */
 bool ConditionMgr::IsObjectMeetToConditions(WorldObject* object1, WorldObject* object2, ConditionContainer const& conditions) const
 {
     ConditionSourceInfo srcInfo = ConditionSourceInfo(object1, object2);
     return IsObjectMeetToConditions(srcInfo, conditions);
 }
 
+/**
+ * @brief 检查对象是否满足条件列表（完整版本）
+ * @param sourceInfo 条件源信息
+ * @param conditions 条件列表
+ * @return 是否满足所有条件
+ *
+ * 这是条件检查的主入口函数，处理NegativeCondition逻辑。
+ */
 bool ConditionMgr::IsObjectMeetToConditions(ConditionSourceInfo& sourceInfo, ConditionContainer const& conditions) const
 {
     if (conditions.empty())
@@ -1046,13 +1145,33 @@ ConditionMgr* ConditionMgr::instance()
     return &instance;
 }
 
+/**
+ * @brief 从数据库加载所有条件定义
+ * @param isReload 是否为重新加载（热重载）
+ *
+ * 调用时机：
+ * - 服务器启动时
+ * - 执行重载命令时（如.reload conditions）
+ *
+ * 主要流程：
+ * 1. 清理现有的条件数据
+ * 2. 如果是重载，重置相关系统（战利品、对话菜单等）
+ * 3. 从conditions表读取所有数据
+ * 4. 验证并存储每个条件
+ * 5. 处理条件引用和分组
+ *
+ * 性能注意事项：
+ * - 此函数耗时较长，会读取整个conditions表
+ * - 重新加载会影响游戏性能，建议在低峰期执行
+ */
 void ConditionMgr::LoadConditions(bool isReload)
 {
     uint32 oldMSTime = getMSTime();
 
+    // 清理现有的条件数据
     Clean();
 
-    //must clear all custom handled cases (groupped types) before reload
+    // 如果是重新加载，必须清除所有自定义处理的分组类型
     if (isReload)
     {
         TC_LOG_INFO("misc", "Reseting Loot Conditions...");
@@ -1077,6 +1196,7 @@ void ConditionMgr::LoadConditions(bool isReload)
         sSpellMgr->UnloadSpellInfoImplicitTargetConditionLists();
     }
 
+    // 从数据库查询所有条件
     QueryResult result = WorldDatabase.Query("SELECT SourceTypeOrReferenceId, SourceGroup, SourceEntry, SourceId, ElseGroup, ConditionTypeOrReference, ConditionTarget, "
                                              " ConditionValue1, ConditionValue2, ConditionValue3, NegativeCondition, ErrorType, ErrorTextId, ScriptName FROM conditions");
 
@@ -1108,15 +1228,19 @@ void ConditionMgr::LoadConditions(bool isReload)
         cond->ErrorTextId               = fields[12].GetUInt32();
         cond->ScriptId                  = sObjectMgr->GetScriptId(fields[13].GetString());
 
+        // 设置条件类型
         if (iConditionTypeOrReference >= 0)
             cond->ConditionType = ConditionTypes(iConditionTypeOrReference);
 
+        // 设置源类型
         if (iSourceTypeOrReferenceId >= 0)
             cond->SourceType = ConditionSourceType(iSourceTypeOrReferenceId);
 
-        if (iConditionTypeOrReference < 0)//it has a reference
+        // 处理条件引用（负值表示引用其他条件）
+        if (iConditionTypeOrReference < 0)
         {
-            if (iConditionTypeOrReference == iSourceTypeOrReferenceId)//self referencing, skip
+            // 自引用检查
+            if (iConditionTypeOrReference == iSourceTypeOrReferenceId)
             {
                 TC_LOG_ERROR("sql.sql", "Condition reference {} is referencing self, skipped", iSourceTypeOrReferenceId);
                 delete cond;
@@ -1127,7 +1251,8 @@ void ConditionMgr::LoadConditions(bool isReload)
             char const* rowType = "reference template";
             if (iSourceTypeOrReferenceId >= 0)
                 rowType = "reference";
-            //check for useless data
+
+            // 检查无用的数据并记录警告
             if (cond->ConditionTarget)
                 TC_LOG_ERROR("sql.sql", "Condition {} {} has useless data in ConditionTarget ({})!", rowType, iSourceTypeOrReferenceId, cond->ConditionTarget);
             if (cond->ConditionValue1)
@@ -1143,27 +1268,28 @@ void ConditionMgr::LoadConditions(bool isReload)
             if (cond->SourceEntry && iSourceTypeOrReferenceId < 0)
                 TC_LOG_ERROR("sql.sql", "Condition {} {} has useless data in SourceEntry ({})!", rowType, iSourceTypeOrReferenceId, cond->SourceEntry);
         }
-        else if (!isConditionTypeValid(cond))//doesn't have reference, validate ConditionType
+        else if (!isConditionTypeValid(cond)) // 没有引用，验证条件类型
         {
             delete cond;
             continue;
         }
 
-        if (iSourceTypeOrReferenceId < 0)//it is a reference template
+        // 如果是引用模板，存储到引用容器中
+        if (iSourceTypeOrReferenceId < 0)
         {
-            ConditionReferenceStore[std::abs(iSourceTypeOrReferenceId)].push_back(cond);//add to reference storage
+            ConditionReferenceStore[std::abs(iSourceTypeOrReferenceId)].push_back(cond);
             ++count;
             continue;
-        }//end of reference templates
+        }// 引用模板处理结束
 
-        //if not a reference and SourceType is invalid, skip
+        // 如果不是引用且源类型无效，跳过
         if (iConditionTypeOrReference >= 0 && !isSourceTypeValid(cond))
         {
             delete cond;
             continue;
         }
 
-        //Grouping is only allowed for some types (loot templates, gossip menus, gossip items)
+        // 分组只允许某些类型（战利品模板、对话菜单、对话选项）
         if (cond->SourceGroup && !CanHaveSourceGroupSet(cond->SourceType))
         {
             TC_LOG_ERROR("sql.sql", "{} has not allowed value of SourceGroup = {}!", cond->ToString(), cond->SourceGroup);
@@ -1177,22 +1303,25 @@ void ConditionMgr::LoadConditions(bool isReload)
             continue;
         }
 
+        // 错误类型只能用于法术条件源
         if (cond->ErrorType && cond->SourceType != CONDITION_SOURCE_TYPE_SPELL)
         {
             TC_LOG_ERROR("sql.sql", "{} can't have ErrorType ({}), set to 0!", cond->ToString(), cond->ErrorType);
             cond->ErrorType = 0;
         }
 
+        // 错误文本ID需要错误类型
         if (cond->ErrorTextId && !cond->ErrorType)
         {
             TC_LOG_ERROR("sql.sql", "{} has any ErrorType, ErrorTextId ({}) is set, set to 0!", cond->ToString(), cond->ErrorTextId);
             cond->ErrorTextId = 0;
         }
 
+        // 处理分组条件
         if (cond->SourceGroup)
         {
             bool valid = false;
-            // handle grouped conditions
+            // 处理分组条件
             switch (cond->SourceType)
             {
                 case CONDITION_SOURCE_TYPE_CREATURE_LOOT_TEMPLATE:

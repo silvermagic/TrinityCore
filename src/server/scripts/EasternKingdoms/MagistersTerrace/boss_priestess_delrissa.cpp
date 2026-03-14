@@ -15,6 +15,36 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file boss_priestess_delrissa.cpp
+ * @brief 魔导师平台副本第三BOSS - 女祭司德莉萨及其手下AI脚本
+ *
+ * 本模块实现了魔导师平台副本中女祭司德莉萨及其8个随机手下的战斗逻辑。
+ * 德莉萨是一个牧师职业BOSS，每次战斗会随机召唤4个手下。
+ *
+ * 主要功能：
+ * - 女祭司德莉萨的AI逻辑（牧师技能）
+ * - 8个可能的手下的AI实现：
+ *   - Kagani Nightstrike（盗贼）
+ *   - Ellris Duskhallow（术士）
+ *   - Eramas Brightblaze（武僧）
+ *   - Yazzai（法师）
+ *   - Warlord Salaris（战士）
+ *   - Garaxxas（猎人）
+ *   - Apoko（萨满）
+ *   - Zelfan（工程师）
+ * - 手下死亡时的特殊对话
+ * - 玩家死亡时的嘲讽对话
+ *
+ * 战斗特点：
+ * - 每次战斗随机选择4个手下
+ * - 德莉萨会治疗和保护手下
+ * - 手下之间会互相协助
+ * - 德莉萨和手下都可以被单独击杀
+ *
+ * @note 当前完成度65%，缺少英雄难度支持，需要进一步测试
+ */
+
 /* ScriptData
 SDName: Boss_Priestess_Delrissa
 SD%Complete: 65
@@ -29,11 +59,21 @@ EndScriptData */
 #include "ScriptedCreature.h"
 #include "TemporarySummon.h"
 
+/**
+ * @brief 对话结构体
+ *
+ * 用于存储对话ID
+ */
 struct Speech
 {
-    int32 id;
+    int32 id;  ///< 对话ID
 };
 
+/**
+ * @brief 手下死亡时的对话数组
+ *
+ * 德莉萨在每个手下死亡时会喊出不同的对话
+ */
 static Speech LackeyDeath[]=
 {
     {1},
@@ -42,6 +82,11 @@ static Speech LackeyDeath[]=
     {4},
 };
 
+/**
+ * @brief 玩家死亡时的嘲讽对话数组
+ *
+ * 德莉萨在玩家死亡时会随机喊出不同的嘲讽对话
+ */
 static Speech PlayerDeath[]=
 {
     {5},
@@ -51,12 +96,22 @@ static Speech PlayerDeath[]=
     {9},
 };
 
+/**
+ * @brief 德莉萨的喊话枚举
+ *
+ * 定义了德莉萨的对话ID
+ */
 enum Yells
 {
     SAY_AGGRO               = 0,
     SAY_DEATH               = 10,
 };
 
+/**
+ * @brief 法术ID枚举
+ *
+ * 定义了德莉萨及其手下使用的所有法术
+ */
 enum Spells
 {
     SPELL_DISPEL_MAGIC          = 27609,
@@ -77,14 +132,24 @@ enum Spells
     SPELL_EARTHBIND_TOTEM       = 15786
 };
 
+/**
+ * @brief 杂项常量枚举
+ *
+ * 定义最大同时活动的手下数量
+ */
 enum Misc
 {
-    MAX_ACTIVE_LACKEY       = 4
+    MAX_ACTIVE_LACKEY       = 4  ///< 最大同时活动的手下数量
 };
 
-const float fOrientation = 4.98f;
-const float fZLocation = -19.921f;
+const float fOrientation = 4.98f;    ///< 手下朝向角度
+const float fZLocation = -19.921f;   ///< 手下Z轴位置
 
+/**
+ * @brief 手下生成位置数组
+ *
+ * 定义了4个手下的生成坐标（X, Y）
+ */
 float LackeyLocations[4][2]=
 {
     {123.77f, 17.6007f},
@@ -93,30 +158,60 @@ float LackeyLocations[4][2]=
     {129.988f, 17.2355f},
 };
 
+/**
+ * @brief 手下生物ID数组
+ *
+ * 包含所有8个可能的手下的生物ID
+ */
 const uint32 m_auiAddEntries[] =
 {
-    24557,                                                  //Kagani Nightstrike
-    24558,                                                  //Elris Duskhallow
-    24554,                                                  //Eramas Brightblaze
-    24561,                                                  //Yazzaj
-    24559,                                                  //Warlord Salaris
-    24555,                                                  //Garaxxas
-    24553,                                                  //Apoko
-    24556,                                                  //Zelfan
+    24557,                                                  // Kagani Nightstrike（盗贼）
+    24558,                                                  // Elris Duskhallow（术士）
+    24554,                                                  // Eramas Brightblaze（武僧）
+    24561,                                                  // Yazzaj（法师）
+    24559,                                                  // Warlord Salaris（战士）
+    24555,                                                  // Garaxxas（猎人）
+    24553,                                                  // Apoko（萨满）
+    24556,                                                  // Zelfan（工程师）
 };
 
+/**
+ * @brief 女祭司德莉萨BOSS脚本
+ *
+ * 实现了德莉萨的主要AI逻辑，包括：
+ * - 牧师职业技能（治疗、护盾、驱散、暗言术：痛）
+ * - 手下的生成和管理
+ * - 死亡和击杀玩家的对话
+ * - 与手下的协作战斗
+ */
 class boss_priestess_delrissa : public CreatureScript
 {
 public:
     boss_priestess_delrissa() : CreatureScript("boss_priestess_delrissa") { }
 
+    /**
+     * @brief 获取AI实例
+     * @param creature 生物对象指针
+     * @return AI实例指针
+     */
     CreatureAI* GetAI(Creature* creature) const override
     {
         return GetMagistersTerraceAI<boss_priestess_delrissaAI>(creature);
     }
 
+    /**
+     * @brief 女祭司德莉萨AI结构体
+     *
+     * 继承自ScriptedAI，实现德莉萨的所有战斗逻辑
+     */
     struct boss_priestess_delrissaAI : public ScriptedAI
     {
+        /**
+         * @brief 构造函数
+         * @param creature 生物对象指针
+         *
+         * 初始化AI，设置副本脚本，清空手下列表
+         */
         boss_priestess_delrissaAI(Creature* creature) : ScriptedAI(creature)
         {
             Initialize();
@@ -124,32 +219,42 @@ public:
             LackeyEntryList.clear();
         }
 
+        /**
+         * @brief 初始化成员变量
+         *
+         * 重置所有计时器和计数器
+         */
         void Initialize()
         {
             PlayersKilled = 0;
 
-            HealTimer = 15000;
-            RenewTimer = 10000;
-            ShieldTimer = 2000;
-            SWPainTimer = 5000;
-            DispelTimer = 7500;
-            ResetTimer = 5000;
+            HealTimer = 15000;      // 治疗计时器
+            RenewTimer = 10000;     // 恢复计时器
+            ShieldTimer = 2000;     // 护盾计时器
+            SWPainTimer = 5000;     // 暗言术：痛计时器
+            DispelTimer = 7500;     // 驱散计时器
+            ResetTimer = 5000;      // 脱战检查计时器
         }
 
-        InstanceScript* instance;
+        InstanceScript* instance;                     ///< 副本脚本实例指针
 
-        std::vector<uint32> LackeyEntryList;
-        ObjectGuid m_auiLackeyGUID[MAX_ACTIVE_LACKEY];
+        std::vector<uint32> LackeyEntryList;          ///< 手下ID列表
+        ObjectGuid m_auiLackeyGUID[MAX_ACTIVE_LACKEY]; ///< 手下GUID数组
 
-        uint8 PlayersKilled;
+        uint8 PlayersKilled;                          ///< 已击杀玩家数量
 
-        uint32 HealTimer;
-        uint32 RenewTimer;
-        uint32 ShieldTimer;
-        uint32 SWPainTimer;
-        uint32 DispelTimer;
-        uint32 ResetTimer;
+        uint32 HealTimer;                             ///< 快速治疗计时器
+        uint32 RenewTimer;                            ///< 恢复计时器
+        uint32 ShieldTimer;                           ///< 真言术：盾计时器
+        uint32 SWPainTimer;                           ///< 暗言术：痛计时器
+        uint32 DispelTimer;                           ///< 驱散魔法计时器
+        uint32 ResetTimer;                            ///< 脱战检查计时器
 
+        /**
+         * @brief 重置BOSS状态
+         *
+         * 初始化变量并重新生成手下
+         */
         void Reset() override
         {
             Initialize();
@@ -157,12 +262,23 @@ public:
             InitializeLackeys();
         }
 
+        /**
+         * @brief 到达初始位置时调用
+         *
+         * 德莉萨脱战返回初始位置时，设置BOSS状态为失败
+         */
         //this mean she at some point evaded
         void JustReachedHome() override
         {
             instance->SetBossState(DATA_PRIESTESS_DELRISSA, FAIL);
         }
 
+        /**
+         * @brief 进入战斗时调用
+         * @param who 进入战斗的目标
+         *
+         * 喊出战斗对话，让所有未战斗的手下进入战斗，设置BOSS状态为进行中
+         */
         void JustEngagedWith(Unit* who) override
         {
             Talk(SAY_AGGRO);
@@ -175,6 +291,20 @@ public:
             instance->SetBossState(DATA_PRIESTESS_DELRISSA, IN_PROGRESS);
         }
 
+        /**
+         * @brief 初始化手下
+         *
+         * 生成4个随机手下：
+         * - 首次调用时，从8个可能的手手中随机选择4个
+         * - 后续调用时（如脱战后），重新生成之前选择的手下
+         *
+         * 手下生成逻辑：
+         * 1. 首次调用：从m_auiAddEntries中随机选择4个ID
+         * 2. 在指定位置生成手下
+         * 3. 存储手下的GUID用于后续引用
+         *
+         * @note 如果德莉萨已死亡，不执行生成逻辑
+         */
         void InitializeLackeys()
         {
             //can be called if Creature are dead, so avoid
@@ -224,6 +354,12 @@ public:
             }
         }
 
+        /**
+         * @brief 击杀单位时调用
+         * @param victim 被击杀的单位
+         *
+         * 当击杀玩家时，喊出嘲讽对话（最多5种不同的对话）
+         */
         void KilledUnit(Unit* victim) override
         {
             if (victim->GetTypeId() != TYPEID_PLAYER)
@@ -235,6 +371,14 @@ public:
                 ++PlayersKilled;
         }
 
+        /**
+         * @brief 死亡时调用
+         * @param killer 击杀者（未使用）
+         *
+         * 喊出死亡对话，检查所有手下是否都已死亡：
+         * - 如果所有手下都已死亡，设置BOSS状态为完成
+         * - 否则，移除可拾取标志（需要等待手下全部死亡）
+         */
         void JustDied(Unit* /*killer*/) override
         {
             Talk(SAY_DEATH);
@@ -245,6 +389,19 @@ public:
                 me->RemoveDynamicFlag(UNIT_DYNFLAG_LOOTABLE);
         }
 
+        /**
+         * @brief 更新AI逻辑
+         * @param diff 距离上次更新的时间差（毫秒）
+         *
+         * 主要战斗逻辑循环：
+         * - 检查是否有目标
+         * - 定期检查是否脱战（Z轴位置检查）
+         * - 快速治疗：治疗生命值最低的友方单位
+         * - 恢复：随机对自己或手下施放
+         * - 真言术：盾：随机对自己或手下施放
+         * - 驱散魔法：随机对敌方或友方施放
+         * - 暗言术：痛：对随机玩家施放
+         */
         void UpdateAI(uint32 diff) override
         {
             if (!UpdateVictim())
@@ -345,33 +502,60 @@ enum HealingPotion
     SPELL_HEALING_POTION    = 15503
 };
 
+/**
+ * @brief 手下公共AI基类
+ *
+ * 所有8个可能的手下都继承自这个公共基类，实现了：
+ * - 使用治疗药水（生命值低于25%时）
+ * - 定期重置仇恨列表（特殊仇恨机制）
+ * - 死亡时的处理（通知德莉萨，检查是否所有手下都已死亡）
+ * - 与德莉萨和其他手下的协作
+ *
+ * @note 这些手下不遵循标准的仇恨系统，需要定期重置仇恨
+ */
 //all 8 possible lackey use this common
 struct boss_priestess_lackey_commonAI : public ScriptedAI
 {
+    /**
+     * @brief 构造函数
+     * @param creature 生物对象指针
+     *
+     * 初始化AI，设置副本脚本
+     */
     boss_priestess_lackey_commonAI(Creature* creature) : ScriptedAI(creature)
     {
         Initialize();
         instance = creature->GetInstanceScript();
     }
 
+    /**
+     * @brief 初始化成员变量
+     *
+     * 重置药水使用标志和仇恨重置计时器
+     */
     void Initialize()
     {
         UsedPotion = false;
 
-        // These guys does not follow normal threat system rules
-        // For later development, some alternative threat system should be made
-        // We do not know what this system is based upon, but one theory is class (healers=high threat, dps=medium, etc)
-        // We reset their threat frequently as an alternative until such a system exist
+        // 这些手下不遵循标准的仇恨系统规则
+        // 后续开发中，应该制作某种替代仇恨系统
+        // 我们不知道这个系统基于什么，但有一个理论是基于职业（治疗=高仇恨，DPS=中等，等）
+        // 我们定期重置他们的仇恨作为替代方案，直到这样的系统存在
         ResetThreatTimer = urand(5000, 20000);
     }
 
-    InstanceScript* instance;
+    InstanceScript* instance;                       ///< 副本脚本实例指针
 
-    ObjectGuid m_auiLackeyGUIDs[MAX_ACTIVE_LACKEY];
-    uint32 ResetThreatTimer;
+    ObjectGuid m_auiLackeyGUIDs[MAX_ACTIVE_LACKEY]; ///< 所有手下的GUID数组
+    uint32 ResetThreatTimer;                        ///< 仇恨重置计时器
 
-    bool UsedPotion;
+    bool UsedPotion;                                ///< 是否已使用治疗药水
 
+    /**
+     * @brief 重置状态
+     *
+     * 初始化变量，获取其他手下的GUID，如果德莉萨已死亡则复活她
+     */
     void Reset() override
     {
         Initialize();
@@ -385,6 +569,12 @@ struct boss_priestess_lackey_commonAI : public ScriptedAI
         }
     }
 
+    /**
+     * @brief 进入战斗时调用
+     * @param who 进入战斗的目标
+     *
+     * 让所有未战斗的手下和德莉萨进入战斗
+     */
     void JustEngagedWith(Unit* who) override
     {
         if (!who)
@@ -400,6 +590,15 @@ struct boss_priestess_lackey_commonAI : public ScriptedAI
                 AddThreat(who, 0.0f, delrissa);
     }
 
+    /**
+     * @brief 死亡时调用
+     * @param killer 击杀者（未使用）
+     *
+     * 处理手下死亡逻辑：
+     * - 通知德莉萨喊出死亡对话
+     * - 增加德莉萨的手下死亡计数
+     * - 如果所有手下都已死亡且德莉萨已死亡，设置BOSS状态为完成
+     */
     void JustDied(Unit* /*killer*/) override
     {
         Creature* delrissa = instance->GetCreature(DATA_PRIESTESS_DELRISSA);
@@ -428,12 +627,23 @@ struct boss_priestess_lackey_commonAI : public ScriptedAI
         }
     }
 
+    /**
+     * @brief 击杀单位时调用
+     * @param victim 被击杀的单位
+     *
+     * 通知德莉萨喊出嘲讽对话
+     */
     void KilledUnit(Unit* victim) override
     {
         if (Creature* delrissa = instance->GetCreature(DATA_PRIESTESS_DELRISSA))
             delrissa->AI()->KilledUnit(victim);
     }
 
+    /**
+     * @brief 获取所有手下的GUID
+     *
+     * 从德莉萨的AI中获取所有手下的GUID，用于协作战斗
+     */
     void AcquireGUIDs()
     {
         if (Creature* delrissa = instance->GetCreature(DATA_PRIESTESS_DELRISSA))
@@ -443,6 +653,14 @@ struct boss_priestess_lackey_commonAI : public ScriptedAI
         }
     }
 
+    /**
+     * @brief 更新AI逻辑
+     * @param diff 距离上次更新的时间差（毫秒）
+     *
+     * 处理手下公共逻辑：
+     * - 生命值低于25%时使用治疗药水（只能使用一次）
+     * - 定期重置仇恨列表（特殊仇恨机制）
+     */
     void UpdateAI(uint32 diff) override
     {
         if (!UsedPotion && HealthBelowPct(25))
@@ -469,6 +687,17 @@ enum RogueSpells
     SPELL_EVISCERATE        = 27611
 };
 
+/**
+ * @brief Kagani Nightstrike（盗贼）BOSS脚本
+ *
+ * 盗贼职业手下，使用以下技能：
+ * - 消失：进入潜行状态并重置仇恨
+ * - 背刺：在潜行状态下对目标造成高额伤害
+ * - 肾击：在潜行状态下眩晕目标
+ * - 凿击：眩晕当前目标
+ * - 脚踢：打断施法
+ * - 剔骨：造成伤害
+ */
 class boss_kagani_nightstrike : public CreatureScript
 {
 public:
@@ -481,7 +710,7 @@ public:
 
     struct boss_kagani_nightstrikeAI : public boss_priestess_lackey_commonAI
     {
-        //Rogue
+        // Rogue（盗贼）
         boss_kagani_nightstrikeAI(Creature* creature) : boss_priestess_lackey_commonAI(creature)
         {
             Initialize();
@@ -581,6 +810,17 @@ enum WarlockSpells
     SPELL_SUMMON_IMP            = 44163
 };
 
+/**
+ * @brief Ellris Duskhallow（术士）BOSS脚本
+ *
+ * 术士职业手下，使用以下技能：
+ * - 召唤小鬼：战斗开始时召唤小鬼宠物
+ * - 献祭：对目标造成持续火焰伤害
+ * - 暗影箭：对目标造成暗影伤害
+ * - 腐蚀之种：对目标及其周围敌人造成暗影伤害
+ * - 痛苦诅咒：对目标造成持续暗影伤害
+ * - 恐惧：使目标恐惧逃跑
+ */
 class boss_ellris_duskhallow : public CreatureScript
 {
 public:
@@ -680,6 +920,13 @@ enum KickDown
     SPELL_SNAP_KICK     = 46182
 };
 
+/**
+ * @brief Eramas Brightblaze（武僧）BOSS脚本
+ *
+ * 武僧职业手下，使用以下技能：
+ * - 击倒：击倒目标并造成伤害
+ * - 快速踢击：对目标造成物理伤害
+ */
 class boss_eramas_brightblaze : public CreatureScript
 {
 public:
@@ -749,6 +996,18 @@ enum MageSpells
     SPELL_BLINK             = 14514
 };
 
+/**
+ * @brief Yazzai（法师）BOSS脚本
+ *
+ * 法师职业手下，使用以下技能：
+ * - 变形术：将随机目标变形为绵羊
+ * - 寒冰屏障：生命值低于35%时进入无敌状态
+ * - 暴风雪：对目标区域造成持续冰霜伤害
+ * - 冰枪术：对目标造成冰霜伤害
+ * - 冰锥术：对前方锥形区域造成冰霜伤害
+ * - 寒冰箭：对目标造成冰霜伤害并减速
+ * - 闪烁：当有敌人在近战范围时瞬移逃脱
+ */
 class boss_yazzai : public CreatureScript
 {
 public:
@@ -882,6 +1141,18 @@ enum WarriorSpells
     SPELL_MORTAL_STRIKE         = 44268
 };
 
+/**
+ * @brief Warlord Salaris（战士）BOSS脚本
+ *
+ * 战士职业手下，使用以下技能：
+ * - 战斗怒吼：进入战斗时提升攻击强度
+ * - 拦截眩晕：当无目标在近战范围时冲锋并眩晕目标
+ * - 缴械：缴械当前目标
+ * - 刺耳怒吼：使周围敌人减速
+ * - 恐惧怒吼：使周围敌人恐惧
+ * - 断筋：使当前目标减速
+ * - 致死打击：对目标造成高额伤害并降低治疗效果
+ */
 class boss_warlord_salaris : public CreatureScript
 {
 public:
@@ -1005,6 +1276,18 @@ enum HunterSpells
     NPC_SLIVER                  = 24552
 };
 
+/**
+ * @brief Garaxxas（猎人）BOSS脚本
+ *
+ * 猎人职业手下，使用以下技能：
+ * - 召唤宠物Sliver：战斗开始时召唤宠物
+ * - 瞄准射击：对目标造成高额远程伤害
+ * - 射击：对目标造成远程伤害
+ * - 震荡射击：使目标减速
+ * - 多重射击：对目标及其周围敌人造成伤害
+ * - 摔绊：使近战范围内的目标减速
+ * - 冰冻陷阱：在近战范围内放置冰冻陷阱，使目标冻结
+ */
 class boss_garaxxas : public CreatureScript
 {
 public:
@@ -1121,6 +1404,16 @@ public:
     };
 };
 
+/**
+ * @brief Apoko（萨满）BOSS脚本
+ *
+ * 萨满职业手下，使用以下技能：
+ * - 风怒图腾、火焰新星图腾、地缚图腾：随机施放图腾
+ * - 战争践踏：击晕周围敌人
+ * - 净化：驱散目标的增益效果
+ * - 次级治疗波：治疗自己
+ * - 冰霜震击：对目标造成冰霜伤害并减速
+ */
 class boss_apoko : public CreatureScript
 {
 public:
@@ -1218,6 +1511,16 @@ enum EngineerSpells
     SPELL_SHEEP_EXPLOSION       = 44279
 };
 
+/**
+ * @brief Zelfan（工程师）BOSS脚本
+ *
+ * 工程师职业手下，使用以下技能：
+ * - 地精龙枪：对前方锥形区域造成火焰伤害
+ * - 火箭发射：对目标造成火焰伤害
+ * - 邪铁炸弹：对目标及其周围敌人造成火焰伤害
+ * - 重组剂：解除队友的变形效果
+ * - 高爆绵羊：召唤一只爆炸绵羊
+ */
 class boss_zelfan : public CreatureScript
 {
 public:
@@ -1323,6 +1626,20 @@ public:
 };
 */
 
+/**
+ * @brief 注册女祭司德莉萨及相关脚本
+ *
+ * 注册以下脚本：
+ * - boss_priestess_delrissa：女祭司德莉萨BOSS AI
+ * - boss_kagani_nightstrike：Kagani Nightstrike（盗贼）AI
+ * - boss_ellris_duskhallow：Ellris Duskhallow（术士）AI
+ * - boss_eramas_brightblaze：Eramas Brightblaze（武僧）AI
+ * - boss_yazzai：Yazzai（法师）AI
+ * - boss_warlord_salaris：Warlord Salaris（战士）AI
+ * - boss_garaxxas：Garaxxas（猎人）AI
+ * - boss_apoko：Apoko（萨满）AI
+ * - boss_zelfan：Zelfan（工程师）AI
+ */
 void AddSC_boss_priestess_delrissa()
 {
     new boss_priestess_delrissa();

@@ -15,9 +15,60 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-/// @todo Implement proper support for vehicle+player teleportation
-/// @todo Use spell victory/defeat in wg instead of RewardMarkOfHonor() && RewardHonor
-/// @todo Add proper implement of achievement
+/**
+ * @file BattlefieldWG.cpp
+ * @brief 冬拥湖（Wintergrasp）战场实现模块
+ *
+ * 本文件实现了冬拥湖（Wintergrasp）战场的核心逻辑，这是《魔兽世界：巫妖王之怒》中
+ * 最重要的世界PvP战场之一。
+ *
+ * 主要功能包括：
+ * 1. 战场初始化和管理
+ *    - 战场定时器管理（战斗时间、非战斗时间）
+ *    - 玩家邀请和分组
+ *    - 世界状态同步
+ *
+ * 2. 建筑物系统
+ *    - 城墙、塔楼、城门的生成和管理
+ *    - 建筑物损坏和修复机制
+ *    - 防御炮塔的部署
+ *
+ * 3. 资源点（工坊）系统
+ *    - 四个中立工坊的争夺
+ *    - 两个要塞工坊的管理
+ *    - 车辆数量上限计算
+ *
+ * 4. 墓地系统
+ *    - 七个墓地的控制权争夺
+ *    - 灵魂治疗者的部署
+ *    - 复活点管理
+ *
+ * 5. 泰坦遗迹机制
+ *    - 泰坦遗迹的生成和激活
+ *    - 最后城门破坏后的互动
+ *    - 战斗胜利判定
+ *
+ * 6. 玩家晋升系统
+ *    - 列兵->下士->中尉的军衔晋升
+ *    - 击杀奖励和荣誉值
+ *
+ * 7. 坚韧增益（Tenacity）
+ *    - 根据双方人数差异自动调整
+ *    - 平衡人数劣势方战斗力
+ *
+ * 8. 成就和任务系统
+ *    - 胜利/失败奖励
+ *    - 特殊成就判定
+ *
+ * 技术要点：
+ * - 使用世界状态（WorldState）同步客户端显示
+ * - 通过GameObject和Creature实现场景元素
+ * - 支持服务器重启后的状态恢复
+ *
+ * @todo 实现载具+玩家的传送支持
+ * @todo 使用胜利/失败法术替代RewardMarkOfHonor()和RewardHonor
+ * @todo 完善成就系统的实现
+ */
 
 #include "BattlefieldWG.h"
 #include "AchievementMgr.h"
@@ -41,53 +92,106 @@
 #include "WorldSession.h"
 #include "WorldStatePackets.h"
 
+/**
+ * @struct BfWGCoordGY
+ * @brief 冬拥湖墓地坐标数据结构
+ *
+ * 用于存储墓地的坐标、ID和初始控制方等静态信息。
+ */
 struct BfWGCoordGY
 {
-    Position Pos;
-    uint32 GraveyardID;
-    uint32 TextID;          // for gossip menu
-    TeamId StartControl;
+    Position Pos;           ///< 墓地坐标位置（包含X、Y、Z、朝向）
+    uint32 GraveyardID;     ///< 墓地ID（用于数据库查询和逻辑判断）
+    uint32 TextID;          ///< 闲谈菜单文本ID（用于与灵魂治疗者交互时显示）
+    TeamId StartControl;    ///< 初始控制方（在战斗开始前的控制阵营）
 };
 
-// 7 in sql, 7 in header
+/**
+ * @brief 冬拥湖墓地配置数据
+ *
+ * 定义了冬拥湖中的7个墓地：
+ * - 东北工坊墓地（NE）
+ * - 西北工坊墓地（NW）
+ * - 东南工坊墓地（SE）
+ * - 西南工坊墓地（SW）
+ * - 要塞墓地（Keep）
+ * - 部落基地墓地（Horde）
+ * - 联盟基地墓地（Alliance）
+ *
+ * 注意：数据库中有7个，头文件中定义了7个
+ */
 BfWGCoordGY const WGGraveyard[BATTLEFIELD_WG_GRAVEYARD_MAX] =
 {
-    { { 5104.750f, 2300.940f, 368.579f, 0.733038f }, 1329, BATTLEFIELD_WG_GOSSIPTEXT_GY_NE,       TEAM_NEUTRAL  },
-    { { 5099.120f, 3466.036f, 368.484f, 5.317802f }, 1330, BATTLEFIELD_WG_GOSSIPTEXT_GY_NW,       TEAM_NEUTRAL  },
-    { { 4314.648f, 2408.522f, 392.642f, 6.268125f }, 1333, BATTLEFIELD_WG_GOSSIPTEXT_GY_SE,       TEAM_NEUTRAL  },
-    { { 4331.716f, 3235.695f, 390.251f, 0.008500f }, 1334, BATTLEFIELD_WG_GOSSIPTEXT_GY_SW,       TEAM_NEUTRAL  },
-    { { 5537.986f, 2897.493f, 517.057f, 4.819249f }, 1285, BATTLEFIELD_WG_GOSSIPTEXT_GY_KEEP,     TEAM_NEUTRAL  },
-    { { 5032.454f, 3711.382f, 372.468f, 3.971623f }, 1331, BATTLEFIELD_WG_GOSSIPTEXT_GY_HORDE,    TEAM_HORDE    },
-    { { 5140.790f, 2179.120f, 390.950f, 1.972220f }, 1332, BATTLEFIELD_WG_GOSSIPTEXT_GY_ALLIANCE, TEAM_ALLIANCE },
+    { { 5104.750f, 2300.940f, 368.579f, 0.733038f }, 1329, BATTLEFIELD_WG_GOSSIPTEXT_GY_NE,       TEAM_NEUTRAL  },  // 东北工坊
+    { { 5099.120f, 3466.036f, 368.484f, 5.317802f }, 1330, BATTLEFIELD_WG_GOSSIPTEXT_GY_NW,       TEAM_NEUTRAL  },  // 西北工坊
+    { { 4314.648f, 2408.522f, 392.642f, 6.268125f }, 1333, BATTLEFIELD_WG_GOSSIPTEXT_GY_SE,       TEAM_NEUTRAL  },  // 东南工坊
+    { { 4331.716f, 3235.695f, 390.251f, 0.008500f }, 1334, BATTLEFIELD_WG_GOSSIPTEXT_GY_SW,       TEAM_NEUTRAL  },  // 西南工坊
+    { { 5537.986f, 2897.493f, 517.057f, 4.819249f }, 1285, BATTLEFIELD_WG_GOSSIPTEXT_GY_KEEP,     TEAM_NEUTRAL  },  // 要塞
+    { { 5032.454f, 3711.382f, 372.468f, 3.971623f }, 1331, BATTLEFIELD_WG_GOSSIPTEXT_GY_HORDE,    TEAM_HORDE    },  // 部落基地
+    { { 5140.790f, 2179.120f, 390.950f, 1.972220f }, 1332, BATTLEFIELD_WG_GOSSIPTEXT_GY_ALLIANCE, TEAM_ALLIANCE },  // 联盟基地
 };
 
+/// 时钟世界状态ID数组（用于显示战斗倒计时）
 uint32 const ClockWorldState[]         = { 3781, 4354 };
+
+/// 冬拥湖阵营ID数组（联盟、部落、友善）
 uint32 const WintergraspFaction[]      = { FACTION_ALLIANCE_GENERIC_WG, FACTION_HORDE_GENERIC_WG, FACTION_FRIENDLY };
 
+/// 冬拥湖观察者（Stalker）位置（用于发送消息）
 Position const WintergraspStalkerPos   = { 4948.985f, 2937.789f, 550.5172f,  1.815142f };
 
+/// 泰坦遗迹位置
 Position const WintergraspRelicPos     = { 5440.379f, 2840.493f, 430.2816f, -1.832595f };
+
+/// 泰坦遗迹旋转四元数
 QuaternionData const WintergraspRelicRot    = { 0.f, 0.f, -0.7933531f, 0.6087617f };
 
+/// 最大建筑物数量（城墙、塔楼、城门等）
 uint8 const WG_MAX_OBJ              = 32;
+
+/// 最大防御炮塔数量
 uint8 const WG_MAX_TURRET           = 15;
+
+/// 最大传送门数量
 uint8 const WG_MAX_TELEPORTER       = 12;
+
+/// 最大工坊数量
 uint8 const WG_MAX_WORKSHOP         = 6;
+
+/// 最大塔楼数量（4个要塞塔+3个南方塔）
 uint8 const WG_MAX_TOWER            = 7;
 
 // *****************************************************
-// ************ Destructible (Wall, Tower..) ***********
+// ************ 可破坏建筑（城墙、塔楼等） ***********
 // *****************************************************
 
+/**
+ * @struct WintergraspBuildingSpawnData
+ * @brief 冬拥湖建筑物生成数据结构
+ *
+ * 存储可破坏建筑物（城墙、塔楼、城门等）的生成信息。
+ */
 struct WintergraspBuildingSpawnData
 {
-    uint32 entry;
-    uint32 WorldState;
-    Position pos;
-    QuaternionData rot;
-    WintergraspGameObjectBuildingType type;
+    uint32 entry;                              ///< GameObject模板ID
+    uint32 WorldState;                         ///< 对应的世界状态ID
+    Position pos;                              ///< 生成位置坐标
+    QuaternionData rot;                        ///< 旋转四元数
+    WintergraspGameObjectBuildingType type;    ///< 建筑物类型（城墙、塔楼、城门等）
 };
 
+/**
+ * @brief 冬拥湖建筑物配置数据
+ *
+ * 包含所有可破坏建筑物的生成信息：
+ * - 城墙（Wall）：要塞的外围防御墙
+ * - 要塞塔楼（Keep Tower）：要塞四角的防御塔
+ * - 南方塔楼（Tower）：三座攻击方塔楼
+ * - 要塞城门（Door）：主城门
+ * - 宝库大门（Door Last）：最后通往泰坦遗迹的门
+ *
+ * 注意：这些建筑物不在数据库中生成，由脚本动态创建
+ */
 WintergraspBuildingSpawnData const WGGameObjectBuilding[WG_MAX_OBJ] =
 {
     // Wall (Not spawned in db)
@@ -136,17 +240,30 @@ WintergraspBuildingSpawnData const WGGameObjectBuilding[WG_MAX_OBJ] =
     { GO_WINTERGRASP_VAULT_GATE, 3773, { 5397.108f, 2841.54f, 425.9014f, 3.141593f }, { 0.f, 0.f, -1.f, 0.f }, BATTLEFIELD_WG_OBJECTTYPE_DOOR_LAST },
 };
 
+/**
+ * @struct StaticWintergraspTowerInfo
+ * @brief 冬拥湖塔楼静态信息结构
+ *
+ * 存储塔楼的标识符和对应的消息文本ID。
+ */
 struct StaticWintergraspTowerInfo
 {
-    uint8 TowerId;
+    uint8 TowerId;    ///< 塔楼ID
 
     struct
     {
-        uint8 Damaged;
-        uint8 Destroyed;
+        uint8 Damaged;    ///< 塔楼受损时显示的消息ID
+        uint8 Destroyed;  ///< 塔楼被摧毁时显示的消息ID
     } TextIds;
 };
 
+/**
+ * @brief 塔楼数据配置
+ *
+ * 定义了所有7座塔楼的文本信息：
+ * - 4座要塞塔楼（西北、西南、东南、东北）
+ * - 3座南方塔楼（西、南、东）
+ */
 StaticWintergraspTowerInfo const TowerData[WG_MAX_TOWER] =
 {
     { BATTLEFIELD_WG_TOWER_FORTRESS_NW,   { BATTLEFIELD_WG_TEXT_NW_KEEPTOWER_DAMAGE,   BATTLEFIELD_WG_TEXT_NW_KEEPTOWER_DESTROY   } },
@@ -158,6 +275,12 @@ StaticWintergraspTowerInfo const TowerData[WG_MAX_TOWER] =
     { BATTLEFIELD_WG_TOWER_FLAMEWATCH,    { BATTLEFIELD_WG_TEXT_EASTERN_TOWER_DAMAGE,  BATTLEFIELD_WG_TEXT_EASTERN_TOWER_DESTROY  } }
 };
 
+/**
+ * @brief 防御炮塔位置数据
+ *
+ * 定义了要塞周围的15个防御炮塔的位置。
+ * 这些炮塔由防守方控制，在战斗开始时激活。
+ */
 Position const WGTurret[WG_MAX_TURRET] =
 {
     { 5391.19f, 3060.8f,  419.616f, 1.69557f },
@@ -177,21 +300,44 @@ Position const WGTurret[WG_MAX_TURRET] =
     { 5147.98f, 2861.93f, 421.63f,  3.18792f },
 };
 
+/**
+ * @struct WintergraspObjectPositionData
+ * @brief 冬拥湖对象位置数据结构
+ *
+ * 存储生物的位置和阵营相关的模板ID。
+ */
 struct WintergraspObjectPositionData
 {
-    Position Pos;
-    uint32 HordeEntry;
-    uint32 AllianceEntry;
+    Position Pos;            ///< 对象位置
+    uint32 HordeEntry;       ///< 部落版本的模板ID
+    uint32 AllianceEntry;    ///< 联盟版本的模板ID
 };
 
+/**
+ * @struct WintergraspGameObjectData
+ * @brief 冬拥湖游戏对象数据结构
+ *
+ * 存储游戏对象的位置、旋转和阵营相关的模板ID。
+ */
 struct WintergraspGameObjectData
 {
-    Position Pos;
-    QuaternionData Rot;
-    uint32 HordeEntry;
-    uint32 AllianceEntry;
+    Position Pos;            ///< 对象位置
+    QuaternionData Rot;      ///< 旋转四元数
+    uint32 HordeEntry;       ///< 部落版本的模板ID
+    uint32 AllianceEntry;    ///< 联盟版本的模板ID
 };
 
+/**
+ * @brief 防守方传送门数据
+ *
+ * 定义了要塞内的传送门位置，包括：
+ * - 9个玩家传送门（用于在要塞内快速移动）
+ * - 1个返回传送门（从要塞内部返回）
+ * - 2个载具传送门（用于传送攻城器械）
+ *
+ * 每个位置有两个版本的GameObject：部落版和联盟版。
+ * 只有当前防守方对应的传送门会被激活。
+ */
 WintergraspGameObjectData const WGPortalDefenderData[WG_MAX_TELEPORTER] =
 {
     // Player teleporter
@@ -212,21 +358,42 @@ WintergraspGameObjectData const WGPortalDefenderData[WG_MAX_TELEPORTER] =
 };
 
 // *********************************************************
-// **********Tower Element(GameObject, Creature)************
+// **********塔楼元素（游戏对象、生物）************
 // *********************************************************
 
+/**
+ * @struct WintergraspTowerData
+ * @brief 冬拥湖塔楼数据结构
+ *
+ * 存储塔楼相关的游戏对象和生物信息。
+ */
 struct WintergraspTowerData
 {
-    uint32 towerEntry;                  // Gameobject id of tower
-    std::vector<WintergraspGameObjectData> GameObject;   // Gameobject position and entry (Horde/Alliance)
-
-    // Creature: Turrets and Guard /// @todo: Killed on Tower destruction ? Tower damage ? Requires confirming
-    std::vector<WintergraspObjectPositionData> CreatureBottom;
+    uint32 towerEntry;                                       ///< 塔楼GameObject ID
+    std::vector<WintergraspGameObjectData> GameObject;       ///< 塔楼相关的GameObject（旗帜等）
+    std::vector<WintergraspObjectPositionData> CreatureBottom;  ///< 塔楼底部的生物（守卫等）
 };
 
+/// 最大攻击方塔楼数量（南方的3座塔）
 uint8 const WG_MAX_ATTACKTOWERS = 3;
-// 192414 : 0 in sql, 1 in header
-// 192278 : 0 in sql, 3 in header
+
+/**
+ * @brief 攻击方塔楼配置数据
+ *
+ * 定义了3座南方塔楼的详细信息：
+ * - 西塔（Shadowsight Tower）
+ * - 南塔（Winter's Edge Tower）
+ * - 东塔（Flamewatch Tower）
+ *
+ * 每座塔楼包括：
+ * - 塔楼本身的GameObject
+ * - 周围的旗帜等装饰物
+ * - 底部的守卫NPC
+ *
+ * 注意：
+ * - 192414：数据库中为0，头文件中为1
+ * - 192278：数据库中为0，头文件中为3
+ */
 WintergraspTowerData const AttackTowers[WG_MAX_ATTACKTOWERS] =
 {
     // West tower
@@ -282,15 +449,32 @@ WintergraspTowerData const AttackTowers[WG_MAX_ATTACKTOWERS] =
     }
 };
 
+/**
+ * @struct WintergraspTowerCannonData
+ * @brief 冬拥湖塔楼炮塔数据结构
+ *
+ * 存储塔楼上的炮塔位置信息。
+ */
 struct WintergraspTowerCannonData
 {
-    uint32 towerEntry;
-    std::vector<Position> TowerCannonBottom;
-    std::vector<Position> TurretTop;
+    uint32 towerEntry;                        ///< 塔楼GameObject ID
+    std::vector<Position> TowerCannonBottom;  ///< 塔楼底部的炮塔位置
+    std::vector<Position> TurretTop;          ///< 塔楼顶部的炮塔位置
 };
 
+/// 最大塔楼炮塔数量（7座塔楼）
 uint8 const WG_MAX_TOWER_CANNON = 7;
 
+/**
+ * @brief 塔楼炮塔配置数据
+ *
+ * 定义了所有7座塔楼上的炮塔位置：
+ * - 前4个是要塞的防御塔（NW、SW、SE、NE）
+ * - 后3个是南方攻击塔（W、S、E）
+ *
+ * 要塞塔的炮塔由防守方控制，
+ * 南方塔的炮塔由攻击方控制。
+ */
 WintergraspTowerCannonData const TowerCannon[WG_MAX_TOWER_CANNON] =
 {
     {
@@ -370,23 +554,45 @@ WintergraspTowerCannonData const TowerCannon[WG_MAX_TOWER_CANNON] =
 };
 
 // *********************************************************
-// *****************WorkShop Data & Element*****************
+// *****************工坊数据和元素*****************
 // *********************************************************
 
+/**
+ * @struct StaticWintergraspWorkshopInfo
+ * @brief 冬拥湖工坊静态信息结构
+ *
+ * 存储工坊的标识符、世界状态ID和相关消息文本。
+ */
 struct StaticWintergraspWorkshopInfo
 {
-    uint8 WorkshopId;
-    uint32 WorldStateId;
+    uint8 WorkshopId;       ///< 工坊ID
+    uint32 WorldStateId;    ///< 世界状态ID
 
     struct
     {
-        uint8 AllianceCapture;
-        uint8 AllianceAttack;
-        uint8 HordeCapture;
-        uint8 HordeAttack;
+        uint8 AllianceCapture;   ///< 联盟占领时的消息ID
+        uint8 AllianceAttack;    ///< 联盟进攻时的消息ID
+        uint8 HordeCapture;      ///< 部落占领时的消息ID
+        uint8 HordeAttack;       ///< 部落进攻时的消息ID
     } TextIds;
 };
 
+/**
+ * @brief 工坊配置数据
+ *
+ * 定义了冬拥湖中的6个工坊：
+ * - 东北工坊（NE）：Sunken Ring
+ * - 西北工坊（NW）：Broken Temple
+ * - 东南工坊（SE）：Eastspark
+ * - 西南工坊（SW）：Westspark
+ * - 要塞西工坊（Keep West）：要塞内部
+ * - 要塞东工坊（Keep East）：要塞内部
+ *
+ * 注意：
+ * - 前4个工坊可以被双方争夺
+ * - 后2个工坊属于要塞，不能被占领
+ * - 每个工坊可为控制方提供4个载具名额
+ */
 StaticWintergraspWorkshopInfo const WorkshopData[WG_MAX_WORKSHOP] =
 {
     { BATTLEFIELD_WG_WORKSHOP_NE, WS_BATTLEFIELD_WG_WORKSHOP_NE, { BATTLEFIELD_WG_TEXT_SUNKEN_RING_CAPTURE_ALLIANCE,   BATTLEFIELD_WG_TEXT_SUNKEN_RING_ATTACK_ALLIANCE,   BATTLEFIELD_WG_TEXT_SUNKEN_RING_CAPTURE_HORDE,   BATTLEFIELD_WG_TEXT_SUNKEN_RING_ATTACK_HORDE   } },
@@ -398,81 +604,140 @@ StaticWintergraspWorkshopInfo const WorkshopData[WG_MAX_WORKSHOP] =
     { BATTLEFIELD_WG_WORKSHOP_KEEP_EAST, WS_BATTLEFIELD_WG_WORKSHOP_K_E, { 0, 0, 0, 0 } }
 };
 
+/**
+ * @brief BattlefieldWG析构函数
+ *
+ * 清理战场资源，释放动态分配的内存。
+ * 主要清理：
+ * - 工坊对象
+ * - 建筑物对象
+ *
+ * 性能注意事项：
+ * - 仅在战场销毁时调用
+ * - 需要遍历所有动态分配的对象
+ */
 BattlefieldWG::~BattlefieldWG()
 {
+    // 释放所有工坊对象
     for (WintergraspWorkshop* workshop : Workshops)
         delete workshop;
 
+    // 释放所有建筑物对象
     for (BfWGGameObjectBuilding* building : BuildingsInZone)
         delete building;
 }
 
+/**
+ * @brief 初始化冬拥湖战场
+ *
+ * 设置战场的基本参数、生成所有游戏对象和生物、
+ * 初始化墓地和工坊系统。
+ *
+ * @return true 初始化成功
+ * @return false 初始化失败
+ *
+ * 初始化流程：
+ * 1. 设置战场基本属性（类型ID、区域ID、地图ID等）
+ * 2. 初始化观察者（用于发送消息）
+ * 3. 从配置加载参数（最大玩家数、战斗时间等）
+ * 4. 从世界状态恢复之前的状态（支持服务器重启）
+ * 5. 初始化墓地系统（7个墓地）
+ * 6. 初始化工坊系统（6个工坊）
+ * 7. 生成防御炮塔（15个）
+ * 8. 生成所有建筑物（32个）
+ * 9. 生成传送门（12个）
+ * 10. 更新载具计数
+ *
+ * 调用时机：
+ * - 战场管理器创建冬拥湖战场实例时调用
+ * - 仅在服务器启动时调用一次
+ *
+ * 性能注意事项：
+ * - 这是重量级操作，涉及大量对象生成
+ * - 服务器启动时执行，不影响运行时性能
+ */
 bool BattlefieldWG::SetupBattlefield()
 {
-    m_TypeId = BATTLEFIELD_WG;                              // See enum BattlefieldTypes
+    // 设置战场类型ID
+    m_TypeId = BATTLEFIELD_WG;                              // 参见BattlefieldTypes枚举
     m_BattleId = BATTLEFIELD_BATTLEID_WG;
     m_ZoneId = AREA_WINTERGRASP;
     m_MapId = BATTLEFIELD_WG_MAPID;
     m_Map = sMapMgr->FindMap(m_MapId, 0);
 
+    // 初始化观察者NPC（用于向玩家发送消息）
     InitStalker(BATTLEFIELD_WG_NPC_STALKER, WintergraspStalkerPos);
 
-    m_MaxPlayer = sWorld->getIntConfig(CONFIG_WINTERGRASP_PLR_MAX);
-    m_IsEnabled = sWorld->getBoolConfig(CONFIG_WINTERGRASP_ENABLE);
-    m_MinPlayer = sWorld->getIntConfig(CONFIG_WINTERGRASP_PLR_MIN);
-    m_MinLevel = sWorld->getIntConfig(CONFIG_WINTERGRASP_PLR_MIN_LVL);
-    m_BattleTime = sWorld->getIntConfig(CONFIG_WINTERGRASP_BATTLETIME) * MINUTE * IN_MILLISECONDS;
-    m_NoWarBattleTime = sWorld->getIntConfig(CONFIG_WINTERGRASP_NOBATTLETIME) * MINUTE * IN_MILLISECONDS;
-    m_RestartAfterCrash = sWorld->getIntConfig(CONFIG_WINTERGRASP_RESTART_AFTER_CRASH) * MINUTE * IN_MILLISECONDS;
+    // 从世界配置加载战场参数
+    m_MaxPlayer = sWorld->getIntConfig(CONFIG_WINTERGRASP_PLR_MAX);              // 最大玩家数
+    m_IsEnabled = sWorld->getBoolConfig(CONFIG_WINTERGRASP_ENABLE);              // 是否启用
+    m_MinPlayer = sWorld->getIntConfig(CONFIG_WINTERGRASP_PLR_MIN);              // 最小玩家数
+    m_MinLevel = sWorld->getIntConfig(CONFIG_WINTERGRASP_PLR_MIN_LVL);           // 最低等级
+    m_BattleTime = sWorld->getIntConfig(CONFIG_WINTERGRASP_BATTLETIME) * MINUTE * IN_MILLISECONDS;              // 战斗时长
+    m_NoWarBattleTime = sWorld->getIntConfig(CONFIG_WINTERGRASP_NOBATTLETIME) * MINUTE * IN_MILLISECONDS;       // 非战斗时长
+    m_RestartAfterCrash = sWorld->getIntConfig(CONFIG_WINTERGRASP_RESTART_AFTER_CRASH) * MINUTE * IN_MILLISECONDS;  // 崩溃后重启时间
 
-    m_TimeForAcceptInvite = 20;
-    m_StartGroupingTimer = 15 * MINUTE * IN_MILLISECONDS;
+    // 初始化邀请和分组参数
+    m_TimeForAcceptInvite = 20;                                               // 接受邀请的超时时间（秒）
+    m_StartGroupingTimer = 15 * MINUTE * IN_MILLISECONDS;                    // 开始分组前15分钟
     m_StartGrouping = false;
 
-    m_tenacityTeam = TEAM_NEUTRAL;
-    m_tenacityStack = 0;
+    // 初始化坚韧增益状态
+    m_tenacityTeam = TEAM_NEUTRAL;                                            // 当前坚韧增益所属阵营
+    m_tenacityStack = 0;                                                      // 坚韧增益层数
 
+    // 设置被踢出玩家的传送位置（要塞上空）
     KickPosition.Relocate(5728.117f, 2714.346f, 697.733f, 0);
     KickPosition.m_mapId = m_MapId;
 
+    // 注册冬拥湖区域
     RegisterZone(m_ZoneId);
 
+    // 初始化数据数组
     m_Data32.resize(BATTLEFIELD_WG_DATA_MAX);
 
+    // 设置保存计时器（60秒保存一次世界状态）
     m_saveTimer = 60000;
 
-    // Init Graveyards
+    // 初始化墓地数量
     SetGraveyardNumber(BATTLEFIELD_WG_GRAVEYARD_MAX);
 
-    // Load from db
+    // 从世界状态加载数据（支持服务器重启后恢复）
+    // 如果世界状态为空，说明是第一次运行，进行初始化
     if ((sWorld->getWorldState(WS_BATTLEFIELD_WG_ACTIVE) == 0) && (sWorld->getWorldState(WS_BATTLEFIELD_WG_DEFENDER) == 0)
             && (sWorld->getWorldState(ClockWorldState[0]) == 0))
     {
+        // 首次运行，随机选择防守方
         sWorld->setWorldState(WS_BATTLEFIELD_WG_ACTIVE, uint64(false));
         sWorld->setWorldState(WS_BATTLEFIELD_WG_DEFENDER, uint64(urand(0, 1)));
         sWorld->setWorldState(ClockWorldState[0], uint64(m_NoWarBattleTime));
     }
 
+    // 加载战场状态
     m_isActive = sWorld->getWorldState(WS_BATTLEFIELD_WG_ACTIVE) != 0;
     m_DefenderTeam = TeamId(sWorld->getWorldState(WS_BATTLEFIELD_WG_DEFENDER));
 
+    // 加载计时器
     m_Timer = sWorld->getWorldState(ClockWorldState[0]);
     if (m_isActive)
     {
+        // 服务器崩溃后重启，设置为崩溃恢复时间
         m_isActive = false;
         m_Timer = m_RestartAfterCrash;
     }
 
+    // 加载历史战绩数据
     SetData(BATTLEFIELD_WG_DATA_WON_A, uint32(sWorld->getWorldState(WS_BATTLEFIELD_WG_ATTACKED_A)));
     SetData(BATTLEFIELD_WG_DATA_DEF_A, uint32(sWorld->getWorldState(WS_BATTLEFIELD_WG_DEFENDED_A)));
     SetData(BATTLEFIELD_WG_DATA_WON_H, uint32(sWorld->getWorldState(WS_BATTLEFIELD_WG_ATTACKED_H)));
     SetData(BATTLEFIELD_WG_DATA_DEF_H, uint32(sWorld->getWorldState(WS_BATTLEFIELD_WG_DEFENDED_H)));
 
+    // 初始化所有墓地
     for (uint8 i = 0; i < BATTLEFIELD_WG_GRAVEYARD_MAX; i++)
     {
         BfGraveyardWG* graveyard = new BfGraveyardWG(this);
 
-        // When between games, the graveyard is controlled by the defending team
+        // 非战斗期间，中立墓地由防守方控制
         if (WGGraveyard[i].StartControl == TEAM_NEUTRAL)
             graveyard->Initialize(m_DefenderTeam, WGGraveyard[i].GraveyardID);
         else
@@ -482,21 +747,23 @@ bool BattlefieldWG::SetupBattlefield()
         m_GraveyardList[i] = graveyard;
     }
 
+    // 初始化工坊
     Workshops.resize(WG_MAX_WORKSHOP);
-    // Spawn workshop creatures and gameobjects
+    // 生成工坊相关的生物和游戏对象
     for (uint8 i = 0; i < WG_MAX_WORKSHOP; i++)
     {
         WintergraspWorkshop* workshop = new WintergraspWorkshop(this, i);
+        // 前4个中立工坊由攻击方控制，后2个要塞工坊由防守方控制
         if (i < BATTLEFIELD_WG_WORKSHOP_NE)
             workshop->GiveControlTo(GetAttackerTeam(), true);
         else
             workshop->GiveControlTo(GetDefenderTeam(), true);
 
-        // Note: Capture point is added once the gameobject is created.
+        // 注意：占领点在GameObject创建后才添加
         Workshops[i] = workshop;
     }
 
-    // Spawn turrets and hide them per default
+    // 生成防御炮塔并默认隐藏
     for (uint8 i = 0; i < WG_MAX_TURRET; i++)
     {
         Position towerCannonPos = WGTurret[i].GetPosition();
@@ -507,14 +774,16 @@ bool BattlefieldWG::SetupBattlefield()
         }
     }
 
+    // 初始化建筑物数组
     BuildingsInZone.resize(WG_MAX_OBJ);
-    // Spawn all gameobjects
+    // 生成所有游戏对象建筑物（城墙、塔楼、城门等）
     for (uint8 i = 0; i < WG_MAX_OBJ; i++)
     {
         if (GameObject* go = SpawnGameObject(WGGameObjectBuilding[i].entry, WGGameObjectBuilding[i].pos, WGGameObjectBuilding[i].rot))
         {
             BfWGGameObjectBuilding* b = new BfWGGameObjectBuilding(this, WGGameObjectBuilding[i].type, WGGameObjectBuilding[i].WorldState);
             b->Init(go);
+            // 如果战场未启用，将宝库大门设为已摧毁状态
             if (!IsEnabled() && go->GetEntry() == GO_WINTERGRASP_VAULT_GATE)
                 go->SetDestructibleState(GO_DESTRUCTIBLE_DESTROYED);
 
@@ -522,27 +791,51 @@ bool BattlefieldWG::SetupBattlefield()
         }
     }
 
-    // Spawning portal defender
+    // 生成防守方传送门
     for (uint8 i = 0; i < WG_MAX_TELEPORTER; ++i)
     {
         WintergraspGameObjectData const& teleporter = WGPortalDefenderData[i];
+        // 生成联盟版传送门
         if (GameObject* go = SpawnGameObject(teleporter.AllianceEntry, teleporter.Pos, teleporter.Rot))
         {
             DefenderPortalList[TEAM_ALLIANCE].push_back(go->GetGUID());
+            // 如果联盟是防守方，立即刷新；否则设置为一天后刷新（实际上隐藏）
             go->SetRespawnTime(GetDefenderTeam() == TEAM_ALLIANCE ? RESPAWN_IMMEDIATELY : RESPAWN_ONE_DAY);
         }
 
+        // 生成部落版传送门
         if (GameObject* go = SpawnGameObject(teleporter.HordeEntry, teleporter.Pos, teleporter.Rot))
         {
             DefenderPortalList[TEAM_HORDE].push_back(go->GetGUID());
+            // 如果部落是防守方，立即刷新；否则设置为一天后刷新
             go->SetRespawnTime(GetDefenderTeam() == TEAM_HORDE ? RESPAWN_IMMEDIATELY : RESPAWN_ONE_DAY);
         }
     }
 
+    // 更新载具计数器
     UpdateCounterVehicle(true);
     return true;
 }
 
+/**
+ * @brief 更新战场状态
+ *
+ * 每帧调用，处理战场的各种定时任务。
+ *
+ * @param diff 距离上次更新的时间间隔（毫秒）
+ * @return true 继续运行
+ * @return false 战场需要销毁
+ *
+ * 处理内容：
+ * - 定期保存世界状态（每60秒）
+ *
+ * 调用时机：
+ * - 由战场管理器每帧调用
+ *
+ * 性能注意事项：
+ * - 每帧调用，避免重量级操作
+ * - 保存操作使用计时器控制频率
+ */
 bool BattlefieldWG::Update(uint32 diff)
 {
     bool m_return = Battlefield::Update(diff);
@@ -563,21 +856,43 @@ bool BattlefieldWG::Update(uint32 diff)
     return m_return;
 }
 
+/**
+ * @brief 战斗开始时的处理
+ *
+ * 当战斗正式开始时调用，负责初始化战斗所需的各种元素。
+ *
+ * 处理内容：
+ * 1. 生成泰坦遗迹（胜利条件）
+ * 2. 显示并设置防御炮塔阵营
+ * 3. 重建所有建筑物
+ * 4. 重置塔楼计数器
+ * 5. 更新墓地和工坊控制权
+ * 6. 踢出宝库房间内的玩家
+ * 7. 初始化载具计数
+ * 8. 发送战斗开始警告
+ *
+ * 调用时机：
+ * - 当战场计时器结束，战斗正式开始时
+ * - 由战场基类在BattleStart中调用
+ *
+ * 性能注意事项：
+ * - 涉及大量对象操作，但仅在战斗开始时调用一次
+ */
 void BattlefieldWG::OnBattleStart()
 {
-    // Spawn titan relic
+    // 生成泰坦遗迹（胜利条件：攻击方需要点击它来获胜）
     if (GameObject* relic = SpawnGameObject(GO_WINTERGRASP_TITAN_S_RELIC, WintergraspRelicPos, WintergraspRelicRot))
     {
-        // Update faction of relic, only attacker can click on
+        // 设置泰坦遗迹的阵营，只有攻击方可以点击
         relic->SetFaction(WintergraspFaction[GetAttackerTeam()]);
-        // Set in use (not allow to click on before last door is broken)
+        // 设置为使用中状态（在最后城门被破坏前不可点击）
         relic->SetFlag(GO_FLAG_IN_USE | GO_FLAG_NOT_SELECTABLE);
         m_titansRelicGUID = relic->GetGUID();
     }
     else
         TC_LOG_ERROR("bg.battlefield", "WG: Failed to spawn titan relic.");
 
-    // Update tower visibility and update faction
+    // 显示并设置防御炮塔的阵营
     for (auto itr = CanonList.begin(); itr != CanonList.end(); ++itr)
     {
         if (Creature* creature = GetCreature(*itr))
@@ -587,31 +902,35 @@ void BattlefieldWG::OnBattleStart()
         }
     }
 
-    // Rebuild all wall
+    // 重建所有城墙和建筑物
     for (BfWGGameObjectBuilding* building : BuildingsInZone)
     {
         building->Rebuild();
         building->UpdateTurretAttack(false);
     }
 
+    // 重置塔楼损坏计数器
     SetData(BATTLEFIELD_WG_DATA_BROKEN_TOWER_ATT, 0);
     SetData(BATTLEFIELD_WG_DATA_BROKEN_TOWER_DEF, 0);
     SetData(BATTLEFIELD_WG_DATA_DAMAGED_TOWER_ATT, 0);
     SetData(BATTLEFIELD_WG_DATA_DAMAGED_TOWER_DEF, 0);
 
-    // Update graveyard (in no war time all graveyard is to deffender, in war time, depend of base)
+    // 更新墓地和工坊控制权
+    // 非战斗期间所有墓地归防守方，战斗期间根据基地归属决定
     for (WintergraspWorkshop* workshop : Workshops)
         workshop->UpdateGraveyardAndWorkshop();
 
+    // 踢出宝库房间内的玩家（防止玩家在宝库内等待）
     for (uint8 team = 0; team < PVP_TEAMS_COUNT; ++team)
     {
         for (auto itr = m_players[team].begin(); itr != m_players[team].end(); ++itr)
         {
-            // Kick player in orb room, TODO: offline player ?
+            // 踢出宝库房间内的玩家，TODO：离线玩家处理？
             if (Player* player = ObjectAccessor::FindPlayer(*itr))
             {
                 float x, y, z;
                 player->GetPosition(x, y, z);
+                // 检查是否在宝库房间范围内
                 if (5500 > x && x > 5392 && y < 2880 && y > 2800 && z < 480)
                     player->TeleportTo(571, 5349.8686f, 2838.481f, 409.240f, 0.046328f);
                 SendInitWorldStatesTo(player);
@@ -619,12 +938,31 @@ void BattlefieldWG::OnBattleStart()
         }
     }
 
-    // Initialize vehicle counter
+    // 初始化载具计数器
     UpdateCounterVehicle(true);
-    // Send start warning to all players
+    // 向所有玩家发送战斗开始警告
     SendWarning(BATTLEFIELD_WG_TEXT_START_BATTLE);
 }
 
+/**
+ * @brief 更新载具计数器
+ *
+ * 计算并更新双方可用的载具数量上限。
+ *
+ * @param init 是否为初始化调用
+ *
+ * 计算规则：
+ * - 每个工坊提供4个载具名额
+ * - 双方初始各有2个要塞工坊（共8个名额）
+ * - 争夺的4个工坊根据控制方增加名额
+ *
+ * 调用时机：
+ * - 战场初始化时
+ * - 工坊控制权变更时
+ *
+ * 性能注意事项：
+ * - 轻量级操作，可频繁调用
+ */
 void BattlefieldWG::UpdateCounterVehicle(bool init)
 {
     if (init)
@@ -646,28 +984,57 @@ void BattlefieldWG::UpdateCounterVehicle(bool init)
     UpdateVehicleCountWG();
 }
 
+/**
+ * @brief 战斗结束时的处理
+ *
+ * 当战斗结束时调用，负责清理战场状态、发放奖励等。
+ *
+ * @param endByTimer 是否因计时器结束而结束（true表示防守方胜利）
+ *
+ * 处理内容：
+ * 1. 移除泰坦遗迹
+ * 2. 修复城门
+ * 3. 更新战绩统计
+ * 4. 隐藏防御炮塔
+ * 5. 重置墓地控制权
+ * 6. 更新传送门状态
+ * 7. 保存建筑物和工坊状态
+ * 8. 发放奖励（胜利/失败）
+ * 9. 完成成就和任务
+ * 10. 移除战斗光环和载具
+ * 11. 更新相位光环
+ * 12. 发送结束消息
+ *
+ * 调用时机：
+ * - 战斗计时器结束时（防守方胜利）
+ * - 泰坦遗迹被攻击方点击时（攻击方胜利）
+ *
+ * 性能注意事项：
+ * - 涉及大量玩家操作和状态更新
+ * - 仅在战斗结束时调用一次
+ */
 void BattlefieldWG::OnBattleEnd(bool endByTimer)
 {
-    // Remove relic
+    // 移除泰坦遗迹
     if (m_titansRelicGUID)
         if (GameObject* relic = GetGameObject(m_titansRelicGUID))
             relic->RemoveFromWorld();
     m_titansRelicGUID.Clear();
 
-    // change collision wall state closed
+    // 修复城门状态（关闭碰撞墙）
     for (BfWGGameObjectBuilding* building : BuildingsInZone)
     {
         building->RebuildGate();
     }
 
-    // successful defense
+    // 成功防守
     if (endByTimer)
         UpdateData(GetDefenderTeam() == TEAM_HORDE ? BATTLEFIELD_WG_DATA_DEF_H : BATTLEFIELD_WG_DATA_DEF_A, 1);
-    // successful attack (note that teams have already been swapped, so defender team is the one who won)
+    // 成功攻击（注意：阵营已经交换，所以防守方是获胜方）
     else
         UpdateData(GetDefenderTeam() == TEAM_HORDE ? BATTLEFIELD_WG_DATA_WON_H : BATTLEFIELD_WG_DATA_WON_A, 1);
 
-    // Remove turret
+    // 移除防御炮塔
     for (auto itr = CanonList.begin(); itr != CanonList.end(); ++itr)
     {
         if (Creature* creature = GetCreature(*itr))
@@ -678,12 +1045,12 @@ void BattlefieldWG::OnBattleEnd(bool endByTimer)
         }
     }
 
-    // Update all graveyard, control is to defender when no wartime
+    // 更新所有墓地，非战斗期间归防守方
     for (uint8 i = 0; i < BATTLEFIELD_WG_GY_HORDE; i++)
         if (BfGraveyard* graveyard = GetGraveyardById(i))
             graveyard->GiveControlTo(GetDefenderTeam());
 
-    // Update portals
+    // 更新传送门状态
     for (auto itr = DefenderPortalList[GetDefenderTeam()].begin(); itr != DefenderPortalList[GetDefenderTeam()].end(); ++itr)
         if (GameObject* portal = GetGameObject(*itr))
             portal->SetRespawnTime(RESPAWN_IMMEDIATELY);
@@ -692,34 +1059,39 @@ void BattlefieldWG::OnBattleEnd(bool endByTimer)
         if (GameObject* portal = GetGameObject(*itr))
             portal->SetRespawnTime(RESPAWN_ONE_DAY);
 
-    // Saving data
+    // 保存建筑物和工坊数据到世界状态
     for (BfWGGameObjectBuilding* building : BuildingsInZone)
         building->Save();
 
     for (WintergraspWorkshop* workshop : Workshops)
         workshop->Save();
 
+    // 为防守方玩家发放胜利奖励
     for (auto itr = m_PlayersInWar[GetDefenderTeam()].begin(); itr != m_PlayersInWar[GetDefenderTeam()].end(); ++itr)
     {
         if (Player* player = ObjectAccessor::FindPlayer(*itr))
         {
+            // 施放冬拥湖精华（增加经验值和荣誉值）
             player->CastSpell(player, SPELL_ESSENCE_OF_WINTERGRASP, true);
+            // 施放胜利奖励法术
             player->CastSpell(player, SPELL_VICTORY_REWARD, true);
-            // Complete victory quests
+            // 完成胜利任务
             player->AreaExploredOrEventHappens(QUEST_VICTORY_WINTERGRASP_A);
             player->AreaExploredOrEventHappens(QUEST_VICTORY_WINTERGRASP_H);
-            // Send Wintergrasp victory achievement
+            // 发送冬拥湖胜利成就
             DoCompleteOrIncrementAchievement(ACHIEVEMENTS_WIN_WG, player);
-            // Award achievement for succeeding in Wintergrasp in 10 minutes or less
+            // 如果在10分钟或更短时间内获胜，发放快速胜利成就
             if (!endByTimer && GetTimer() <= 10000)
                 DoCompleteOrIncrementAchievement(ACHIEVEMENTS_WIN_WG_TIMER_10, player);
         }
     }
 
+    // 为攻击方玩家发放失败奖励
     for (auto itr = m_PlayersInWar[GetAttackerTeam()].begin(); itr != m_PlayersInWar[GetAttackerTeam()].end(); ++itr)
         if (Player* player = ObjectAccessor::FindPlayer(*itr))
             player->CastSpell(player, SPELL_DEFEAT_REWARD, true);
 
+    // 清理所有参战玩家的状态
     for (uint8 team = 0; team < PVP_TEAMS_COUNT; ++team)
     {
         for (auto itr = m_PlayersInWar[team].begin(); itr != m_PlayersInWar[team].end(); ++itr)
@@ -728,6 +1100,7 @@ void BattlefieldWG::OnBattleEnd(bool endByTimer)
 
         m_PlayersInWar[team].clear();
 
+        // 移除所有载具
         for (auto itr = m_vehicles[team].begin(); itr != m_vehicles[team].end(); ++itr)
             if (Creature* creature = GetCreature(*itr))
                 if (creature->IsVehicle())
@@ -736,6 +1109,7 @@ void BattlefieldWG::OnBattleEnd(bool endByTimer)
         m_vehicles[team].clear();
     }
 
+    // 更新相位光环（仅在攻击方获胜时）
     if (!endByTimer)
     {
         for (uint8 team = 0; team < PVP_TEAMS_COUNT; ++team)
@@ -744,22 +1118,47 @@ void BattlefieldWG::OnBattleEnd(bool endByTimer)
             {
                 if (Player* player = ObjectAccessor::FindPlayer(*itr))
                 {
+                    // 移除旧的相位光环
                     player->RemoveAurasDueToSpell(m_DefenderTeam == TEAM_ALLIANCE ? SPELL_HORDE_CONTROL_PHASE_SHIFT : SPELL_ALLIANCE_CONTROL_PHASE_SHIFT, player->GetGUID());
+                    // 添加新的相位光环
                     player->AddAura(m_DefenderTeam == TEAM_HORDE ? SPELL_HORDE_CONTROL_PHASE_SHIFT : SPELL_ALLIANCE_CONTROL_PHASE_SHIFT, player);
                 }
             }
         }
     }
 
-    if (!endByTimer) // win alli/horde
+    // 发送战斗结束消息
+    if (!endByTimer) // 攻击方获胜
         SendWarning(GetDefenderTeam() == TEAM_ALLIANCE ? BATTLEFIELD_WG_TEXT_FORTRESS_CAPTURE_ALLIANCE : BATTLEFIELD_WG_TEXT_FORTRESS_CAPTURE_HORDE);
-    else // defend alli/horde
+    else // 防守方获胜
         SendWarning(GetDefenderTeam() == TEAM_ALLIANCE ? BATTLEFIELD_WG_TEXT_FORTRESS_DEFEND_ALLIANCE : BATTLEFIELD_WG_TEXT_FORTRESS_DEFEND_HORDE);
 }
 
 // *******************************************************
-// ******************* Reward System *********************
+// ******************* 奖励系统 *********************
 // *******************************************************
+
+/**
+ * @brief 完成或递增成就
+ *
+ * 为玩家发放成就奖励。
+ *
+ * @param achievement 成就ID
+ * @param player 目标玩家
+ * @param incrementNumber 递增数量（当前未使用）
+ *
+ * 处理内容：
+ * - 特殊成就（如WG_WIN_100）需要特殊处理
+ * - 普通成就直接完成
+ *
+ * 调用时机：
+ * - 战斗结束时
+ * - 塔楼被摧毁时
+ * - 其他特定事件发生时
+ *
+ * 性能注意事项：
+ * - 轻量级操作，仅标记成就完成
+ */
 void BattlefieldWG::DoCompleteOrIncrementAchievement(uint32 achievement, Player* player, uint8 /*incrementNumber*/)
 {
     AchievementEntry const* achievementEntry = sAchievementMgr->GetAchievement(achievement);
@@ -1843,26 +2242,82 @@ void WintergraspWorkshop::Save()
     sWorld->setWorldState(_staticInfo->WorldStateId, _state);
 }
 
+/**
+ * @class Battlefield_wintergrasp
+ * @brief 冬拥湖战场脚本类
+ *
+ * 继承自BattlefieldScript，用于注册冬拥湖战场。
+ * 这是战场系统与脚本系统之间的桥梁。
+ */
 class Battlefield_wintergrasp : public BattlefieldScript
 {
 public:
+    /**
+     * @brief 构造函数
+     *
+     * 向脚本系统注册"battlefield_wg"脚本名称。
+     */
     Battlefield_wintergrasp() : BattlefieldScript("battlefield_wg") { }
 
+    /**
+     * @brief 创建战场实例
+     *
+     * @return 新的BattlefieldWG实例
+     *
+     * 由战场管理器调用以创建冬拥湖战场实例。
+     */
     Battlefield* GetBattlefield() const override
     {
         return new BattlefieldWG();
     }
 };
 
+/**
+ * @class npc_wg_give_promotion_credit
+ * @brief 冬拥湖晋升积分NPC脚本
+ *
+ * 处理冬拥湖中可为玩家提供晋升积分的NPC。
+ * 当玩家杀死这些NPC时，会获得军衔晋升积分。
+ */
 class npc_wg_give_promotion_credit : public CreatureScript
 {
 public:
+    /**
+     * @brief 构造函数
+     *
+     * 向脚本系统注册"npc_wg_give_promotion_credit"脚本名称。
+     */
     npc_wg_give_promotion_credit() : CreatureScript("npc_wg_give_promotion_credit") { }
 
+    /**
+     * @struct npc_wg_give_promotion_creditAI
+     * @brief NPC AI实现
+     *
+     * 处理NPC死亡事件，为击杀者提供晋升积分。
+     */
     struct npc_wg_give_promotion_creditAI : public ScriptedAI
     {
+        /**
+         * @brief 构造函数
+         * @param creature NPC生物对象
+         */
         npc_wg_give_promotion_creditAI(Creature* creature) : ScriptedAI(creature) { }
 
+        /**
+         * @brief NPC死亡时的处理
+         *
+         * 当NPC死亡时，为击杀者及其附近的队友提供晋升积分。
+         *
+         * @param killer 击杀者
+         *
+         * 处理流程：
+         * 1. 检查击杀者是否为玩家
+         * 2. 获取冬拥湖战场实例
+         * 3. 调用战场晋升处理函数
+         *
+         * 调用时机：
+         * - NPC死亡时由游戏引擎调用
+         */
         void JustDied(Unit* killer) override
         {
             if (!killer || killer->GetTypeId() != TYPEID_PLAYER)
@@ -1876,12 +2331,34 @@ public:
         }
     };
 
+    /**
+     * @brief 获取AI实例
+     *
+     * @param creature NPC生物对象
+     * @return 新的AI实例
+     *
+     * 由游戏引擎调用以为NPC创建AI实例。
+     */
     CreatureAI* GetAI(Creature* creature) const override
     {
         return new npc_wg_give_promotion_creditAI(creature);
     }
 };
 
+/**
+ * @brief 注册冬拥湖战场脚本
+ *
+ * 这是脚本的入口点函数，由脚本加载器调用。
+ * 创建并注册所有冬拥湖相关的脚本实例。
+ *
+ * 注册内容：
+ * - 冬拥湖战场脚本（Battlefield_wintergrasp）
+ * - 晋升积分NPC脚本（npc_wg_give_promotion_credit）
+ *
+ * 调用时机：
+ * - 在battlefield_script_loader.cpp的AddBattlefieldScripts中调用
+ * - 服务器启动时的脚本初始化阶段
+ */
 void AddSC_BF_wintergrasp() {
     new Battlefield_wintergrasp();
     new npc_wg_give_promotion_credit();

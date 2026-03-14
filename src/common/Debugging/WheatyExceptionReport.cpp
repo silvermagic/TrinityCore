@@ -1,8 +1,22 @@
-//==========================================
-// Matt Pietrek
-// MSDN Magazine, 2002
-// FILE: WheatyExceptionReport.CPP
-//==========================================
+/**
+ * @file WheatyExceptionReport.cpp
+ * @brief Windows异常报告生成器实现文件
+ *
+ * 本文件实现了Windows平台下的异常捕获和崩溃报告生成功能。
+ * 当程序发生未处理的异常时，会自动生成包含以下信息的详细报告：
+ * - 异常类型和错误代码
+ * - 调用堆栈回溯
+ * - 局部变量和参数的值
+ * - CPU寄存器状态
+ * - 系统信息
+ * - 崩溃转储文件
+ *
+ * 原始作者：Matt Pietrek (MSDN Magazine, 2002)
+ * TrinityCore项目进行了扩展和优化
+ *
+ * @note 本文件仅适用于Windows平台
+ */
+
 #include "WheatyExceptionReport.h"
 #include "Common.h"
 #include "Errors.h"
@@ -10,7 +24,7 @@
 #include <algorithm>
 
 #ifdef __clang__
-// clang-cl doesn't have these hardcoded types available, correct ehdata_forceinclude.h that relies on it
+// clang-cl没有这些硬编码的类型可用，需要修正依赖它的ehdata_forceinclude.h
 #define _ThrowInfo ThrowInfo
 #endif
 
@@ -22,13 +36,33 @@
 #include <comdef.h>
 #include <WbemIdl.h>
 
+/**
+ * @brief 崩溃报告文件夹名称
+ */
 #define CrashFolder _T("Crashes")
+
+/**
+ * @brief 链接dbghelp库（用于调试符号处理）
+ */
 #pragma comment(linker, "/DEFAULTLIB:dbghelp.lib")
+
+/**
+ * @brief 链接wbemuuid库（用于WMI查询）
+ */
 #pragma comment(linker, "/DEFAULTLIB:wbemuuid.lib")
 
+/**
+ * @brief 获取Windows错误消息
+ *
+ * 将Windows错误代码转换为可读的错误消息字符串
+ *
+ * @param dw Windows错误代码
+ * @return LPTSTR 错误消息字符串（需要调用者释放内存）
+ */
 inline LPTSTR ErrorMessage(DWORD dw)
 {
     LPVOID lpMsgBuf;
+    // 尝试从系统获取错误消息文本
     DWORD formatResult = FormatMessage(
                             FORMAT_MESSAGE_ALLOCATE_BUFFER |
                             FORMAT_MESSAGE_FROM_SYSTEM,
@@ -38,9 +72,10 @@ inline LPTSTR ErrorMessage(DWORD dw)
                             (LPTSTR) &lpMsgBuf,
                             0, nullptr);
     if (formatResult != 0)
-        return (LPTSTR)lpMsgBuf;
+        return (LPTSTR)lpMsgBuf;  // 成功获取到系统错误消息
     else
     {
+        // 系统无法识别的错误代码，生成一个通用错误消息
         LPTSTR msgBuf = (LPTSTR)LocalAlloc(LPTR, 30);
         sprintf(msgBuf, "Unknown error: %u", dw);
         return msgBuf;
@@ -49,36 +84,62 @@ inline LPTSTR ErrorMessage(DWORD dw)
 }
 
 //============================== Global Variables =============================
+// 全局变量定义
 
 //
 // Declare the static variables of the WheatyExceptionReport class
+// 声明WheatyExceptionReport类的静态成员变量
 //
-TCHAR WheatyExceptionReport::m_szLogFileName[MAX_PATH];
-TCHAR WheatyExceptionReport::m_szDumpFileName[MAX_PATH];
-LPTOP_LEVEL_EXCEPTION_FILTER WheatyExceptionReport::m_previousFilter;
-_invalid_parameter_handler WheatyExceptionReport::m_previousCrtHandler;
-FILE* WheatyExceptionReport::m_hReportFile;
-HANDLE WheatyExceptionReport::m_hDumpFile;
-HANDLE WheatyExceptionReport::m_hProcess;
-SymbolPairs WheatyExceptionReport::symbols;
-std::stack<SymbolDetail> WheatyExceptionReport::symbolDetails;
-bool WheatyExceptionReport::alreadyCrashed;
-std::mutex WheatyExceptionReport::alreadyCrashedLock;
-WheatyExceptionReport::pRtlGetVersion WheatyExceptionReport::RtlGetVersion;
+TCHAR WheatyExceptionReport::m_szLogFileName[MAX_PATH];                ///< 日志文件路径
+TCHAR WheatyExceptionReport::m_szDumpFileName[MAX_PATH];               ///< 转储文件路径
+LPTOP_LEVEL_EXCEPTION_FILTER WheatyExceptionReport::m_previousFilter;  ///< 之前的异常过滤器
+_invalid_parameter_handler WheatyExceptionReport::m_previousCrtHandler;///< 之前的CRT无效参数处理器
+FILE* WheatyExceptionReport::m_hReportFile;                            ///< 报告文件句柄
+HANDLE WheatyExceptionReport::m_hDumpFile;                             ///< 转储文件句柄
+HANDLE WheatyExceptionReport::m_hProcess;                              ///< 当前进程句柄
+SymbolPairs WheatyExceptionReport::symbols;                            ///< 已处理的符号集合
+std::stack<SymbolDetail> WheatyExceptionReport::symbolDetails;         ///< 符号详情栈
+bool WheatyExceptionReport::alreadyCrashed;                            ///< 崩溃标志（防止递归崩溃）
+std::mutex WheatyExceptionReport::alreadyCrashedLock;                  ///< 崩溃状态互斥锁
+WheatyExceptionReport::pRtlGetVersion WheatyExceptionReport::RtlGetVersion; ///< RtlGetVersion函数指针
 
 // Declare global instance of class
+// 声明类的全局实例
 WheatyExceptionReport g_WheatyExceptionReport;
 
 //============================== Class Methods =============================
+// 类方法实现
 
-WheatyExceptionReport::WheatyExceptionReport()             // Constructor
+/**
+ * @brief 构造函数
+ *
+ * 初始化异常报告系统：
+ * 1. 安装未处理异常过滤器
+ * 2. 设置CRT无效参数处理器
+ * 3. 获取进程句柄
+ * 4. 初始化崩溃标志
+ * 5. 加载RtlGetVersion函数
+ * 6. 配置CRT报告模式
+ */
+WheatyExceptionReport::WheatyExceptionReport()
 {
     // Install the unhandled exception filter function
+    // 安装未处理异常过滤器，当程序发生未捕获的异常时会调用此函数
     m_previousFilter = SetUnhandledExceptionFilter(WheatyUnhandledExceptionFilter);
+
+    // 设置CRT无效参数处理器，处理CRT函数调用中的无效参数错误
     m_previousCrtHandler = _set_invalid_parameter_handler(WheatyCrtHandler);
+
+    // 获取当前进程句柄，用于后续的调试符号加载等操作
     m_hProcess = GetCurrentProcess();
+
+    // 初始化崩溃标志为false
     alreadyCrashed = false;
+
+    // 从ntdll.dll加载RtlGetVersion函数，用于获取真实的Windows版本信息
     RtlGetVersion = (pRtlGetVersion)GetProcAddress(GetModuleHandle(_T("ntdll.dll")), "RtlGetVersion");
+
+    // 如果不在调试器下运行，配置CRT报告输出到标准错误流
     if (!IsDebuggerPresent())
     {
         _CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE);
@@ -90,71 +151,117 @@ WheatyExceptionReport::WheatyExceptionReport()             // Constructor
 
 //============
 // Destructor
+// 析构函数
 //============
+/**
+ * @brief 析构函数
+ *
+ * 清理资源并恢复原始的异常处理机制：
+ * 1. 恢复之前的异常过滤器
+ * 2. 恢复之前的CRT处理器
+ * 3. 清空符号集合
+ */
 WheatyExceptionReport::~WheatyExceptionReport()
 {
+    // 恢复之前的异常过滤器
     if (m_previousFilter)
         SetUnhandledExceptionFilter(m_previousFilter);
+
+    // 恢复之前的CRT无效参数处理器
     if (m_previousCrtHandler)
         _set_invalid_parameter_handler(m_previousCrtHandler);
+
+    // 清空已处理的符号集合
     ClearSymbols();
 }
 
 //===========================================================
 // Entry point where control comes on an unhandled exception
+// 未处理异常的入口点
 //===========================================================
+/**
+ * @brief 未处理异常过滤器
+ *
+ * 当程序发生未处理的异常时，系统会调用此函数。
+ * 该函数负责：
+ * 1. 检查是否已经崩溃（防止递归崩溃）
+ * 2. 创建崩溃报告文件夹
+ * 3. 生成异常报告和转储文件
+ * 4. 调用之前的异常过滤器
+ *
+ * @param pExceptionInfo 异常信息指针，包含异常代码、上下文等
+ * @return LONG 异常处理结果代码
+ */
 LONG WINAPI WheatyExceptionReport::WheatyUnhandledExceptionFilter(
 PEXCEPTION_POINTERS pExceptionInfo)
 {
+    // 使用互斥锁保护崩溃标志，防止多线程并发崩溃
     std::unique_lock<std::mutex> guard(alreadyCrashedLock);
+
     // Handle only 1 exception in the whole process lifetime
+    // 在整个进程生命周期中只处理一个异常，防止递归崩溃
     if (alreadyCrashed)
         return EXCEPTION_EXECUTE_HANDLER;
 
+    // 标记为已崩溃
     alreadyCrashed = true;
 
+    // 获取可执行文件所在的目录路径
     TCHAR module_folder_name[MAX_PATH];
     GetModuleFileName(nullptr, module_folder_name, MAX_PATH);
     TCHAR* pos = _tcsrchr(module_folder_name, '\\');
     if (!pos)
-        return 0;
+        return 0;  // 无法找到路径分隔符，返回
+
+    // 截断路径到目录部分
     pos[0] = '\0';
     ++pos;
 
+    // 构造崩溃文件夹路径
     TCHAR crash_folder_path[MAX_PATH];
     sprintf_s(crash_folder_path, "%s\\%s", module_folder_name, CrashFolder);
+
+    // 创建崩溃文件夹，如果已存在则忽略错误
     if (!CreateDirectory(crash_folder_path, nullptr))
     {
         if (GetLastError() != ERROR_ALREADY_EXISTS)
-            return 0;
+            return 0;  // 创建失败且不是因为文件夹已存在
     }
 
+    // 获取当前时间，用于生成唯一的文件名
     SYSTEMTIME systime;
     GetLocalTime(&systime);
+
+    // 生成转储文件名，格式：Crashes/GitHash_程序名_[日-月_时-分-秒].dmp
     sprintf(m_szDumpFileName, "%s\\%s_%s_[%u-%u_%u-%u-%u].dmp",
         crash_folder_path, GitRevision::GetHash(), pos, systime.wDay, systime.wMonth, systime.wHour, systime.wMinute, systime.wSecond);
 
+    // 生成日志文件名，格式：Crashes/GitHash_程序名_[日-月_时-分-秒].txt
     _stprintf(m_szLogFileName, _T("%s\\%s_%s_[%u-%u_%u-%u-%u].txt"),
         crash_folder_path, GitRevision::GetHash(), pos, systime.wDay, systime.wMonth, systime.wHour, systime.wMinute, systime.wSecond);
 
+    // 创建转储文件
     m_hDumpFile = CreateFile(m_szDumpFileName,
-        GENERIC_WRITE,
-        0,
-        nullptr,
-        OPEN_ALWAYS,
-        FILE_FLAG_WRITE_THROUGH,
+        GENERIC_WRITE,          // 写入权限
+        0,                      // 不共享
+        nullptr,                // 默认安全属性
+        OPEN_ALWAYS,            // 打开或创建
+        FILE_FLAG_WRITE_THROUGH,// 直接写入磁盘，不缓存
         nullptr);
 
     if (m_hDumpFile)
     {
+        // 准备小转储异常信息
         MINIDUMP_EXCEPTION_INFORMATION info;
-        info.ClientPointers = FALSE;
-        info.ExceptionPointers = pExceptionInfo;
-        info.ThreadId = GetCurrentThreadId();
+        info.ClientPointers = FALSE;              // 指针在崩溃进程的地址空间中有效
+        info.ExceptionPointers = pExceptionInfo;  // 异常信息
+        info.ThreadId = GetCurrentThreadId();     // 当前线程ID
 
+        // 准备附加的用户流（用于ASSERT失败时添加注释）
         MINIDUMP_USER_STREAM additionalStream = {};
         MINIDUMP_USER_STREAM_INFORMATION additionalStreamInfo = {};
 
+        // 如果是断言失败异常，添加断言消息到转储文件
         if (pExceptionInfo->ExceptionRecord->ExceptionCode == EXCEPTION_ASSERTION_FAILURE && pExceptionInfo->ExceptionRecord->NumberParameters > 0)
         {
             additionalStream.Type = CommentStreamA;
@@ -165,33 +272,59 @@ PEXCEPTION_POINTERS pExceptionInfo)
             additionalStreamInfo.UserStreamCount = 1;
         }
 
+        // 写入小转储文件，包含间接引用的内存
         MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(),
             m_hDumpFile, MiniDumpWithIndirectlyReferencedMemory, &info, &additionalStreamInfo, nullptr);
 
         CloseHandle(m_hDumpFile);
     }
 
+    // 打开文本报告文件
     m_hReportFile = _tfopen(m_szLogFileName, _T("wb"));
 
     if (m_hReportFile)
     {
+        // 生成详细的异常报告
         GenerateExceptionReport(pExceptionInfo);
 
         fclose(m_hReportFile);
         m_hReportFile = nullptr;
     }
 
+    // 如果之前有异常过滤器，调用它；否则返回默认处理结果
     if (m_previousFilter)
         return m_previousFilter(pExceptionInfo);
     else
         return EXCEPTION_EXECUTE_HANDLER/*EXCEPTION_CONTINUE_SEARCH*/;
 }
 
+/**
+ * @brief CRT无效参数处理器
+ *
+ * 当CRT函数检测到无效参数时调用此处理器。
+ * 该处理器触发访问冲突异常，让异常报告系统捕获并生成报告。
+ *
+ * @param expression 触发错误的表达式（未使用）
+ * @param function 包含错误的函数名（未使用）
+ * @param file 源文件名（未使用）
+ * @param line 行号（未使用）
+ * @param pReserved 保留参数（未使用）
+ */
 void __cdecl WheatyExceptionReport::WheatyCrtHandler(wchar_t const* /*expression*/, wchar_t const* /*function*/, wchar_t const* /*file*/, unsigned int /*line*/, uintptr_t /*pReserved*/)
 {
+    // 触发访问冲突异常，让异常报告系统捕获
     RaiseException(EXCEPTION_ACCESS_VIOLATION, 0, 0, nullptr);
 }
 
+/**
+ * @brief 从注册表获取处理器名称
+ *
+ * 从Windows注册表读取CPU的名称信息
+ *
+ * @param sProcessorName 处理器名称缓冲区
+ * @param maxcount 缓冲区最大长度
+ * @return BOOL 成功返回TRUE，失败返回FALSE
+ */
 BOOL WheatyExceptionReport::_GetProcessorName(TCHAR* sProcessorName, DWORD maxcount)
 {
     if (!sProcessorName)
@@ -199,44 +332,75 @@ BOOL WheatyExceptionReport::_GetProcessorName(TCHAR* sProcessorName, DWORD maxco
 
     HKEY hKey;
     LONG lRet;
+
+    // 打开注册表键：HKEY_LOCAL_MACHINE\HARDWARE\DESCRIPTION\System\CentralProcessor\0
     lRet = ::RegOpenKeyEx(HKEY_LOCAL_MACHINE, _T("HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0"),
         0, KEY_QUERY_VALUE, &hKey);
     if (lRet != ERROR_SUCCESS)
         return FALSE;
+
+    // 查询ProcessorNameString值
     TCHAR szTmp[2048];
     DWORD cntBytes = sizeof(szTmp);
     lRet = ::RegQueryValueEx(hKey, _T("ProcessorNameString"), nullptr, nullptr,
         (LPBYTE)szTmp, &cntBytes);
     if (lRet != ERROR_SUCCESS)
         return FALSE;
+
     ::RegCloseKey(hKey);
+
     sProcessorName[0] = '\0';
-    // Skip spaces
+    // Skip spaces - 跳过前导空格
     TCHAR* psz = szTmp;
     while (iswspace(*psz))
         ++psz;
+
+    // 复制处理器名称到输出缓冲区
     _tcsncpy(sProcessorName, psz, maxcount);
     return TRUE;
 }
 
+/**
+ * @brief 宽字符转换为TCHAR
+ *
+ * 根据TCHAR的实际类型（char或wchar_t）进行相应的转换
+ *
+ * @tparam size 目标缓冲区大小
+ * @param src 源宽字符串
+ * @param dst 目标TCHAR缓冲区
+ */
 template<size_t size>
 void ToTchar(wchar_t const* src, TCHAR (&dst)[size])
 {
     if constexpr (std::is_same_v<TCHAR, char>)
-        ::wcstombs_s(nullptr, dst, src, size);
+        ::wcstombs_s(nullptr, dst, src, size);  // 宽字符转多字节
     else
-        ::wcscpy_s(dst, size, src);
+        ::wcscpy_s(dst, size, src);              // 直接复制（TCHAR为wchar_t）
 }
 
+/**
+ * @brief 获取Windows版本信息
+ *
+ * 尝试通过多种方式获取Windows版本信息：
+ * 1. 首先尝试WMI查询
+ * 2. 如果失败，使用RtlGetVersion API
+ *
+ * @param szVersion 版本字符串缓冲区
+ * @param cntMax 缓冲区最大长度
+ * @return BOOL 成功返回TRUE，失败返回FALSE
+ */
 BOOL WheatyExceptionReport::_GetWindowsVersion(TCHAR* szVersion, DWORD cntMax)
 {
     *szVersion = _T('\0');
 
+    // 优先使用WMI获取版本信息（更准确）
     if (_GetWindowsVersionFromWMI(szVersion, cntMax))
         return TRUE;
 
     // Try calling GetVersionEx using the OSVERSIONINFOEX structure.
     // If that fails, try using the OSVERSIONINFO structure.
+    // 尝试使用OSVERSIONINFOEX结构调用GetVersionEx
+    // 如果失败，尝试使用OSVERSIONINFO结构
     RTL_OSVERSIONINFOEXW osvi = { };
     osvi.dwOSVersionInfoSize = sizeof(RTL_OSVERSIONINFOEXW);
     NTSTATUS bVersionEx = RtlGetVersion((PRTL_OSVERSIONINFOW)&osvi);
@@ -562,16 +726,30 @@ BOOL WheatyExceptionReport::_GetWindowsVersionFromWMI(TCHAR* szVersion, DWORD cn
     return result;
 }
 
+/**
+ * @brief 打印系统信息
+ *
+ * 输出当前系统的硬件和操作系统信息，包括：
+ * - CPU型号和核心数
+ * - 物理内存大小和可用内存
+ * - 页面文件大小
+ * - 操作系统版本
+ */
 void WheatyExceptionReport::PrintSystemInfo()
 {
+    // 获取系统信息（CPU数量、内存等）
     SYSTEM_INFO SystemInfo;
     ::GetSystemInfo(&SystemInfo);
 
+    // 获取内存状态
     MEMORYSTATUS MemoryStatus;
     MemoryStatus.dwLength = sizeof (MEMORYSTATUS);
     ::GlobalMemoryStatus(&MemoryStatus);
+
     TCHAR sString[1024];
     Log(_T("//=====================================================\r\n"));
+
+    // 输出硬件信息
     if (_GetProcessorName(sString, std::size(sString)))
         Log(_T("*** Hardware ***\r\nProcessor: %s\r\nNumber Of Processors: %d\r\nPhysical Memory: %d KB (Available: %d KB)\r\nCommit Charge Limit: %d KB\r\n"),
             sString, SystemInfo.dwNumberOfProcessors, MemoryStatus.dwTotalPhys/0x400, MemoryStatus.dwAvailPhys/0x400, MemoryStatus.dwTotalPageFile/0x400);
@@ -579,6 +757,7 @@ void WheatyExceptionReport::PrintSystemInfo()
         Log(_T("*** Hardware ***\r\nProcessor: <unknown>\r\nNumber Of Processors: %d\r\nPhysical Memory: %d KB (Available: %d KB)\r\nCommit Charge Limit: %d KB\r\n"),
             SystemInfo.dwNumberOfProcessors, MemoryStatus.dwTotalPhys/0x400, MemoryStatus.dwAvailPhys/0x400, MemoryStatus.dwTotalPageFile/0x400);
 
+    // 输出操作系统信息
     if (_GetWindowsVersion(sString, std::size(sString)))
         Log(_T("\r\n*** Operation System ***\r\n%s\r\n"), sString);
     else
@@ -586,23 +765,34 @@ void WheatyExceptionReport::PrintSystemInfo()
 }
 
 //===========================================================================
+/**
+ * @brief 打印所有线程的调用栈
+ *
+ * 枚举当前进程中的所有线程，并输出每个线程的调用栈信息
+ *
+ * @param bWriteVariables 是否输出局部变量的值
+ */
 void WheatyExceptionReport::printTracesForAllThreads(bool bWriteVariables)
 {
   THREADENTRY32 te32;
 
-  DWORD dwOwnerPID = GetCurrentProcessId();
-  DWORD dwCurrentTID = GetCurrentThreadId();
+  DWORD dwOwnerPID = GetCurrentProcessId();    // 当前进程ID
+  DWORD dwCurrentTID = GetCurrentThreadId();   // 当前线程ID（跳过崩溃线程）
   m_hProcess = GetCurrentProcess();
+
   // Take a snapshot of all running threads
+  // 创建系统中所有线程的快照
   HANDLE hThreadSnap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
   if (hThreadSnap == INVALID_HANDLE_VALUE)
     return;
 
   // Fill in the size of the structure before using it.
+  // 设置结构体大小
   te32.dwSize = sizeof(THREADENTRY32);
 
   // Retrieve information about the first thread,
   // and exit if unsuccessful
+  // 获取第一个线程的信息
   if (!Thread32First(hThreadSnap, &te32))
   {
     CloseHandle(hThreadSnap);    // Must clean up the
@@ -613,15 +803,20 @@ void WheatyExceptionReport::printTracesForAllThreads(bool bWriteVariables)
   // Now walk the thread list of the system,
   // and display information about each thread
   // associated with the specified process
+  // 遍历系统中的所有线程，输出属于当前进程的线程调用栈
   do
   {
+    // 只处理属于当前进程的线程，并跳过当前崩溃线程
     if (te32.th32OwnerProcessID == dwOwnerPID && te32.th32ThreadID != dwCurrentTID)
     {
         CONTEXT context;
-        context.ContextFlags = 0xffffffff;
+        context.ContextFlags = 0xffffffff;  // 获取所有寄存器
+
+        // 打开线程以获取其上下文
         HANDLE threadHandle = OpenThread(THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, false, te32.th32ThreadID);
         if (threadHandle)
         {
+            // 获取线程上下文并输出调用栈
             if (GetThreadContext(threadHandle, &context))
                 WriteStackDetails(&context, bWriteVariables, threadHandle);
             CloseHandle(threadHandle);
@@ -630,16 +825,31 @@ void WheatyExceptionReport::printTracesForAllThreads(bool bWriteVariables)
   } while (Thread32Next(hThreadSnap, &te32));
 
 //  Don't forget to clean up the snapshot object.
+//  清理快照对象
   CloseHandle(hThreadSnap);
 }
 
 //===========================================================================
 // Open the report file, and write the desired information to it.  Called by
 // WheatyUnhandledExceptionFilter
+// 打开报告文件，并写入所需的信息。由WheatyUnhandledExceptionFilter调用
 //===========================================================================
+/**
+ * @brief 生成异常报告
+ *
+ * 生成详细的异常报告，包括：
+ * - 异常代码和地址
+ * - 系统信息
+ * - 调用堆栈
+ * - 局部变量值
+ * - 所有线程的调用栈
+ *
+ * @param pExceptionInfo 异常信息指针
+ */
 void WheatyExceptionReport::GenerateExceptionReport(
 PEXCEPTION_POINTERS pExceptionInfo)
 {
+    // 使用SEH保护，防止报告生成过程中再次崩溃
     __try
     {
         SYSTEMTIME systime;
@@ -955,8 +1165,19 @@ PVOID addr, PTSTR szModule, DWORD len, DWORD& section, DWORD_PTR& offset)
 
 // It contains SYMBOL_INFO structure plus additional
 // space for the name of the symbol
+/**
+ * @struct CSymbolInfoPackage
+ * @brief 符号信息包结构
+ *
+ * 扩展SYMBOL_INFO_PACKAGE，包含SYMBOL_INFO结构和额外的符号名称空间
+ */
 struct CSymbolInfoPackage : public SYMBOL_INFO_PACKAGE
 {
+    /**
+     * @brief 构造函数
+     *
+     * 初始化SYMBOL_INFO结构的大小和最大名称长度
+     */
     CSymbolInfoPackage()
     {
         si.SizeOfStruct = sizeof(SYMBOL_INFO);
@@ -966,7 +1187,22 @@ struct CSymbolInfoPackage : public SYMBOL_INFO_PACKAGE
 
 //============================================================
 // Walks the stack, and writes the results to the report file
+// 遍历调用栈，并将结果写入报告文件
 //============================================================
+/**
+ * @brief 输出堆栈详细信息
+ *
+ * 遍历调用栈并输出每一帧的信息，包括：
+ * - 函数地址
+ * - 帧指针
+ * - 函数名
+ * - 源文件和行号（如果有调试符号）
+ * - 局部变量值（可选）
+ *
+ * @param pContext CPU上下文
+ * @param bWriteVariables 是否输出局部变量
+ * @param pThreadHandle 线程句柄
+ */
 void WheatyExceptionReport::WriteStackDetails(
 PCONTEXT pContext,
 bool bWriteVariables, HANDLE pThreadHandle)                                      // true if local/params should be output
@@ -977,29 +1213,35 @@ bool bWriteVariables, HANDLE pThreadHandle)                                     
 
     DWORD dwMachineType = 0;
     // Could use SymSetOptions here to add the SYMOPT_DEFERRED_LOADS flag
+    // 可以在这里使用SymSetOptions添加SYMOPT_DEFERRED_LOADS标志
 
     STACKFRAME64 sf;
     memset(&sf, 0, sizeof(sf));
 
     // Initialize the STACKFRAME structure for the first call.
-    sf.AddrPC.Mode         = AddrModeFlat;
+    // 初始化STACKFRAME结构用于第一次调用
+    sf.AddrPC.Mode         = AddrModeFlat;   // 使用平坦内存模式
     sf.AddrStack.Mode      = AddrModeFlat;
     sf.AddrFrame.Mode      = AddrModeFlat;
 
+    // 根据不同的CPU架构设置寄存器
 #ifdef _M_IX86
-    sf.AddrPC.Offset       = pContext->Eip;
-    sf.AddrStack.Offset    = pContext->Esp;
-    sf.AddrFrame.Offset    = pContext->Ebp;
+    // x86架构（32位）
+    sf.AddrPC.Offset       = pContext->Eip;   // 指令指针
+    sf.AddrStack.Offset    = pContext->Esp;   // 栈指针
+    sf.AddrFrame.Offset    = pContext->Ebp;   // 帧指针
     dwMachineType = IMAGE_FILE_MACHINE_I386;
 #elif defined(_M_X64)
-    sf.AddrPC.Offset       = pContext->Rip;
-    sf.AddrStack.Offset    = pContext->Rsp;
-    sf.AddrFrame.Offset    = pContext->Rbp;
+    // x64架构（64位）
+    sf.AddrPC.Offset       = pContext->Rip;   // 指令指针
+    sf.AddrStack.Offset    = pContext->Rsp;   // 栈指针
+    sf.AddrFrame.Offset    = pContext->Rbp;   // 帧指针
     dwMachineType = IMAGE_FILE_MACHINE_AMD64;
 #elif defined(_M_ARM64)
-    sf.AddrPC.Offset       = pContext->Pc;
-    sf.AddrStack.Offset    = pContext->Sp;
-    sf.AddrFrame.Offset    = pContext->Fp;
+    // ARM64架构
+    sf.AddrPC.Offset       = pContext->Pc;    // 程序计数器
+    sf.AddrStack.Offset    = pContext->Sp;    // 栈指针
+    sf.AddrFrame.Offset    = pContext->Fp;    // 帧指针
     dwMachineType = IMAGE_FILE_MACHINE_ARM64;
 #endif
 
@@ -1792,10 +2034,21 @@ size_t countOverride)
     }
 }
 
+/**
+ * @brief 获取基本类型
+ *
+ * 根据类型索引查找对应的基本类型枚举值
+ *
+ * @param typeIndex 类型索引
+ * @param modBase 模块基址
+ * @return BasicType 基本类型枚举值，失败时返回btNoType
+ */
 BasicType
 WheatyExceptionReport::GetBasicType(DWORD typeIndex, DWORD64 modBase)
 {
     BasicType basicType;
+
+    // 尝试直接获取基本类型
     if (SymGetTypeInfo(m_hProcess, modBase, typeIndex,
         TI_GET_BASETYPE, &basicType))
     {
@@ -1804,6 +2057,7 @@ WheatyExceptionReport::GetBasicType(DWORD typeIndex, DWORD64 modBase)
 
     // Get the real "TypeId" of the child.  We need this for the
     // SymGetTypeInfo(TI_GET_TYPEID) call below.
+    // 获取子项的真实"TypeId"。我们需要这个用于下面的SymGetTypeInfo(TI_GET_TYPEID)调用
     DWORD typeId;
     if (SymGetTypeInfo(m_hProcess, modBase, typeIndex, TI_GET_TYPEID, &typeId))
     {
@@ -1817,14 +2071,25 @@ WheatyExceptionReport::GetBasicType(DWORD typeIndex, DWORD64 modBase)
     return btNoType;
 }
 
+/**
+ * @brief 安全解引用指针
+ *
+ * 尝试读取指针指向的内存，如果指针无效则返回-1
+ * 使用SEH保护，防止访问无效内存导致崩溃
+ *
+ * @param address 要解引用的地址
+ * @return DWORD_PTR 指向的值，或-1（如果指针无效）
+ */
 DWORD_PTR WheatyExceptionReport::DereferenceUnsafePointer(DWORD_PTR address)
 {
+    // 使用SEH保护内存访问
     __try
     {
         return *(PDWORD_PTR)address;
     }
     __except (EXCEPTION_EXECUTE_HANDLER)
     {
+        // 访问无效内存，返回-1
         return DWORD_PTR(-1);
     }
 }
@@ -1832,7 +2097,17 @@ DWORD_PTR WheatyExceptionReport::DereferenceUnsafePointer(DWORD_PTR address)
 //============================================================================
 // Helper function that writes to the report file, and allows the user to use
 // printf style formating
+// 辅助函数，写入报告文件，允许用户使用printf风格格式化
 //============================================================================
+/**
+ * @brief 日志输出函数
+ *
+ * 将格式化的文本写入崩溃报告文件
+ *
+ * @param format 格式化字符串（printf风格）
+ * @param ... 可变参数
+ * @return int 写入的字符数
+ */
 int __cdecl WheatyExceptionReport::Log(const TCHAR * format, ...)
 {
     va_list argptr;
@@ -1842,11 +2117,25 @@ int __cdecl WheatyExceptionReport::Log(const TCHAR * format, ...)
     return retValue;
 }
 
+/**
+ * @brief 存储符号到已处理符号集合
+ *
+ * 将符号添加到已处理符号集合中，用于去重
+ *
+ * @param type 符号类型
+ * @param offset 符号偏移量
+ * @return bool 成功添加返回true，符号已存在返回false
+ */
 bool WheatyExceptionReport::StoreSymbol(DWORD type, DWORD_PTR offset)
 {
     return symbols.insert(SymbolPair(type, offset)).second;
 }
 
+/**
+ * @brief 清空所有符号
+ *
+ * 清除已处理的符号集合和符号详情栈
+ */
 void WheatyExceptionReport::ClearSymbols()
 {
     symbols.clear();
@@ -1854,35 +2143,62 @@ void WheatyExceptionReport::ClearSymbols()
         symbolDetails.pop();
 }
 
+/**
+ * @brief 推入符号详情
+ *
+ * 打印当前符号并压入新的符号详情到栈中
+ * 用于构建符号的层次化输出
+ */
 void WheatyExceptionReport::PushSymbolDetail()
 {
     // Log current symbol and then add another to the stack to keep the hierarchy format
+    // 记录当前符号，然后向栈中添加另一个以保持层次结构格式
     PrintSymbolDetail();
     symbolDetails.emplace();
 }
 
+/**
+ * @brief 弹出符号详情
+ *
+ * 打印当前符号并从栈中弹出符号详情
+ */
 void WheatyExceptionReport::PopSymbolDetail()
 {
     PrintSymbolDetail();
     symbolDetails.pop();
 }
 
+/**
+ * @brief 打印符号详情
+ *
+ * 输出当前符号的详细信息到报告文件
+ * 使用缩进表示层次关系
+ */
 void WheatyExceptionReport::PrintSymbolDetail()
 {
     if (symbolDetails.empty())
         return;
 
     // Don't log anything if has been logged already or if it's empty
+    // 如果已经记录过或为空，则不记录任何内容
     if (symbolDetails.top().Logged || symbolDetails.top().empty())
         return;
 
     // Add appropriate indentation level (since this routine is recursive)
+    // 添加适当的缩进级别（因为此例程是递归的）
     for (size_t i = 0; i < symbolDetails.size(); i++)
         Log(_T("\t"));
 
     Log(_T("%s\r\n"), symbolDetails.top().ToString().c_str());
 }
 
+/**
+ * @brief 将符号详情转换为字符串
+ *
+ * 构建符号的字符串表示，包括前缀、类型、后缀、名称和值
+ *
+ * @return std::string 符号的字符串表示
+ */
 std::string SymbolDetail::ToString()
 {
     Logged = true;

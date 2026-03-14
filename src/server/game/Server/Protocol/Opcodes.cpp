@@ -15,6 +15,21 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file Opcodes.cpp
+ * @brief 网络操作码实现模块 - 实现操作码处理器的注册和管理
+ *
+ * 本模块实现了操作码表的管理和初始化，包括：
+ * 1. 数据包处理器模板类，用于类型安全的数据包处理
+ * 2. 操作码表的初始化，注册所有操作码及其处理函数
+ * 3. 操作码名称查询功能，用于日志记录
+ *
+ * 主要设计模式：
+ * - 模板特化：针对不同类型的数据包使用不同的处理方式
+ * - 单例模式：全局操作码表只有一个实例
+ * - 注册表模式：所有操作码在初始化时注册到表中
+ */
+
 #include "Opcodes.h"
 #include "Log.h"
 #include "WorldSession.h"
@@ -22,109 +37,234 @@
 #include <iomanip>
 #include <sstream>
 
+/**
+ * @class PacketHandler
+ * @brief 数据包处理器模板类 - 处理特定类型的数据包
+ *
+ * 这是一个模板类，用于将接收到的WorldPacket转换为特定类型的PacketClass，
+ * 然后调用对应的处理函数。通过模板特化，实现了类型安全的数据包处理。
+ *
+ * @tparam PacketClass 数据包类型（如特定的消息结构体）
+ * @tparam HandlerFunction WorldSession的成员函数指针，用于处理数据包
+ *
+ * 处理流程：
+ * 1. 接收WorldPacket对象
+ * 2. 将WorldPacket移动构造为PacketClass对象
+ * 3. 调用PacketClass的Read()方法解析数据
+ * 4. 调用指定的处理函数处理数据包
+ */
 template<class PacketClass, void(WorldSession::*HandlerFunction)(PacketClass&)>
 class PacketHandler : public ClientOpcodeHandler
 {
 public:
+    /**
+     * @brief 构造函数 - 初始化数据包处理器
+     * @param name 操作码名称
+     * @param status 所需会话状态
+     * @param processing 处理方式
+     */
     PacketHandler(char const* name, SessionStatus status, PacketProcessing processing) : ClientOpcodeHandler(name, status, processing) { }
 
+    /**
+     * @brief 调用处理函数 - 处理数据包
+     * @param session 玩家会话对象指针
+     * @param packet 接收到的数据包
+     *
+     * 处理流程：
+     * 1. 将WorldPacket移动构造为特定类型的PacketClass对象
+     * 2. 调用Read()方法解析数据包内容
+     * 3. 调用WorldSession的处理函数处理数据包
+     *
+     * @note 性能注意事项：使用移动语义避免数据拷贝
+     */
     void Call(WorldSession* session, WorldPacket& packet) const override
     {
-        PacketClass nicePacket(std::move(packet));
-        nicePacket.Read();
-        (session->*HandlerFunction)(nicePacket);
+        PacketClass nicePacket(std::move(packet));  // 使用移动语义构造特定类型的数据包
+        nicePacket.Read();                           // 解析数据包内容
+        (session->*HandlerFunction)(nicePacket);    // 调用处理函数
     }
 };
 
+/**
+ * @brief PacketHandler的模板特化 - 直接处理WorldPacket
+ *
+ * 当处理函数直接接受WorldPacket参数时，不需要额外的数据包转换。
+ * 这个特化版本直接将数据包传递给处理函数。
+ *
+ * @tparam HandlerFunction 接受WorldPacket引用的处理函数指针
+ */
 template<void(WorldSession::*HandlerFunction)(WorldPacket&)>
 class PacketHandler<WorldPacket, HandlerFunction> : public ClientOpcodeHandler
 {
 public:
     PacketHandler(char const* name, SessionStatus status, PacketProcessing processing) : ClientOpcodeHandler(name, status, processing) { }
 
+    /**
+     * @brief 调用处理函数 - 直接传递WorldPacket
+     * @param session 玩家会话对象指针
+     * @param packet 接收到的数据包
+     *
+     * 直接调用处理函数，不进行数据包类型转换。
+     * 用于不需要结构化解析的简单数据包。
+     */
     void Call(WorldSession* session, WorldPacket& packet) const override
     {
-        (session->*HandlerFunction)(packet);
+        (session->*HandlerFunction)(packet);  // 直接调用处理函数
     }
 };
 
-OpcodeTable opcodeTable;
+OpcodeTable opcodeTable;  // 全局操作码表对象 - 单例模式
 
+/**
+ * @struct get_packet_class
+ * @brief 类型萃取模板 - 从成员函数指针中提取数据包类型
+ *
+ * 这个辅助模板用于在编译时从处理函数的签名中提取PacketClass类型。
+ * 主要用于PacketHandler的构造。
+ */
 template<typename T>
 struct get_packet_class
 {
 };
 
+/**
+ * @brief get_packet_class的模板特化 - 提取数据包类型
+ *
+ * 从 void(WorldSession::*)(PacketClass&) 形式的成员函数指针中
+ * 提取出PacketClass类型。
+ *
+ * @tparam PacketClass 数据包类型
+ */
 template<typename PacketClass>
 struct get_packet_class<void(WorldSession::*)(PacketClass&)>
 {
-    using type = PacketClass;
+    using type = PacketClass;  // 定义type为PacketClass
 };
 
+/**
+ * @brief OpcodeTable构造函数 - 初始化操作码表
+ *
+ * 将所有操作码处理器的指针初始化为nullptr。
+ */
 OpcodeTable::OpcodeTable()
 {
     memset(_internalTableClient, 0, sizeof(_internalTableClient));
 }
 
+/**
+ * @brief OpcodeTable析构函数 - 清理操作码处理器
+ *
+ * 遍历操作码表并删除所有已注册的处理器对象。
+ */
 OpcodeTable::~OpcodeTable()
 {
     for (uint16 i = 0; i < NUM_OPCODE_HANDLERS; ++i)
         delete _internalTableClient[i];
 }
 
+/**
+ * @brief 验证并设置客户端操作码处理器
+ *
+ * 执行三重验证：
+ * 1. 操作码不能为NULL_OPCODE
+ * 2. 操作码必须在有效范围内
+ * 3. 操作码不能被重复注册
+ *
+ * 验证通过后，创建PacketHandler对象并注册到表中。
+ *
+ * @tparam Handler 处理函数类型
+ * @tparam HandlerFunction 处理函数指针
+ * @param opcode 操作码
+ * @param name 操作码名称
+ * @param status 所需会话状态
+ * @param processing 处理方式
+ */
 template<typename Handler, Handler HandlerFunction>
 void OpcodeTable::ValidateAndSetClientOpcode(OpcodeClient opcode, char const* name, SessionStatus status, PacketProcessing processing)
 {
+    // 验证操作码是否有效（不能为NULL_OPCODE）
     if (uint32(opcode) == NULL_OPCODE)
     {
         TC_LOG_ERROR("network", "Opcode {} does not have a value", name);
         return;
     }
 
+    // 验证操作码是否在有效范围内
     if (uint32(opcode) >= NUM_OPCODE_HANDLERS)
     {
         TC_LOG_ERROR("network", "Tried to set handler for an invalid opcode {}", opcode);
         return;
     }
 
+    // 验证操作码是否已被注册（不允许重复注册）
     if (_internalTableClient[opcode] != nullptr)
     {
         TC_LOG_ERROR("network", "Tried to override client handler of {} with {} (opcode {})", opcodeTable[opcode]->Name, name, opcode);
         return;
     }
 
+    // 创建并注册处理器
     _internalTableClient[opcode] = new PacketHandler<typename get_packet_class<Handler>::type, HandlerFunction>(name, status, processing);
 }
 
+/**
+ * @brief 验证并设置服务器操作码处理器
+ *
+ * 服务器操作码使用Handle_ServerSide作为统一的处理函数。
+ * 验证逻辑与客户端操作码类似。
+ *
+ * @param opcode 操作码
+ * @param name 操作码名称
+ * @param status 操作码状态
+ */
 void OpcodeTable::ValidateAndSetServerOpcode(OpcodeServer opcode, char const* name, SessionStatus status)
 {
+    // 验证操作码是否有效
     if (uint32(opcode) == NULL_OPCODE)
     {
         TC_LOG_ERROR("network", "Opcode {} does not have a value", name);
         return;
     }
 
+    // 验证操作码是否在有效范围内
     if (uint32(opcode) >= NUM_OPCODE_HANDLERS)
     {
         TC_LOG_ERROR("network", "Tried to set handler for an invalid opcode {}", opcode);
         return;
     }
 
+    // 验证操作码是否已被注册
     if (_internalTableClient[opcode] != nullptr)
     {
         TC_LOG_ERROR("network", "Tried to override server handler of {} with {} (opcode {})", opcodeTable[opcode]->Name, name, opcode);
         return;
     }
 
+    // 为服务器操作码创建统一的处理器（使用Handle_ServerSide）
     _internalTableClient[opcode] = new PacketHandler<WorldPacket, &WorldSession::Handle_ServerSide>(name, status, PROCESS_INPLACE);
 }
 
-/// Correspondence between opcodes and their names
+/**
+ * @brief 初始化操作码表 - 注册所有操作码处理器
+ *
+ * 使用宏定义简化操作码处理器的注册过程。
+ * DEFINE_HANDLER用于客户端操作码，DEFINE_SERVER_OPCODE_HANDLER用于服务器操作码。
+ *
+ * 宏参数说明：
+ * - opcode: 操作码枚举值
+ * - status: 所需的会话状态
+ * - processing: 处理方式（线程安全/非线程安全/立即处理）
+ * - handler: 处理函数指针
+ */
 void OpcodeTable::Initialize()
 {
+    // 宏定义：注册客户端操作码处理器
+    // 使用decltype自动推导处理函数类型
 #define DEFINE_HANDLER(opcode, status, processing, handler) \
     ValidateAndSetClientOpcode<decltype(handler), handler>(opcode, #opcode, status, processing)
 
+    // 宏定义：注册服务器操作码处理器
+    // 服务器操作码的状态必须是STATUS_NEVER或STATUS_UNHANDLED
 #define DEFINE_SERVER_OPCODE_HANDLER(opcode, status) \
     static_assert(status == STATUS_NEVER || status == STATUS_UNHANDLED, "Invalid status for server opcode"); \
     ValidateAndSetServerOpcode(opcode, #opcode, status)
@@ -1440,11 +1580,26 @@ void OpcodeTable::Initialize()
     /*0x51D*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_COMMENTATOR_SKIRMISH_QUEUE_RESULT2, STATUS_NEVER);
     /*0x51E*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_MULTIPLE_MOVES,   STATUS_NEVER);
 
+    // 取消宏定义，避免污染全局命名空间
 #undef DEFINE_HANDLER
 
 #undef DEFINE_SERVER_OPCODE_HANDLER
 }
 
+/**
+ * @brief 获取操作码名称用于日志记录（实现模板）
+ *
+ * 将操作码转换为可读的字符串格式，格式为：[OPCODE_NAME 0xHEX (DECIMAL)]
+ *
+ * @tparam T 操作码类型（Opcodes或uint16）
+ * @param id 操作码值
+ * @return 格式化的操作码名称字符串
+ *
+ * 格式示例：
+ * - 已知操作码: [CMSG_PLAYER_LOGIN 0x003D (61)]
+ * - 未知操作码: [UNKNOWN OPCODE 0x0FFF (4095)]
+ * - 无效操作码: [INVALID OPCODE 0xFFFF (65535)]
+ */
 template<typename T>
 inline std::string GetOpcodeNameForLoggingImpl(T id)
 {
@@ -1452,20 +1607,33 @@ inline std::string GetOpcodeNameForLoggingImpl(T id)
     std::ostringstream ss;
     ss << '[';
 
+    // 检查操作码是否在有效范围内
     if (static_cast<uint16>(id) < NUM_OPCODE_HANDLERS)
     {
+        // 尝试从操作码表获取处理器
         if (OpcodeHandler const* handler = opcodeTable[id])
-            ss << handler->Name;
+            ss << handler->Name;           // 已注册的操作码，显示名称
         else
-            ss << "UNKNOWN OPCODE";
+            ss << "UNKNOWN OPCODE";        // 未注册的操作码
     }
     else
-        ss << "INVALID OPCODE";
+        ss << "INVALID OPCODE";            // 超出范围的操作码
 
+    // 添加十六进制和十进制表示
     ss << " 0x" << std::hex << std::setw(4) << std::setfill('0') << std::uppercase << opcode << std::nouppercase << std::dec << " (" << opcode << ")]";
     return ss.str();
 }
 
+/**
+ * @brief 获取操作码名称用于日志记录
+ * @param opcode 操作码枚举值
+ * @return 格式化的操作码名称字符串
+ *
+ * 这是GetOpcodeNameForLoggingImpl的公开接口，
+ * 专门用于Opcodes类型的操作码。
+ *
+ * @note 调用时机：日志记录、错误处理、调试输出时
+ */
 std::string GetOpcodeNameForLogging(Opcodes opcode)
 {
     return GetOpcodeNameForLoggingImpl(opcode);

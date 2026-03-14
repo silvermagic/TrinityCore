@@ -15,6 +15,14 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file InstanceScript.cpp
+ * @brief 副本脚本基类实现文件
+ *
+ * 实现了副本脚本的核心功能,包括首领状态管理、门和仆从控制、
+ * 实例数据保存/加载、玩家事件处理、成就检查等功能。
+ */
+
 #include "InstanceScript.h"
 #include "AreaBoundary.h"
 #include "Creature.h"

@@ -15,7 +15,23 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-/*
+/**
+ * @file spell_druid.cpp
+ * @brief 德鲁伊法术脚本模块
+ *
+ * 本模块实现德鲁伊职业相关法术的脚本逻辑，包括：
+ * - 平衡系：月火术、愤怒、星火术、飓风、自然之握、日月蚀等
+ * - 野性系：凶暴撕咬、撕碎、割裂、斜掠、裂伤、狂暴等
+ * - 守护系：熊形态、巨熊形态、挫志咆哮、狂暴回复等
+ * - 恢复系：回春术、生命绽放、愈合、迅捷治愈、野性成长等
+ *
+ * 法术脚本主要处理：
+ * - 形态变换和属性变化
+ * - 持续治疗和伤害效果
+ * - 日月蚀触发机制
+ * - 天赋和雕文的特殊处理
+ * - 套装效果的额外处理
+ *
  * Scripts for spells with SPELLFAMILY_DRUID and SPELLFAMILY_GENERIC spells used by druid players.
  * Ordered alphabetically using scriptname.
  * Scriptnames of files in this file should be prefixed with "spell_dru_".
@@ -31,74 +47,84 @@
 #include "SpellMgr.h"
 #include "SpellScript.h"
 
+/**
+ * @brief 德鲁伊法术ID枚举
+ *
+ * 定义德鲁伊法术脚本使用的各种法术ID
+ */
 enum DruidSpells
 {
-    SPELL_DRUID_BEAR_FORM_PASSIVE           = 1178,
-    SPELL_DRUID_DIRE_BEAR_FORM_PASSIVE      = 9635,
-    SPELL_DRUID_ECLIPSE_LUNAR_PROC          = 48518,
-    SPELL_DRUID_ECLIPSE_SOLAR_PROC          = 48517,
-    SPELL_DRUID_FORMS_TRINKET_BEAR          = 37340,
-    SPELL_DRUID_FORMS_TRINKET_CAT           = 37341,
-    SPELL_DRUID_FORMS_TRINKET_MOONKIN       = 37343,
-    SPELL_DRUID_FORMS_TRINKET_NONE          = 37344,
-    SPELL_DRUID_FORMS_TRINKET_TREE          = 37342,
-    SPELL_DRUID_ENRAGE                      = 5229,
-    SPELL_DRUID_ENRAGE_MOD_DAMAGE           = 51185,
-    SPELL_DRUID_ENRAGED_DEFENSE             = 70725,
-    SPELL_DRUID_GLYPH_OF_TYPHOON            = 62135,
-    SPELL_DRUID_IDOL_OF_FERAL_SHADOWS       = 34241,
-    SPELL_DRUID_IDOL_OF_WORSHIP             = 60774,
-    SPELL_DRUID_INCREASED_MOONFIRE_DURATION = 38414,
-    SPELL_DRUID_ITEM_T8_BALANCE_RELIC       = 64950,
-    SPELL_DRUID_ITEM_T10_FERAL_4P_BONUS     = 70726,
-    SPELL_DRUID_KING_OF_THE_JUNGLE          = 48492,
-    SPELL_DRUID_LIFEBLOOM_ENERGIZE          = 64372,
-    SPELL_DRUID_LIFEBLOOM_FINAL_HEAL        = 33778,
-    SPELL_DRUID_LIVING_SEED_HEAL            = 48503,
-    SPELL_DRUID_LIVING_SEED_PROC            = 48504,
-    SPELL_DRUID_NATURES_SPLENDOR            = 57865,
-    SPELL_DRUID_SURVIVAL_INSTINCTS          = 50322,
-    SPELL_DRUID_SAVAGE_ROAR                 = 62071,
-    SPELL_DRUID_T9_FERAL_RELIC_BEAR         = 67354,
-    SPELL_DRUID_T9_FERAL_RELIC_CAT          = 67355,
-    SPELL_DRUID_TIGER_S_FURY_ENERGIZE       = 51178,
-    SPELL_DRUID_T3_PROC_ENERGIZE_MANA       = 28722,
-    SPELL_DRUID_T3_PROC_ENERGIZE_RAGE       = 28723,
-    SPELL_DRUID_T3_PROC_ENERGIZE_ENERGY     = 28724,
-    SPELL_DRUID_BLESSING_OF_THE_CLAW        = 28750,
-    SPELL_DRUID_REVITALIZE_ENERGIZE_MANA    = 48542,
-    SPELL_DRUID_REVITALIZE_ENERGIZE_RAGE    = 48541,
-    SPELL_DRUID_REVITALIZE_ENERGIZE_ENERGY  = 48540,
-    SPELL_DRUID_REVITALIZE_ENERGIZE_RP      = 48543,
-    SPELL_DRUID_GLYPH_OF_INNERVATE_REGEN    = 54833,
-    SPELL_DRUID_GLYPH_OF_STARFIRE_SCRIPT    = 54846,
-    SPELL_DRUID_GLYPH_OF_RIP                = 54818,
-    SPELL_DRUID_RIP_DURATION_LACERATE_DMG   = 60141,
-    SPELL_DRUID_GLYPH_OF_RAKE_TRIGGERED     = 54820,
-    SPELL_DRUID_IMP_LEADER_OF_THE_PACK_R1   = 34297,
-    SPELL_DRUID_IMP_LEADER_OF_THE_PACK_HEAL = 34299,
-    SPELL_DRUID_IMP_LEADER_OF_THE_PACK_MANA = 68285,
-    SPELL_DRUID_EXHILARATE                  = 28742,
-    SPELL_DRUID_GLYPH_OF_REJUVENATION_HEAL  = 54755,
-    SPELL_DRUID_INFUSION                    = 37238,
-    SPELL_DRUID_BLESSING_OF_REMULOS         = 40445,
-    SPELL_DRUID_BLESSING_OF_ELUNE           = 40446,
-    SPELL_DRUID_BLESSING_OF_CENARIUS        = 40452,
-    SPELL_DRUID_LANGUISH                    = 71023,
-    SPELL_DRUID_REJUVENATION_T10_PROC       = 70691,
-    SPELL_DRUID_BALANCE_T10_BONUS           = 70718,
-    SPELL_DRUID_BALANCE_T10_BONUS_PROC      = 70721,
-    SPELL_DRUID_BARKSKIN_01                 = 63058,
-    SPELL_DRUID_RESTORATION_T10_2P_BONUS    = 70658,
-    SPELL_DRUID_FRENZIED_REGENERATION_HEAL  = 22845,
-    SPELL_DRUID_GLYPH_OF_NOURISH            = 62971,
-    SPELL_DRUID_NURTURING_INSTINCT_R1       = 47179,
-    SPELL_DRUID_NURTURING_INSTINCT_R2       = 47180
+    SPELL_DRUID_BEAR_FORM_PASSIVE           = 1178,   ///< 熊形态被动
+    SPELL_DRUID_DIRE_BEAR_FORM_PASSIVE      = 9635,   ///< 巨熊形态被动
+    SPELL_DRUID_ECLIPSE_LUNAR_PROC          = 48518,  ///< 月蚀触发 - 星火术增益
+    SPELL_DRUID_ECLIPSE_SOLAR_PROC          = 48517,  ///< 日蚀触发 - 愤怒增益
+    SPELL_DRUID_FORMS_TRINKET_BEAR          = 37340,  ///< 熊形态饰品效果
+    SPELL_DRUID_FORMS_TRINKET_CAT           = 37341,  ///< 猫形态饰品效果
+    SPELL_DRUID_FORMS_TRINKET_MOONKIN       = 37343,  ///< 枭兽形态饰品效果
+    SPELL_DRUID_FORMS_TRINKET_NONE          = 37344,  ///< 无形态饰品效果
+    SPELL_DRUID_FORMS_TRINKET_TREE          = 37342,  ///< 树形态饰品效果
+    SPELL_DRUID_ENRAGE                      = 5229,   ///< 激怒 - 产生怒气
+    SPELL_DRUID_ENRAGE_MOD_DAMAGE           = 51185,  ///< 激怒伤害修正
+    SPELL_DRUID_ENRAGED_DEFENSE             = 70725,  ///< 激怒防御
+    SPELL_DRUID_GLYPH_OF_TYPHOON            = 62135,  ///< 台风雕文
+    SPELL_DRUID_IDOL_OF_FERAL_SHADOWS       = 34241,  ///< 野性暗影神像
+    SPELL_DRUID_IDOL_OF_WORSHIP             = 60774,  ///< 崇拜神像
+    SPELL_DRUID_INCREASED_MOONFIRE_DURATION = 38414,  ///< 增强月火术持续时间
+    SPELL_DRUID_ITEM_T8_BALANCE_RELIC       = 64950,  ///< T8平衡圣物
+    SPELL_DRUID_ITEM_T10_FERAL_4P_BONUS     = 70726,  ///< T10野性4件套奖励
+    SPELL_DRUID_KING_OF_THE_JUNGLE          = 48492,  ///< 丛林之王 - 激怒减少伤害
+    SPELL_DRUID_LIFEBLOOM_ENERGIZE          = 64372,  ///< 生命绽放充能 - 返还法力
+    SPELL_DRUID_LIFEBLOOM_FINAL_HEAL        = 33778,  ///< 生命绽放最终治疗
+    SPELL_DRUID_LIVING_SEED_HEAL            = 48503,  ///< 活种治疗
+    SPELL_DRUID_LIVING_SEED_PROC            = 48504,  ///< 活种触发
+    SPELL_DRUID_NATURES_SPLENDOR            = 57865,  ///< 自然之美 - 延长持续效果
+    SPELL_DRUID_SURVIVAL_INSTINCTS          = 50322,  ///< 生存本能 - 临时增加生命值
+    SPELL_DRUID_SAVAGE_ROAR                 = 62071,  ///< 野蛮咆哮 - 增加伤害
+    SPELL_DRUID_T9_FERAL_RELIC_BEAR         = 67354,  ///< T9野性圣物熊
+    SPELL_DRUID_T9_FERAL_RELIC_CAT          = 67355,  ///< T9野性圣物猫
+    SPELL_DRUID_TIGER_S_FURY_ENERGIZE       = 51178,  ///< 猛虎之怒充能
+    SPELL_DRUID_T3_PROC_ENERGIZE_MANA       = 28722,  ///< T3触发充能法力
+    SPELL_DRUID_T3_PROC_ENERGIZE_RAGE       = 28723,  ///< T3触发充能怒气
+    SPELL_DRUID_T3_PROC_ENERGIZE_ENERGY     = 28724,  ///< T3触发充能量量
+    SPELL_DRUID_BLESSING_OF_THE_CLAW        = 28750,  ///< 利爪祝福
+    SPELL_DRUID_REVITALIZE_ENERGIZE_MANA    = 48542,  ///< 滋养充能法力
+    SPELL_DRUID_REVITALIZE_ENERGIZE_RAGE    = 48541,  ///< 滋养充能怒气
+    SPELL_DRUID_REVITALIZE_ENERGIZE_ENERGY  = 48540,  ///< 滋养充能量量
+    SPELL_DRUID_REVITALIZE_ENERGIZE_RP      = 48543,  ///< 滋养充能符文能量
+    SPELL_DRUID_GLYPH_OF_INNERVATE_REGEN    = 54833,  ///< 激活雕文恢复
+    SPELL_DRUID_GLYPH_OF_STARFIRE_SCRIPT    = 54846,  ///< 星火术雕文脚本
+    SPELL_DRUID_GLYPH_OF_RIP                = 54818,  ///< 割裂雕文
+    SPELL_DRUID_RIP_DURATION_LACERATE_DMG   = 60141,  ///< 割裂持续时间撕裂伤害
+    SPELL_DRUID_GLYPH_OF_RAKE_TRIGGERED     = 54820,  ///< 斜掠雕文触发
+    SPELL_DRUID_IMP_LEADER_OF_THE_PACK_R1   = 34297,  ///< 强化兽群领袖等级1
+    SPELL_DRUID_IMP_LEADER_OF_THE_PACK_HEAL = 34299,  ///< 强化兽群领袖治疗
+    SPELL_DRUID_IMP_LEADER_OF_THE_PACK_MANA = 68285,  ///< 强化兽群领袖法力
+    SPELL_DRUID_EXHILARATE                  = 28742,  ///< 振奋
+    SPELL_DRUID_GLYPH_OF_REJUVENATION_HEAL  = 54755,  ///< 回春术雕文治疗
+    SPELL_DRUID_INFUSION                    = 37238,  ///< 输注
+    SPELL_DRUID_BLESSING_OF_REMULOS         = 40445,  ///< 雷穆洛斯的祝福
+    SPELL_DRUID_BLESSING_OF_ELUNE           = 40446,  ///< 伊露恩的祝福
+    SPELL_DRUID_BLESSING_OF_CENARIUS        = 40452,  ///< 塞纳里奥的祝福
+    SPELL_DRUID_LANGUISH                    = 71023,  ///< 衰弱
+    SPELL_DRUID_REJUVENATION_T10_PROC       = 70691,  ///< 回春术T10触发
+    SPELL_DRUID_BALANCE_T10_BONUS           = 70718,  ///< 平衡T10奖励
+    SPELL_DRUID_BALANCE_T10_BONUS_PROC      = 70721,  ///< 平衡T10奖励触发
+    SPELL_DRUID_BARKSKIN_01                 = 63058,  ///< 树皮术01
+    SPELL_DRUID_RESTORATION_T10_2P_BONUS    = 70658,  ///< 恢复T10 2件套奖励
+    SPELL_DRUID_FRENZIED_REGENERATION_HEAL  = 22845,  ///< 狂暴回复治疗
+    SPELL_DRUID_GLYPH_OF_NOURISH            = 62971,  ///< 滋养雕文
+    SPELL_DRUID_NURTURING_INSTINCT_R1       = 47179,  ///< 培育本能等级1
+    SPELL_DRUID_NURTURING_INSTINCT_R2       = 47180   ///< 培育本能等级2
 };
 
+/**
+ * @brief 杂项法术枚举
+ *
+ * 定义法术类别ID
+ */
 enum MiscSpells
 {
-    SPELL_CATEGORY_MANGLE_BEAR              = 971
+    SPELL_CATEGORY_MANGLE_BEAR              = 971     ///< 裂伤（熊）法术类别
 };
 
 // 22812 - Barkskin

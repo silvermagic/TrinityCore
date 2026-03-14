@@ -15,6 +15,38 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file npcs_special.cpp
+ * @brief 特殊NPC脚本模块集合
+ *
+ * 本模块包含游戏中各种特殊NPC的脚本实现，涵盖以下功能：
+ *
+ * 主要功能模块：
+ * - npc_air_force_bots: 空中防御机器人（检测和攻击飞行玩家）
+ * - npc_chicken_cluck: 鸡（隐藏任务触发机制）
+ * - npc_dancing_flames: 舞动火焰（仲夏节节日NPC）
+ * - npc_torch_tossing_target_bunny_controller: 火把投掷目标控制器
+ * - npc_midsummer_bunny_pole: 仲夏节彩带柱
+ * - npc_doctor: 医生NPC（治疗任务）
+ * - npc_injured_patient: 受伤病人
+ * - npc_garments_of_quests: 任务长袍相关NPC
+ * - npc_guardian: 守护者
+ * - npc_steam_tonk: 蒸汽坦克
+ * - npc_tournament_mount: 比赛坐骑
+ * - npc_brewfest_reveler: 美酒节狂欢者
+ * - npc_wormhole: 虫洞传送NPC
+ * - npc_pet_trainer: 宠物训练师
+ * - npc_experience: 经验值相关NPC
+ * - npc_spring_rabbit: 春节兔子
+ * - npc_imp_in_a_ball: 球中的小鬼（占卜物品）
+ * - npc_stable_master: 稳定大师
+ * - npc_train_wrecker: 火车破坏者（冬日节）
+ * - npc_argent_squire_gruntling: 银色侍从/步兵
+ * - npc_bountiful_table: 丰收节餐桌
+ *
+ * 这些脚本实现了游戏中各种特殊交互、节日活动、隐藏任务等复杂功能。
+ */
+
 #include "ScriptMgr.h"
 #include "CellImpl.h"
 #include "CombatAI.h"
@@ -42,62 +74,116 @@
 # npc_air_force_bots
 #########*/
 
+/**
+ * @brief 空中防御机器人类型枚举
+ *
+ * 定义两种不同类型的空中防御机器人行为模式
+ */
 enum AirForceBots
 {
-    TRIPWIRE, // do not attack flying players, smaller range
-    ALARMBOT, // attack flying players, casts guard's mark
+    TRIPWIRE,   ///< 绊线型机器人：不攻击飞行玩家，检测范围较小（15码）
+    ALARMBOT,   ///< 警报机器人：攻击飞行玩家，施放守卫标记，检测范围大（100码）
 
-    SPELL_GUARDS_MARK = 38067
+    SPELL_GUARDS_MARK = 38067  ///< 守卫标记法术ID，用于标记敌对玩家
 };
 
+/// 绊线型机器人的检测范围（码）
 float constexpr RANGE_TRIPWIRE =  15.0f;
+/// 警报机器人的检测范围（码）
 float constexpr RANGE_ALARMBOT = 100.0f;
 
+/**
+ * @brief 空中防御机器人刷新配置结构体
+ *
+ * 定义每种空中防御机器人NPC的刷新配置，包括：
+ * - 自身NPC Entry ID
+ * - 关联的守卫NPC Entry ID
+ * - 机器人类型（绊线/警报）
+ */
 struct AirForceSpawn
 {
-    uint32 myEntry;
-    uint32 otherEntry;
-    AirForceBots type;
+    uint32 myEntry;       ///< 当前NPC的Entry ID（检测者）
+    uint32 otherEntry;    ///< 关联守卫NPC的Entry ID（被召唤的守卫）
+    AirForceBots type;    ///< 机器人类型
 };
 
+/**
+ * @brief 空中防御机器人刷新配置数组
+ *
+ * 定义了所有空中防御机器人的配置数据，包括联盟、部落和中立阵营的各种机器人。
+ * 每个配置包含检测机器人和被召唤的守卫之间的映射关系。
+ */
 AirForceSpawn constexpr airforceSpawns[] =
 {
-    {2614,  15241, ALARMBOT}, // Air Force Alarm Bot (Alliance)
-    {2615,  15242, ALARMBOT}, // Air Force Alarm Bot (Horde)
-    {21974, 21976, ALARMBOT}, // Air Force Alarm Bot (Area 52)
-    {21993, 15242, ALARMBOT}, // Air Force Guard Post (Horde - Bat Rider)
-    {21996, 15241, ALARMBOT}, // Air Force Guard Post (Alliance - Gryphon)
-    {21997, 21976, ALARMBOT}, // Air Force Guard Post (Goblin - Area 52 - Zeppelin)
-    {21999, 15241, TRIPWIRE}, // Air Force Trip Wire - Rooftop (Alliance)
-    {22001, 15242, TRIPWIRE}, // Air Force Trip Wire - Rooftop (Horde)
-    {22002, 15242, TRIPWIRE}, // Air Force Trip Wire - Ground (Horde)
-    {22003, 15241, TRIPWIRE}, // Air Force Trip Wire - Ground (Alliance)
-    {22063, 21976, TRIPWIRE}, // Air Force Trip Wire - Rooftop (Goblin - Area 52)
-    {22065, 22064, ALARMBOT}, // Air Force Guard Post (Ethereal - Stormspire)
-    {22066, 22067, ALARMBOT}, // Air Force Guard Post (Scryer - Dragonhawk)
-    {22068, 22064, TRIPWIRE}, // Air Force Trip Wire - Rooftop (Ethereal - Stormspire)
-    {22069, 22064, ALARMBOT}, // Air Force Alarm Bot (Stormspire)
-    {22070, 22067, TRIPWIRE}, // Air Force Trip Wire - Rooftop (Scryer)
-    {22071, 22067, ALARMBOT}, // Air Force Alarm Bot (Scryer)
-    {22078, 22077, ALARMBOT}, // Air Force Alarm Bot (Aldor)
-    {22079, 22077, ALARMBOT}, // Air Force Guard Post (Aldor - Gryphon)
-    {22080, 22077, TRIPWIRE}, // Air Force Trip Wire - Rooftop (Aldor)
-    {22086, 22085, ALARMBOT}, // Air Force Alarm Bot (Sporeggar)
-    {22087, 22085, ALARMBOT}, // Air Force Guard Post (Sporeggar - Spore Bat)
-    {22088, 22085, TRIPWIRE}, // Air Force Trip Wire - Rooftop (Sporeggar)
-    {22090, 22089, ALARMBOT}, // Air Force Guard Post (Toshley's Station - Flying Machine)
-    {22124, 22122, ALARMBOT}, // Air Force Alarm Bot (Cenarion)
-    {22125, 22122, ALARMBOT}, // Air Force Guard Post (Cenarion - Stormcrow)
-    {22126, 22122, ALARMBOT}  // Air Force Trip Wire - Rooftop (Cenarion Expedition)
+    {2614,  15241, ALARMBOT}, // 空军警报机器人（联盟）
+    {2615,  15242, ALARMBOT}, // 空军警报机器人（部落）
+    {21974, 21976, ALARMBOT}, // 空军警报机器人（52区）
+    {21993, 15242, ALARMBOT}, // 空军守卫哨站（部落 - 蝙蝠骑士）
+    {21996, 15241, ALARMBOT}, // 空军守卫哨站（联盟 - 狮鹫）
+    {21997, 21976, ALARMBOT}, // 空军守卫哨站（地精 - 52区 - 飞艇）
+    {21999, 15241, TRIPWIRE}, // 空军绊线 - 屋顶（联盟）
+    {22001, 15242, TRIPWIRE}, // 空军绊线 - 屋顶（部落）
+    {22002, 15242, TRIPWIRE}, // 空军绊线 - 地面（部落）
+    {22003, 15241, TRIPWIRE}, // 空军绊线 - 地面（联盟）
+    {22063, 21976, TRIPWIRE}, // 空军绊线 - 屋顶（地精 - 52区）
+    {22065, 22064, ALARMBOT}, // 空军守卫哨站（虚灵 - 风暴尖塔）
+    {22066, 22067, ALARMBOT}, // 空军守卫哨站（占星者 - 龙鹰）
+    {22068, 22064, TRIPWIRE}, // 空军绊线 - 屋顶（虚灵 - 风暴尖塔）
+    {22069, 22064, ALARMBOT}, // 空军警报机器人（风暴尖塔）
+    {22070, 22067, TRIPWIRE}, // 空军绊线 - 屋顶（占星者）
+    {22071, 22067, ALARMBOT}, // 空军警报机器人（占星者）
+    {22078, 22077, ALARMBOT}, // 空军警报机器人（奥尔多）
+    {22079, 22077, ALARMBOT}, // 空军守卫哨站（奥尔多 - 狮鹫）
+    {22080, 22077, TRIPWIRE}, // 空军绊线 - 屋顶（奥尔多）
+    {22086, 22085, ALARMBOT}, // 空军警报机器人（孢子村）
+    {22087, 22085, ALARMBOT}, // 空军守卫哨站（孢子村 - 孢子蝠）
+    {22088, 22085, TRIPWIRE}, // 空军绊线 - 屋顶（孢子村）
+    {22090, 22089, ALARMBOT}, // 空军守卫哨站（托什雷的基地 - 飞行器）
+    {22124, 22122, ALARMBOT}, // 空军警报机器人（塞纳里奥）
+    {22125, 22122, ALARMBOT}, // 空军守卫哨站（塞纳里奥 - 风暴乌鸦）
+    {22126, 22122, ALARMBOT}  // 空军绊线 - 屋顶（塞纳里奥远征队）
 };
 
+/**
+ * @brief 空中防御机器人脚本类
+ *
+ * 实现空中防御机器人的AI逻辑，用于检测并召唤守卫攻击敌对玩家。
+ * 主要功能：
+ * - 检测进入范围内的敌对玩家
+ * - 召唤对应的守卫NPC
+ * - 对警报型机器人：施放守卫标记法术
+ * - 对绊线型机器人：不检测飞行玩家
+ *
+ * 该系统用于防止玩家在某些区域非法飞行或进入禁区。
+ */
 class npc_air_force_bots : public CreatureScript
 {
 public:
+    /**
+     * @brief 构造函数
+     *
+     * 初始化空中防御机器人脚本，注册脚本名称为"npc_air_force_bots"
+     */
     npc_air_force_bots() : CreatureScript("npc_air_force_bots") { }
 
+    /**
+     * @brief 空中防御机器人AI结构体
+     *
+     * 继承自NullCreatureAI，实现被动检测和守卫召唤逻辑。
+     * 不进行主动战斗行为，而是召唤守卫进行攻击。
+     */
     struct npc_air_force_botsAI : public NullCreatureAI
     {
+        /**
+         * @brief 根据NPC Entry ID查找对应的刷新配置
+         * @param entry NPC的Entry ID
+         * @return AirForceSpawn const& 返回对应的刷新配置引用
+         *
+         * 遍历配置数组，查找匹配的机器人配置。
+         * 如果找不到配置或配置无效，将触发断言错误。
+         *
+         * @note 此函数在AI构造时调用，性能影响小
+         */
         static AirForceSpawn const& FindSpawnFor(uint32 entry)
         {
             for (AirForceSpawn const& spawn : airforceSpawns)
@@ -111,8 +197,23 @@ public:
             ASSERT_NODEBUGINFO(false, "Unhandled creature with entry %u is assigned 'npc_air_force_bots' script", entry);
         }
 
+        /**
+         * @brief AI构造函数
+         * @param creature NPC生物对象指针
+         *
+         * 初始化AI实例，查找并缓存当前NPC的配置数据
+         */
         npc_air_force_botsAI(Creature* creature) : NullCreatureAI(creature), _spawn(FindSpawnFor(creature->GetEntry())) {}
 
+        /**
+         * @brief 获取或召唤守卫NPC
+         * @return Creature* 返回守卫NPC指针，如果召唤失败则返回nullptr
+         *
+         * 首先尝试获取已存在的守卫，如果不存在则召唤新的守卫。
+         * 守卫会在脱离战斗5分钟后自动消失。
+         *
+         * @note 使用TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT确保守卫不会永久存在
+         */
         Creature* GetOrSummonGuard()
         {
             Creature* guard = ObjectAccessor::GetCreature(*me, _myGuard);
@@ -123,70 +224,108 @@ public:
             return guard;
         }
 
+        /**
+         * @brief AI更新函数
+         * @param diff 距离上次更新的时间间隔（毫秒）
+         *
+         * 处理待攻击目标列表，为每个目标召唤守卫并使其进入战斗。
+         * 对警报型机器人，还会施放守卫标记法术。
+         *
+         * @note 此函数每帧调用，需保持高效
+         */
         void UpdateAI(uint32 /*diff*/) override
         {
+            // 如果没有待攻击目标，直接返回
             if (_toAttack.empty())
                 return;
 
+            // 获取或召唤守卫
             Creature* guard = GetOrSummonGuard();
             if (!guard)
                 return;
 
-            // Keep the list of targets for later on when the guards will be alive
+            // 如果守卫已死亡，保留目标列表等待守卫生成
             if (!guard->IsAlive())
                 return;
 
+            // 遍历所有待攻击目标
             for (ObjectGuid guid : _toAttack)
             {
                 Unit* target = ObjectAccessor::GetUnit(*me, guid);
                 if (!target)
                     continue;
+                // 跳过已经与守卫交战的目标
                 if (guard->IsEngagedBy(target))
                     continue;
 
+                // 使守卫攻击目标
                 guard->EngageWithTarget(target);
+                // 如果是警报型机器人，施放守卫标记法术
                 if (_spawn.type == ALARMBOT)
                     guard->CastSpell(target, SPELL_GUARDS_MARK, true);
             }
 
+            // 清空待攻击列表
             _toAttack.clear();
         }
 
+        /**
+         * @brief 视线检测函数
+         * @param who 进入视线的单位对象
+         *
+         * 当单位进入NPC的视线范围时调用此函数。
+         * 检测逻辑：
+         * 1. 只检测玩家
+         * 2. 检查是否已在待攻击列表中
+         * 3. 检查距离（根据机器人类型）
+         * 4. 检查敌对关系
+         * 5. 检查是否为有效攻击目标
+         * 6. 绊线型机器人额外检查飞行状态
+         *
+         * @note 此函数可能频繁调用，已优化检测顺序
+         */
         void MoveInLineOfSight(Unit* who) override
         {
-            // guards are only spawned against players
+            // 守卫只会对玩家生成
             if (who->GetTypeId() != TYPEID_PLAYER)
                 return;
 
-            // we're already scheduled to attack this player on our next tick, don't bother checking
+            // 如果已计划攻击此玩家，跳过重复检测
             if (_toAttack.find(who->GetGUID()) != _toAttack.end())
                 return;
 
-            // check if they're in range
+            // 检查是否在检测范围内
             if (!who->IsWithinDistInMap(me, (_spawn.type == ALARMBOT) ? RANGE_ALARMBOT : RANGE_TRIPWIRE))
                 return;
 
-            // check if they're hostile
+            // 检查是否敌对
             if (!(me->IsHostileTo(who) || who->IsHostileTo(me)))
                 return;
 
-            // check if they're a valid attack target
+            // 检查是否为有效攻击目标
             if (!me->IsValidAttackTarget(who))
                 return;
 
+            // 绊线型机器人不检测飞行玩家
             if ((_spawn.type == TRIPWIRE) && who->IsFlying())
                 return;
 
+            // 将目标添加到待攻击列表
             _toAttack.insert(who->GetGUID());
         }
 
         private:
-            AirForceSpawn const& _spawn;
-            ObjectGuid _myGuard;
-            std::unordered_set<ObjectGuid> _toAttack;
+            AirForceSpawn const& _spawn;           ///< 当前机器人的配置数据引用
+            ObjectGuid _myGuard;                   ///< 当前召唤的守卫GUID
+            std::unordered_set<ObjectGuid> _toAttack;  ///< 待攻击目标列表
 
     };
 
+    /**
+     * @brief 获取AI实例工厂函数
+     * @param creature 需要创建AI的生物对象指针
+     * @return CreatureAI* 返回新创建的空中防御机器人AI实例
+     */
     CreatureAI* GetAI(Creature* creature) const override
     {
         return new npc_air_force_botsAI(creature);
@@ -197,34 +336,80 @@ public:
 # npc_chicken_cluck
 #########*/
 
+/**
+ * @brief 鸡NPC枚举定义
+ *
+ * 定义鸡NPC的表情和任务ID
+ */
 enum ChickenCluck
 {
-    EMOTE_HELLO_A       = 0,
-    EMOTE_HELLO_H       = 1,
-    EMOTE_CLUCK_TEXT    = 2,
+    EMOTE_HELLO_A       = 0,    ///< 联盟玩家触发时的问候表情
+    EMOTE_HELLO_H       = 1,    ///< 部落玩家触发时的问候表情
+    EMOTE_CLUCK_TEXT    = 2,    ///< 咯咯叫文本表情
 
-    QUEST_CLUCK         = 3861
+    QUEST_CLUCK         = 3861  ///< 隐藏任务"CLUCK!"的任务ID
 };
 
+/**
+ * @brief 鸡NPC脚本类
+ *
+ * 实现隐藏彩蛋任务"CLUCK!"的触发机制。
+ * 这是一个经典的魔兽世界彩蛋，玩家需要对鸡使用"/chicken"表情多次，
+ * 有极低几率触发鸡变成任务NPC，提供特殊任务。
+ *
+ * 功能特点：
+ * - 玩家对鸡使用"/chicken"表情有1/30几率触发任务
+ * - 任务标志会在2分钟后自动重置
+ * - 完成任务后需要使用"/cheer"表情才能再次交互
+ */
 class npc_chicken_cluck : public CreatureScript
 {
 public:
+    /**
+     * @brief 构造函数
+     *
+     * 初始化鸡NPC脚本，注册脚本名称为"npc_chicken_cluck"
+     */
     npc_chicken_cluck() : CreatureScript("npc_chicken_cluck") { }
 
+    /**
+     * @brief 鸡NPC的AI结构体
+     *
+     * 实现鸡的特殊行为逻辑，包括隐藏任务的触发机制。
+     */
     struct npc_chicken_cluckAI : public ScriptedAI
     {
+        /**
+         * @brief AI构造函数
+         * @param creature NPC生物对象指针
+         *
+         * 初始化AI并设置重置计时器
+         */
         npc_chicken_cluckAI(Creature* creature) : ScriptedAI(creature)
         {
             Initialize();
         }
 
+        /**
+         * @brief 初始化函数
+         *
+         * 重置标志计时器为120秒（2分钟）
+         */
         void Initialize()
         {
             ResetFlagTimer = 120000;
         }
 
-        uint32 ResetFlagTimer;
+        uint32 ResetFlagTimer;  ///< 任务标志重置计时器（毫秒），2分钟后自动重置
 
+        /**
+         * @brief 重置函数
+         *
+         * 重置鸡NPC的状态：
+         * - 重置计时器
+         * - 设置阵营为猎物阵营（中立被动）
+         * - 移除任务给予者标志
+         */
         void Reset() override
         {
             Initialize();
@@ -232,11 +417,27 @@ public:
             me->RemoveNpcFlag(UNIT_NPC_FLAG_QUESTGIVER);
         }
 
+        /**
+         * @brief 进入战斗回调
+         * @param who 进入战斗的目标（未使用）
+         *
+         * 空实现，鸡不会主动战斗
+         */
         void JustEngagedWith(Unit* /*who*/) override { }
 
+        /**
+         * @brief AI更新函数
+         * @param diff 距离上次更新的时间间隔（毫秒）
+         *
+         * 主要功能：
+         * - 如果鸡已成为任务NPC，2分钟后自动重置状态
+         * - 处理战斗逻辑（如果有敌人）
+         *
+         * @note 计时器确保每个玩家都需要重新触发任务
+         */
         void UpdateAI(uint32 diff) override
         {
-            // Reset flags after a certain time has passed so that the next player has to start the 'event' again
+            // 如果已成为任务NPC，在2分钟后重置标志，让下一个玩家重新触发事件
             if (me->HasNpcFlag(UNIT_NPC_FLAG_QUESTGIVER))
             {
                 if (ResetFlagTimer <= diff)
@@ -248,23 +449,38 @@ public:
                     ResetFlagTimer -= diff;
             }
 
+            // 如果有战斗目标，进行近战攻击
             if (UpdateVictim())
                 DoMeleeAttackIfReady();
         }
 
+        /**
+         * @brief 接收表情回调
+         * @param player 发送表情的玩家
+         * @param emote 表情类型ID
+         *
+         * 处理玩家对鸡使用的表情：
+         * - /chicken (小鸡表情)：1/30几率触发任务，需要玩家未接受过任务
+         * - /cheer (欢呼表情)：任务完成后再次触发交互
+         *
+         * @note 这是魔兽世界中最著名的隐藏彩蛋之一
+         */
         void ReceiveEmote(Player* player, uint32 emote) override
         {
             switch (emote)
             {
-                case TEXT_EMOTE_CHICKEN:
+                case TEXT_EMOTE_CHICKEN:  // /chicken 表情
+                    // 玩家未接受过任务且有1/30几率触发
                     if (player->GetQuestStatus(QUEST_CLUCK) == QUEST_STATUS_NONE && rand32() % 30 == 1)
                     {
                         me->SetNpcFlag(UNIT_NPC_FLAG_QUESTGIVER);
                         me->SetFaction(FACTION_FRIENDLY);
+                        // 根据玩家阵营显示不同的问候语
                         Talk(player->GetTeam() == HORDE ? EMOTE_HELLO_H : EMOTE_HELLO_A);
                     }
                     break;
-                case TEXT_EMOTE_CHEER:
+                case TEXT_EMOTE_CHEER:  // /cheer 表情
+                    // 任务完成后才能再次交互
                     if (player->GetQuestStatus(QUEST_CLUCK) == QUEST_STATUS_COMPLETE)
                     {
                         me->SetNpcFlag(UNIT_NPC_FLAG_QUESTGIVER);
@@ -275,12 +491,27 @@ public:
             }
         }
 
+        /**
+         * @brief 任务接受回调
+         * @param player 接受任务的玩家（未使用）
+         * @param quest 被接受的任务对象
+         *
+         * 当玩家接受"CLUCK!"任务时，重置鸡的状态
+         */
         void OnQuestAccept(Player* /*player*/, Quest const* quest) override
         {
             if (quest->GetQuestId() == QUEST_CLUCK)
                 Reset();
         }
 
+        /**
+         * @brief 任务奖励回调
+         * @param player 完成任务的玩家（未使用）
+         * @param quest 被完成的任务对象
+         * @param opt 奖励选项（未使用）
+         *
+         * 当玩家完成"CLUCK!"任务领取奖励时，重置鸡的状态
+         */
         void OnQuestReward(Player* /*player*/, Quest const* quest, uint32 /*opt*/) override
         {
             if (quest->GetQuestId() == QUEST_CLUCK)
@@ -288,6 +519,11 @@ public:
         }
     };
 
+    /**
+     * @brief 获取AI实例工厂函数
+     * @param creature 需要创建AI的生物对象指针
+     * @return CreatureAI* 返回新创建的鸡NPC AI实例
+     */
     CreatureAI* GetAI(Creature* creature) const override
     {
         return new npc_chicken_cluckAI(creature);
@@ -298,17 +534,46 @@ public:
 ## npc_dancing_flames
 ######*/
 
+/**
+ * @brief 舞动火焰法术枚举定义
+ *
+ * 定义舞动火焰NPC使用的法术ID
+ */
 enum DancingFlames
 {
-    SPELL_SUMMON_BRAZIER    = 45423,
-    SPELL_BRAZIER_DANCE     = 45427,
-    SPELL_FIERY_SEDUCTION   = 47057
+    SPELL_SUMMON_BRAZIER    = 45423,  ///< 召唤火盆法术
+    SPELL_BRAZIER_DANCE     = 45427,  ///< 火盆舞蹈法术
+    SPELL_FIERY_SEDUCTION   = 47057   ///< 火焰诱惑法术（对玩家施放）
 };
 
+/**
+ * @brief 舞动火焰NPC AI结构体
+ *
+ * 仲夏节活动的特殊NPC，会在火盆旁跳舞并响应玩家的表情。
+ * 主要功能：
+ * - 召唤火盆并跳舞
+ * - 响应玩家的各种表情（亲吻、挥手、鞠躬、笑话、跳舞）
+ * - 对跳舞表情施放火焰诱惑法术
+ *
+ * @note 表情响应有1.5秒延迟，连续发送表情会取消前一个表情的响应
+ */
 struct npc_dancing_flames : public ScriptedAI
 {
+    /**
+     * @brief 构造函数
+     * @param creature NPC生物对象指针
+     */
     npc_dancing_flames(Creature* creature) : ScriptedAI(creature) { }
 
+    /**
+     * @brief 重置函数
+     *
+     * 初始化舞动火焰的状态：
+     * - 召唤火盆
+     * - 施放火盆舞蹈法术
+     * - 设置舞蹈表情状态
+     * - 稍微提升高度（1.05码）
+     */
     void Reset() override
     {
         DoCastSelf(SPELL_SUMMON_BRAZIER, true);
@@ -319,52 +584,76 @@ struct npc_dancing_flames : public ScriptedAI
         me->Relocate(x, y, z + 1.05f);
     }
 
+    /**
+     * @brief AI更新函数
+     * @param diff 距离上次更新的时间间隔（毫秒）
+     *
+     * 更新任务调度器，处理延迟的表情响应
+     */
     void UpdateAI(uint32 diff) override
     {
         _scheduler.Update(diff);
     }
 
+    /**
+     * @brief 接收表情回调
+     * @param player 发送表情的玩家
+     * @param emote 表情类型ID
+     *
+     * 处理玩家对舞动火焰使用的表情：
+     * - /kiss（亲吻）：1.5秒后回应害羞表情
+     * - /wave（挥手）：1.5秒后回应挥手表情
+     * - /bow（鞠躬）：1.5秒后回应鞠躬表情
+     * - /joke（笑话）：1.5秒后回应大笑表情
+     * - /dance（跳舞）：立即施放火焰诱惑法术
+     *
+     * @note 表情响应不是即时的，大约延迟1500毫秒
+     * @note 如果玩家发送表情太快，火焰会取消之前的响应，只响应最新的表情
+     * @note 需要在视线内且距离30码内才能响应
+     */
     void ReceiveEmote(Player* player, uint32 emote) override
     {
+        // 检查是否在视线内且距离在30码内
         if (me->IsWithinLOS(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ()) && me->IsWithinDistInMap(player, 30.0f))
         {
-            // She responds to emotes not instantly but ~1500ms later
-            // If you first /bow, then /wave before dancing flames bow back, it doesnt bow at all and only does wave
-            // If you're performing emotes too fast, she will not respond to them
-            // Means she just replaces currently scheduled event with new after receiving new emote
+            // 表情响应不是即时的，大约1500毫秒后回应
+            // 如果先/bow然后/wave，在舞动火焰鞠躬回应之前，她不会鞠躬只会挥手
+            // 如果玩家发送表情太快，她不会响应
+            // 这意味着她只会用最新的表情替换当前计划的事件
             _scheduler.CancelAll();
 
             switch (emote)
             {
-                case TEXT_EMOTE_KISS:
+                case TEXT_EMOTE_KISS:  // 亲吻表情
                     _scheduler.Schedule(1500ms, [this](TaskContext /*context*/)
                     {
-                        me->HandleEmoteCommand(EMOTE_ONESHOT_SHY);
+                        me->HandleEmoteCommand(EMOTE_ONESHOT_SHY);  // 回应害羞表情
                     });
                     break;
-                case TEXT_EMOTE_WAVE:
+                case TEXT_EMOTE_WAVE:  // 挥手表情
                     _scheduler.Schedule(1500ms, [this](TaskContext /*context*/)
                     {
-                        me->HandleEmoteCommand(EMOTE_ONESHOT_WAVE);
+                        me->HandleEmoteCommand(EMOTE_ONESHOT_WAVE);  // 回应挥手
                     });
                     break;
-                case TEXT_EMOTE_BOW:
+                case TEXT_EMOTE_BOW:  // 鞠躬表情
                     _scheduler.Schedule(1500ms, [this](TaskContext /*context*/)
                     {
-                        me->HandleEmoteCommand(EMOTE_ONESHOT_BOW);
+                        me->HandleEmoteCommand(EMOTE_ONESHOT_BOW);  // 回应鞠躬
                     });
                     break;
-                case TEXT_EMOTE_JOKE:
+                case TEXT_EMOTE_JOKE:  // 笑话表情
                     _scheduler.Schedule(1500ms, [this](TaskContext /*context*/)
                     {
-                        me->HandleEmoteCommand(EMOTE_ONESHOT_LAUGH);
+                        me->HandleEmoteCommand(EMOTE_ONESHOT_LAUGH);  // 回应大笑
                     });
                     break;
-                case TEXT_EMOTE_DANCE:
+                case TEXT_EMOTE_DANCE:  // 跳舞表情
+                    // 如果玩家没有火焰诱惑光环，施放法术
                     if (!player->HasAura(SPELL_FIERY_SEDUCTION))
                     {
                         DoCast(player, SPELL_FIERY_SEDUCTION, true);
-                        me->SetFacingTo(me->GetAbsoluteAngle(player));
+                        me->SetFacingTo(me->GetAbsoluteAngle(player));  // 面向玩家
                     }
                     break;
             }
@@ -372,27 +661,54 @@ struct npc_dancing_flames : public ScriptedAI
     }
 
 private:
-    TaskScheduler _scheduler;
+    TaskScheduler _scheduler;  ///< 任务调度器，用于延迟表情响应
 };
 
 /*######
 ## npc_torch_tossing_target_bunny_controller
 ######*/
 
+/**
+ * @brief 火把投掷目标枚举
+ */
 enum TorchTossingTarget
 {
-    SPELL_TORCH_TARGET_PICKER      = 45907
+    SPELL_TORCH_TARGET_PICKER      = 45907  ///< 火把目标选择器法术
 };
 
+/**
+ * @brief 火把投掷目标兔子控制器脚本类
+ *
+ * 仲夏节活动的辅助NPC，用于控制火把投掷目标的选择。
+ * 定期施放目标选择法术，管理火把投掷小游戏的逻辑。
+ */
 class npc_torch_tossing_target_bunny_controller : public CreatureScript
 {
 public:
+    /**
+     * @brief 构造函数
+     */
     npc_torch_tossing_target_bunny_controller() : CreatureScript("npc_torch_tossing_target_bunny_controller") { }
 
+    /**
+     * @brief 火把投掷目标兔子控制器AI结构体
+     */
     struct npc_torch_tossing_target_bunny_controllerAI : public ScriptedAI
     {
+        /**
+         * @brief 构造函数
+         * @param creature NPC生物对象指针
+         */
         npc_torch_tossing_target_bunny_controllerAI(Creature* creature) : ScriptedAI(creature) { }
 
+        /**
+         * @brief 重置函数
+         *
+         * 设置定时施放火把目标选择器法术的调度：
+         * - 2秒后开始第一次施放
+         * - 之后每5秒重复施放
+         * - 每次施放会在3秒后再施放一次（总共每周期施放2次）
+         */
         void Reset() override
         {
             _scheduler.Schedule(Seconds(2), [this](TaskContext context)
@@ -406,15 +722,24 @@ public:
             });
         }
 
+        /**
+         * @brief AI更新函数
+         * @param diff 距离上次更新的时间间隔（毫秒）
+         */
         void UpdateAI(uint32 diff) override
         {
             _scheduler.Update(diff);
         }
 
     private:
-        TaskScheduler _scheduler;
+        TaskScheduler _scheduler;  ///< 任务调度器
     };
 
+    /**
+     * @brief 获取AI实例工厂函数
+     * @param creature 需要创建AI的生物对象指针
+     * @return CreatureAI* 返回新创建的AI实例
+     */
     CreatureAI* GetAI(Creature* creature) const override
     {
         return new npc_torch_tossing_target_bunny_controllerAI(creature);
@@ -531,79 +856,137 @@ public:
 };
 
 /*######
-## Triage quest
+## Triage quest - 分类救治任务
 ######*/
 
+/**
+ * @brief 医生NPC枚举定义
+ *
+ * 定义医生任务中使用的常量
+ */
 enum Doctor
 {
-    SAY_DOC             = 0,
+    SAY_DOC             = 0,    ///< 医生对话ID
 
-    DOCTOR_ALLIANCE     = 12939,
-    DOCTOR_HORDE        = 12920,
-    ALLIANCE_COORDS     = 7,
-    HORDE_COORDS        = 6
+    DOCTOR_ALLIANCE     = 12939,  ///< 联盟医生NPC ID (Gustaf Vanhowzen)
+    DOCTOR_HORDE        = 12920,  ///< 部落医生NPC ID (Gregory Victor)
+    ALLIANCE_COORDS     = 7,      ///< 联盟坐标点数量
+    HORDE_COORDS        = 6       ///< 部落坐标点数量
 };
 
+/**
+ * @brief 联盟病床位置坐标数组
+ *
+ * 定义联盟营地中7个病床的位置，用于召唤受伤士兵
+ */
 Position const AllianceCoords[]=
 {
-    {-3757.38f, -4533.05f, 14.16f, 3.62f},                      // Top-far-right bunk as seen from entrance
-    {-3754.36f, -4539.13f, 14.16f, 5.13f},                      // Top-far-left bunk
-    {-3749.54f, -4540.25f, 14.28f, 3.34f},                      // Far-right bunk
-    {-3742.10f, -4536.85f, 14.28f, 3.64f},                      // Right bunk near entrance
-    {-3755.89f, -4529.07f, 14.05f, 0.57f},                      // Far-left bunk
-    {-3749.51f, -4527.08f, 14.07f, 5.26f},                      // Mid-left bunk
-    {-3746.37f, -4525.35f, 14.16f, 5.22f},                      // Left bunk near entrance
+    {-3757.38f, -4533.05f, 14.16f, 3.62f},  // 从入口看最远右上铺位
+    {-3754.36f, -4539.13f, 14.16f, 5.13f},  // 最远左上铺位
+    {-3749.54f, -4540.25f, 14.28f, 3.34f},  // 最右侧铺位
+    {-3742.10f, -4536.85f, 14.28f, 3.64f},  // 靠近入口右侧铺位
+    {-3755.89f, -4529.07f, 14.05f, 0.57f},  // 最左侧铺位
+    {-3749.51f, -4527.08f, 14.07f, 5.26f},  // 中左侧铺位
+    {-3746.37f, -4525.35f, 14.16f, 5.22f},  // 靠近入口左侧铺位
 };
 
-//alliance run to where
+/// 联盟士兵跑向的X坐标
 #define A_RUNTOX -3742.96f
+/// 联盟士兵跑向的Y坐标
 #define A_RUNTOY -4531.52f
+/// 联盟士兵跑向的Z坐标
 #define A_RUNTOZ 11.91f
 
+/**
+ * @brief 部落病床位置坐标数组
+ *
+ * 定义部落营地中6个病床的位置，用于召唤受伤士兵
+ */
 Position const HordeCoords[]=
 {
-    {-1013.75f, -3492.59f, 62.62f, 4.34f},                      // Left, Behind
-    {-1017.72f, -3490.92f, 62.62f, 4.34f},                      // Right, Behind
-    {-1015.77f, -3497.15f, 62.82f, 4.34f},                      // Left, Mid
-    {-1019.51f, -3495.49f, 62.82f, 4.34f},                      // Right, Mid
-    {-1017.25f, -3500.85f, 62.98f, 4.34f},                      // Left, front
-    {-1020.95f, -3499.21f, 62.98f, 4.34f}                       // Right, Front
+    {-1013.75f, -3492.59f, 62.62f, 4.34f},  // 左后
+    {-1017.72f, -3490.92f, 62.62f, 4.34f},  // 右后
+    {-1015.77f, -3497.15f, 62.82f, 4.34f},  // 左中
+    {-1019.51f, -3495.49f, 62.82f, 4.34f},  // 右中
+    {-1017.25f, -3500.85f, 62.98f, 4.34f},  // 左前
+    {-1020.95f, -3499.21f, 62.98f, 4.34f}   // 右前
 };
 
-//horde run to where
+/// 部落士兵跑向的X坐标
 #define H_RUNTOX -1016.44f
+/// 部落士兵跑向的Y坐标
 #define H_RUNTOY -3508.48f
+/// 部落士兵跑向的Z坐标
 #define H_RUNTOZ 62.96f
 
+/**
+ * @brief 联盟士兵NPC ID数组
+ *
+ * 定义三种不同受伤程度的联盟士兵NPC ID
+ */
 uint32 const AllianceSoldierId[3] =
 {
-    12938,                                                  // 12938 Injured Alliance Soldier
-    12936,                                                  // 12936 Badly injured Alliance Soldier
-    12937                                                   // 12937 Critically injured Alliance Soldier
+    12938,  ///< 受伤的联盟士兵
+    12936,  ///< 重伤的联盟士兵
+    12937   ///< 垂死的联盟士兵
 };
 
+/**
+ * @brief 部落士兵NPC ID数组
+ *
+ * 定义三种不同受伤程度的部落士兵NPC ID
+ */
 uint32 const HordeSoldierId[3] =
 {
-    12923,                                                  //12923 Injured Soldier
-    12924,                                                  //12924 Badly injured Soldier
-    12925                                                   //12925 Critically injured Soldier
+    12923,  ///< 受伤的士兵
+    12924,  ///< 重伤的士兵
+    12925   ///< 垂死的士兵
 };
 
 /*######
 ## npc_doctor (handles both Gustaf Vanhowzen and Gregory Victor)
 ######*/
+/**
+ * @brief 医生NPC脚本类
+ *
+ * 实现联盟和部落医生NPC的功能，用于"分类救治"任务（Triage quest）。
+ * 这是一个经典的魔兽世界任务，要求玩家在限定时间内救治15名受伤士兵，
+ * 最多只能让6名士兵死亡。
+ *
+ * 主要功能：
+ * - 管理受伤士兵的召唤
+ * - 追踪玩家救治进度
+ * - 判定任务成功或失败
+ *
+ * @note 此脚本同时处理联盟医生Gustaf Vanhowzen和部落医生Gregory Victor
+ */
 class npc_doctor : public CreatureScript
 {
 public:
+    /**
+     * @brief 构造函数
+     */
     npc_doctor() : CreatureScript("npc_doctor") { }
 
+    /**
+     * @brief 医生NPC的AI结构体
+     */
     struct npc_doctorAI : public ScriptedAI
     {
+        /**
+         * @brief 构造函数
+         * @param creature NPC生物对象指针
+         */
         npc_doctorAI(Creature* creature) : ScriptedAI(creature)
         {
             Initialize();
         }
 
+        /**
+         * @brief 初始化函数
+         *
+         * 重置所有成员变量到初始状态
+         */
         void Initialize()
         {
             PlayerGUID.Clear();
@@ -619,24 +1002,33 @@ public:
             Event = false;
         }
 
-        ObjectGuid PlayerGUID;
+        ObjectGuid PlayerGUID;          ///< 触发任务的玩家GUID
+        uint32 SummonPatientTimer;      ///< 召唤病人的计时器（毫秒）
+        uint32 SummonPatientCount;      ///< 已召唤的病人数量
+        uint32 PatientDiedCount;        ///< 死亡的病人数量
+        uint32 PatientSavedCount;       ///< 救治成功的病人数量
+        bool Event;                     ///< 事件是否正在运行
 
-        uint32 SummonPatientTimer;
-        uint32 SummonPatientCount;
-        uint32 PatientDiedCount;
-        uint32 PatientSavedCount;
+        GuidList Patients;              ///< 当前病人的GUID列表
+        std::vector<Position const*> Coordinates;  ///< 可用的坐标点列表
 
-        bool Event;
-
-        GuidList Patients;
-        std::vector<Position const*> Coordinates;
-
+        /**
+         * @brief 重置函数
+         *
+         * 重置AI状态并移除不可交互标志
+         */
         void Reset() override
         {
             Initialize();
             me->RemoveUnitFlag(UNIT_FLAG_UNINTERACTIBLE);
         }
 
+        /**
+         * @brief 开始任务事件
+         * @param player 触发任务的玩家
+         *
+         * 初始化任务事件，根据医生阵营加载对应的坐标点
+         */
         void BeginEvent(Player* player)
         {
             PlayerGUID = player->GetGUID();
@@ -646,6 +1038,7 @@ public:
             PatientDiedCount = 0;
             PatientSavedCount = 0;
 
+            // 根据医生阵营加载对应的坐标点
             switch (me->GetEntry())
             {
                 case DOCTOR_ALLIANCE:
@@ -659,9 +1052,16 @@ public:
             }
 
             Event = true;
-            me->SetUnitFlag(UNIT_FLAG_UNINTERACTIBLE);
+            me->SetUnitFlag(UNIT_FLAG_UNINTERACTIBLE);  // 任务期间不可交互
         }
 
+        /**
+         * @brief 病人死亡回调
+         * @param point 病人死亡的位置
+         *
+         * 当病人死亡时调用，增加死亡计数。
+         * 如果死亡超过5人，任务失败。
+         */
         void PatientDied(Position const* point)
         {
             Player* player = ObjectAccessor::GetPlayer(*me, PlayerGUID);
@@ -669,6 +1069,7 @@ public:
             {
                 ++PatientDiedCount;
 
+                // 死亡超过5人，任务失败
                 if (PatientDiedCount > 5 && Event)
                 {
                     if (player->GetQuestStatus(6624) == QUEST_STATUS_INCOMPLETE)
@@ -680,13 +1081,23 @@ public:
                     return;
                 }
 
+                // 将坐标点放回队列供重复使用
                 Coordinates.push_back(point);
             }
             else
-                // If no player or player abandon quest in progress
+                // 如果没有玩家或玩家放弃了任务，重置事件
                 Reset();
         }
 
+        /**
+         * @brief 病人救治成功回调
+         * @param soldier 被救治的士兵（未使用）
+         * @param player 救治病人的玩家
+         * @param point 病人的位置
+         *
+         * 当病人被成功救治时调用，增加救治成功计数。
+         * 如果救治成功达到15人，任务完成。
+         */
         void PatientSaved(Creature* /*soldier*/, Player* player, Position const* point)
         {
             if (player && PlayerGUID == player->GetGUID())
@@ -2419,20 +2830,42 @@ public:
     }
 };
 
+/**
+ * @brief 虚空区域法术枚举
+ */
 enum VoidZone
 {
-    SPELL_CONSUMPTION     = 28874
+    SPELL_CONSUMPTION     = 28874  ///< 消耗法术ID
 };
 
+/**
+ * @brief 虚空区域NPC AI结构体
+ *
+ * 虚空区域是一个被动区域效果NPC，出现后会施放消耗法术。
+ */
 struct npc_gen_void_zone : public ScriptedAI
 {
+    /**
+     * @brief 构造函数
+     * @param creature NPC生物对象指针
+     */
     npc_gen_void_zone(Creature* creature) : ScriptedAI(creature) { }
 
+    /**
+     * @brief 初始化AI
+     *
+     * 设置NPC为被动反应状态
+     */
     void InitializeAI() override
     {
         me->SetReactState(REACT_PASSIVE);
     }
 
+    /**
+     * @brief 出现回调
+     *
+     * NPC出现2秒后施放消耗法术
+     */
     void JustAppeared() override
     {
         _scheduler.Schedule(2s, [this](TaskContext /*task*/)
@@ -2441,15 +2874,52 @@ struct npc_gen_void_zone : public ScriptedAI
         });
     }
 
+    /**
+     * @brief AI更新函数
+     * @param diff 距离上次更新的时间间隔（毫秒）
+     */
     void UpdateAI(uint32 diff) override
     {
         _scheduler.Update(diff);
     }
 
 private:
-    TaskScheduler _scheduler;
+    TaskScheduler _scheduler;  ///< 任务调度器
 };
 
+/**
+ * @brief 注册所有特殊NPC脚本到脚本系统
+ *
+ * 此函数由脚本加载器在服务器启动时调用，用于将所有特殊NPC脚本注册到游戏中。
+ * 创建并初始化所有特殊NPC脚本实例，使其能够在游戏中生效。
+ *
+ * 注册的脚本包括：
+ * - 空中防御机器人
+ * - 鸡（隐藏任务）
+ * - 舞动火焰（仲夏节）
+ * - 火把投掷目标控制器
+ * - 仲夏节彩带柱
+ * - 医生NPC
+ * - 受伤病人
+ * - 任务长袍相关NPC
+ * - 守护者
+ * - 蒸汽坦克
+ * - 比赛坐骑
+ * - 美酒节狂欢者
+ * - 训练假人
+ * - 虫洞传送NPC
+ * - 宠物训练师
+ * - 经验值相关NPC
+ * - 春节兔子
+ * - 球中的小鬼
+ * - 稳定大师
+ * - 火车破坏者
+ * - 银色侍从/步兵
+ * - 丰收节餐桌
+ * - 虚空区域
+ *
+ * @note 此函数在服务器启动时由脚本系统自动调用，不应手动调用
+ */
 void AddSC_npcs_special()
 {
     new npc_air_force_bots();

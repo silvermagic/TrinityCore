@@ -15,6 +15,28 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file boss_mimiron.cpp
+ * @brief 米米尔隆Boss战斗脚本模块
+ *
+ * 本模块实现了奥杜尔副本中米米尔隆Boss战斗的完整逻辑，包括：
+ * - 米米尔隆本体（观察者和载具控制）
+ * - 利维坦MK-II（坦克形态）
+ * - VX-001（炮塔形态）
+ * - 空中指挥单元（飞行形态）
+ * - V0-L7-R0N（合体形态）
+ *
+ * 战斗概述：
+ * - 第一阶段：击杀利维坦MK-II
+ * - 第二阶段：击杀VX-001
+ * - 第三阶段：击杀空中指挥单元
+ * - 第四阶段：三个部件组合成V0-L7-R0N同时战斗
+ *
+ * 难度模式：
+ * - 硬模式：不按下红色按钮直接开战（消防员成就）
+ * - 会触发自毁程序，需要在10分钟内击杀Boss
+ */
+
 #include "ScriptMgr.h"
 #include "Containers.h"
 #include "GameObject.h"
@@ -31,155 +53,173 @@
 #include "ulduar.h"
 #include "Vehicle.h"
 
+/**
+ * @enum Yells
+ * @brief 米米尔隆台词枚举
+ *
+ * 定义了米米尔隆在战斗各个阶段的台词索引。
+ */
 enum Yells
 {
-    SAY_AGGRO                                   = 0,
-    SAY_HARDMODE_ON                             = 1,
-    SAY_MKII_ACTIVATE                           = 2,
-    SAY_MKII_SLAY                               = 3,
-    SAY_MKII_DEATH                              = 4,
-    SAY_VX001_ACTIVATE                          = 5,
-    SAY_VX001_SLAY                              = 6,
-    SAY_VX001_DEATH                             = 7,
-    SAY_AERIAL_ACTIVATE                         = 8,
-    SAY_AERIAL_SLAY                             = 9,
-    SAY_AERIAL_DEATH                            = 10,
-    SAY_V07TRON_ACTIVATE                        = 11,
-    SAY_V07TRON_SLAY                            = 12,
-    SAY_V07TRON_DEATH                           = 13,
-    SAY_BERSERK                                 = 14
+    SAY_AGGRO                                   = 0,  // 开战喊话
+    SAY_HARDMODE_ON                             = 1,  // 硬模式启动
+    SAY_MKII_ACTIVATE                           = 2,  // 利维坦MK-II激活
+    SAY_MKII_SLAY                               = 3,  // 利维坦MK-II击杀玩家
+    SAY_MKII_DEATH                              = 4,  // 利维坦MK-II死亡
+    SAY_VX001_ACTIVATE                          = 5,  // VX-001激活
+    SAY_VX001_SLAY                              = 6,  // VX-001击杀玩家
+    SAY_VX001_DEATH                             = 7,  // VX-001死亡
+    SAY_AERIAL_ACTIVATE                         = 8,  // 空中指挥单元激活
+    SAY_AERIAL_SLAY                             = 9,  // 空中指挥单元击杀玩家
+    SAY_AERIAL_DEATH                            = 10, // 空中指挥单元死亡
+    SAY_V07TRON_ACTIVATE                        = 11, // V0-L7-R0N激活
+    SAY_V07TRON_SLAY                            = 12, // V0-L7-R0N击杀玩家
+    SAY_V07TRON_DEATH                           = 13, // V0-L7-R0N死亡
+    SAY_BERSERK                                 = 14  // 狂暴
 };
 
+/**
+ * @enum ComputerYells
+ * @brief 计算机系统台词枚举
+ *
+ * 定义了硬模式中自毁程序的倒计时台词索引。
+ */
 enum ComputerYells
 {
-    SAY_SELF_DESTRUCT_INITIATED                 = 0,
-    SAY_SELF_DESTRUCT_TERMINATED                = 1,
-    SAY_SELF_DESTRUCT_10                        = 2,
-    SAY_SELF_DESTRUCT_9                         = 3,
-    SAY_SELF_DESTRUCT_8                         = 4,
-    SAY_SELF_DESTRUCT_7                         = 5,
-    SAY_SELF_DESTRUCT_6                         = 6,
-    SAY_SELF_DESTRUCT_5                         = 7,
-    SAY_SELF_DESTRUCT_4                         = 8,
-    SAY_SELF_DESTRUCT_3                         = 9,
-    SAY_SELF_DESTRUCT_2                         = 10,
-    SAY_SELF_DESTRUCT_1                         = 11,
-    SAY_SELF_DESTRUCT_FINALIZED                 = 12
+    SAY_SELF_DESTRUCT_INITIATED                 = 0,  // 自毁程序启动
+    SAY_SELF_DESTRUCT_TERMINATED                = 1,  // 自毁程序终止
+    SAY_SELF_DESTRUCT_10                        = 2,  // 10分钟倒计时
+    SAY_SELF_DESTRUCT_9                         = 3,  // 9分钟倒计时
+    SAY_SELF_DESTRUCT_8                         = 4,  // 8分钟倒计时
+    SAY_SELF_DESTRUCT_7                         = 5,  // 7分钟倒计时
+    SAY_SELF_DESTRUCT_6                         = 6,  // 6分钟倒计时
+    SAY_SELF_DESTRUCT_5                         = 7,  // 5分钟倒计时
+    SAY_SELF_DESTRUCT_4                         = 8,  // 4分钟倒计时
+    SAY_SELF_DESTRUCT_3                         = 9,  // 3分钟倒计时
+    SAY_SELF_DESTRUCT_2                         = 10, // 2分钟倒计时
+    SAY_SELF_DESTRUCT_1                         = 11, // 1分钟倒计时
+    SAY_SELF_DESTRUCT_FINALIZED                 = 12  // 自毁完成
 };
 
+/**
+ * @enum Spells
+ * @brief 法术ID枚举
+ *
+ * 定义了米米尔隆战斗中使用的所有法术ID，按实体类型分组。
+ */
 enum Spells
 {
-    // Mimiron
-    SPELL_WELD                                  = 63339, // Idle aura.
-    SPELL_SEAT_1                                = 52391, // Cast on all vehicles, Cycled on MKII
-    SPELL_SEAT_2                                = 63313, // Cast on MKII and VX-001, Cycled on MKII
-    SPELL_SEAT_3                                = 63314, // Cast on MKII, Cycled on MKII
-    SPELL_SEAT_5                                = 63316, // Cast on MKII and VX-001, Cycled on MKII
-    SPELL_SEAT_6                                = 63344, // Cast on MKII
-    SPELL_SEAT_7                                = 63345, // Cast on MKII
-    SPELL_JETPACK                               = 63341,
-    SPELL_DESPAWN_ASSAULT_BOTS                  = 64463, // only despawns assault bots... no equivalent spell for the other adds...
-    SPELL_TELEPORT_VISUAL                       = 41232,
-    SPELL_SLEEP_VISUAL_1                        = 64393,
-    SPELL_SLEEP_VISUAL_2                        = 64394,
+    // Mimiron - 米米尔隆本体
+    SPELL_WELD                                  = 63339, // 空闲光环（焊接效果）
+    SPELL_SEAT_1                                = 52391, // 座椅1：施放于所有载具，在MK-II上循环
+    SPELL_SEAT_2                                = 63313, // 座椅2：施放于MK-II和VX-001，在MK-II上循环
+    SPELL_SEAT_3                                = 63314, // 座椅3：施放于MK-II，在MK-II上循环
+    SPELL_SEAT_5                                = 63316, // 座椅5：施放于MK-II和VX-001，在MK-II上循环
+    SPELL_SEAT_6                                = 63344, // 座椅6：施放于MK-II
+    SPELL_SEAT_7                                = 63345, // 座椅7：施放于MK-II
+    SPELL_JETPACK                               = 63341, // 喷气背包
+    SPELL_DESPAWN_ASSAULT_BOTS                  = 64463, // 仅消失突击机器人...其他小怪没有对应法术
+    SPELL_TELEPORT_VISUAL                       = 41232, // 传送视觉效果
+    SPELL_SLEEP_VISUAL_1                        = 64393, // 睡眠视觉效果1
+    SPELL_SLEEP_VISUAL_2                        = 64394, // 睡眠视觉效果2
 
-    // Leviathan MK II
-    SPELL_FLAME_SUPPRESSANT_MK                  = 64570,
-    SPELL_NAPALM_SHELL                          = 63666,
-    SPELL_FORCE_CAST_NAPALM_SHELL               = 64539,
-    SPELL_PLASMA_BLAST                          = 62997,
-    SPELL_SCRIPT_EFFECT_PLASMA_BLAST            = 64542,
-    SPELL_SHOCK_BLAST                           = 63631,
-    SPELL_SHOCK_BLAST_AURA                      = 63632, // Deprecated? It is never cast.
+    // Leviathan MK II - 利维坦MK-II
+    SPELL_FLAME_SUPPRESSANT_MK                  = 64570, // 灭火剂（MK-II）
+    SPELL_NAPALM_SHELL                          = 63666, // 凝固汽油弹
+    SPELL_FORCE_CAST_NAPALM_SHELL               = 64539, // 强制施放凝固汽油弹
+    SPELL_PLASMA_BLAST                          = 62997, // 等离子冲击
+    SPELL_SCRIPT_EFFECT_PLASMA_BLAST            = 64542, // 等离子冲击脚本效果
+    SPELL_SHOCK_BLAST                           = 63631, // 震荡冲击
+    SPELL_SHOCK_BLAST_AURA                      = 63632, // 震荡冲击光环（已废弃？从未被施放）
 
-    // VX-001
-    SPELL_FLAME_SUPPRESSANT_VX                  = 65192,
-    SPELL_SPINNING_UP                           = 63414,
-    SPELL_HEAT_WAVE_AURA                        = 63679,
-    SPELL_HAND_PULSE_LEFT                       = 64348,
-    SPELL_HAND_PULSE_RIGHT                      = 64352,
-    SPELL_MOUNT_MKII                            = 64387,
-    SPELL_TORSO_DISABLED                        = 64120,
+    // VX-001 - VX-001炮塔
+    SPELL_FLAME_SUPPRESSANT_VX                  = 65192, // 灭火剂（VX-001）
+    SPELL_SPINNING_UP                           = 63414, // 激光预热旋转
+    SPELL_HEAT_WAVE_AURA                        = 63679, // 热浪光环
+    SPELL_HAND_PULSE_LEFT                       = 64348, // 左手脉冲
+    SPELL_HAND_PULSE_RIGHT                      = 64352, // 右手脉冲
+    SPELL_MOUNT_MKII                            = 64387, // 挂载到MK-II
+    SPELL_TORSO_DISABLED                        = 64120, // 躯干禁用
 
-    // Aerial Command Unit
-    SPELL_PLASMA_BALL_P1                        = 63689,
-    SPELL_PLASMA_BALL_P2                        = 65647,
-    SPELL_MOUNT_VX_001                          = 64388,
+    // Aerial Command Unit - 空中指挥单元
+    SPELL_PLASMA_BALL_P1                        = 63689, // 等离子球（第一阶段）
+    SPELL_PLASMA_BALL_P2                        = 65647, // 等离子球（第二阶段）
+    SPELL_MOUNT_VX_001                          = 64388, // 挂载到VX-001
 
-    // Proximity Mines
-    SPELL_PROXIMITY_MINES                       = 63027, // Cast by Leviathan MK II
-    SPELL_PROXIMITY_MINE_EXPLOSION              = 66351,
-    SPELL_PROXIMITY_MINE_TRIGGER                = 65346,
-    SPELL_PROXIMITY_MINE_PERIODIC_TRIGGER       = 65345,
-    SPELL_PERIODIC_PROXIMITY_AURA               = 65345,
-    SPELL_SUMMON_PROXIMITY_MINE                 = 65347,
+    // Proximity Mines - 近距离地雷
+    SPELL_PROXIMITY_MINES                       = 63027, // 近距离地雷（由利维坦MK-II施放）
+    SPELL_PROXIMITY_MINE_EXPLOSION              = 66351, // 近距离地雷爆炸
+    SPELL_PROXIMITY_MINE_TRIGGER                = 65346, // 近距离地雷触发
+    SPELL_PROXIMITY_MINE_PERIODIC_TRIGGER       = 65345, // 近距离地雷周期触发
+    SPELL_PERIODIC_PROXIMITY_AURA               = 65345, // 周期近距离光环
+    SPELL_SUMMON_PROXIMITY_MINE                 = 65347, // 召唤近距离地雷
 
-    // Rapid Burst
-    SPELL_RAPID_BURST_LEFT                      = 63387,
-    SPELL_RAPID_BURST_RIGHT                     = 64019,
-    SPELL_RAPID_BURST                           = 63382, // Cast by VX-001
-    SPELL_RAPID_BURST_TARGET_ME                 = 64841, // Cast by Burst Target
-    SPELL_SUMMON_BURST_TARGET                   = 64840, // Cast by VX-001
+    // Rapid Burst - 快速射击
+    SPELL_RAPID_BURST_LEFT                      = 63387, // 快速射击（左侧）
+    SPELL_RAPID_BURST_RIGHT                     = 64019, // 快速射击（右侧）
+    SPELL_RAPID_BURST                           = 63382, // 快速射击（由VX-001施放）
+    SPELL_RAPID_BURST_TARGET_ME                 = 64841, // 快速射击目标我（由射击目标施放）
+    SPELL_SUMMON_BURST_TARGET                   = 64840, // 召唤射击目标（由VX-001施放）
 
-    // Rocket Strike
-    SPELL_SUMMON_ROCKET_STRIKE                  = 63036,
-    SPELL_SCRIPT_EFFECT_ROCKET_STRIKE           = 63681, // Cast by Rocket (Mimiron Visual)
-    SPELL_ROCKET_STRIKE                         = 64064, // Added in creature_template_addon
-    SPELL_ROCKET_STRIKE_SINGLE                  = 64402, // Cast by VX-001
-    SPELL_ROCKET_STRIKE_BOTH                    = 65034, // Cast by VX-001
+    // Rocket Strike - 火箭打击
+    SPELL_SUMMON_ROCKET_STRIKE                  = 63036, // 召唤火箭打击
+    SPELL_SCRIPT_EFFECT_ROCKET_STRIKE           = 63681, // 火箭打击脚本效果（由火箭施放，米米尔隆视觉）
+    SPELL_ROCKET_STRIKE                         = 64064, // 火箭打击（在creature_template_addon中添加）
+    SPELL_ROCKET_STRIKE_SINGLE                  = 64402, // 单发火箭打击（由VX-001施放）
+    SPELL_ROCKET_STRIKE_BOTH                    = 65034, // 双发火箭打击（由VX-001施放）
 
-    // Flames
-    SPELL_FLAMES_PERIODIC_TRIGGER               = 64561, // Added in creature_template_addon
-    SPELL_SUMMON_FLAMES_SPREAD_TRIGGER          = 64562,
-    SPELL_SUMMON_FLAMES_INITIAL                 = 64563,
-    SPELL_SUMMON_FLAMES_SPREAD                  = 64564,
-    SPELL_FLAMES                                = 64566,
-    SPELL_SCRIPT_EFFECT_SUMMON_FLAMES_INITIAL   = 64567,
+    // Flames - 火焰（硬模式）
+    SPELL_FLAMES_PERIODIC_TRIGGER               = 64561, // 火焰周期触发（在creature_template_addon中添加）
+    SPELL_SUMMON_FLAMES_SPREAD_TRIGGER          = 64562, // 召唤火焰蔓延触发
+    SPELL_SUMMON_FLAMES_INITIAL                 = 64563, // 召唤初始火焰
+    SPELL_SUMMON_FLAMES_SPREAD                  = 64564, // 召唤火焰蔓延
+    SPELL_FLAMES                                = 64566, // 火焰
+    SPELL_SCRIPT_EFFECT_SUMMON_FLAMES_INITIAL   = 64567, // 召唤初始火焰脚本效果
 
-    // Frost Bomb
-    SPELL_SCRIPT_EFFECT_FROST_BOMB              = 64623, // Cast by VX-001
-    SPELL_FROST_BOMB_LINKED                     = 64624, // Added in creature_template_addon
-    SPELL_FROST_BOMB_DUMMY                      = 64625,
-    SPELL_SUMMON_FROST_BOMB                     = 64627, // Cast by VX-001
-    SPELL_FROST_BOMB_EXPLOSION                  = 64626,
-    SPELL_CLEAR_FIRES                           = 65354,
+    // Frost Bomb - 冰霜炸弹（硬模式）
+    SPELL_SCRIPT_EFFECT_FROST_BOMB              = 64623, // 冰霜炸弹脚本效果（由VX-001施放）
+    SPELL_FROST_BOMB_LINKED                     = 64624, // 冰霜炸弹链接（在creature_template_addon中添加）
+    SPELL_FROST_BOMB_DUMMY                      = 64625, // 冰霜炸弹假人
+    SPELL_SUMMON_FROST_BOMB                     = 64627, // 召唤冰霜炸弹（由VX-001施放）
+    SPELL_FROST_BOMB_EXPLOSION                  = 64626, // 冰霜炸弹爆炸
+    SPELL_CLEAR_FIRES                           = 65354, // 清除火焰
 
-    // Bots
-    SPELL_SUMMON_FIRE_BOT                       = 64622,
-    SPELL_SUMMON_FIRE_BOT_DUMMY                 = 64621,
-    SPELL_SUMMON_FIRE_BOT_TRIGGER               = 64620, // Cast by Areal Command Unit
-    SPELL_DEAFENING_SIREN                       = 64616, // Added in creature_template_addon
-    SPELL_FIRE_SEARCH_AURA                      = 64617, // Added in creature_template_addon
-    SPELL_FIRE_SEARCH                           = 64618,
-    SPELL_WATER_SPRAY                           = 64619,
+    // Bots - 机器人
+    SPELL_SUMMON_FIRE_BOT                       = 64622, // 召唤消防机器人
+    SPELL_SUMMON_FIRE_BOT_DUMMY                 = 64621, // 召唤消防机器人假人
+    SPELL_SUMMON_FIRE_BOT_TRIGGER               = 64620, // 召唤消防机器人触发（由空中指挥单元施放）
+    SPELL_DEAFENING_SIREN                       = 64616, // 震耳警报（在creature_template_addon中添加）
+    SPELL_FIRE_SEARCH_AURA                      = 64617, // 搜索火焰光环（在creature_template_addon中添加）
+    SPELL_FIRE_SEARCH                           = 64618, // 搜索火焰
+    SPELL_WATER_SPRAY                           = 64619, // 喷水
 
-    SPELL_SUMMON_JUNK_BOT                       = 63819,
-    SPELL_SUMMON_JUNK_BOT_TRIGGER               = 63820, // Cast by Areal Command Unit
-    SPELL_SUMMON_JUNK_BOT_DUMMY                 = 64398,
+    SPELL_SUMMON_JUNK_BOT                       = 63819, // 召唤废料机器人
+    SPELL_SUMMON_JUNK_BOT_TRIGGER               = 63820, // 召唤废料机器人触发（由空中指挥单元施放）
+    SPELL_SUMMON_JUNK_BOT_DUMMY                 = 64398, // 召唤废料机器人假人
 
-    SPELL_SUMMON_ASSAULT_BOT_TRIGGER            = 64425, // Cast by Areal Command Unit
-    SPELL_SUMMON_ASSAULT_BOT_DUMMY              = 64426,
-    SPELL_SUMMON_ASSAULT_BOT                    = 64427,
-    SPELL_MAGNETIC_FIELD                        = 64668,
+    SPELL_SUMMON_ASSAULT_BOT_TRIGGER            = 64425, // 召唤突击机器人触发（由空中指挥单元施放）
+    SPELL_SUMMON_ASSAULT_BOT_DUMMY              = 64426, // 召唤突击机器人假人
+    SPELL_SUMMON_ASSAULT_BOT                    = 64427, // 召唤突击机器人
+    SPELL_MAGNETIC_FIELD                        = 64668, // 磁力场
 
-    SPELL_SUMMON_BOMB_BOT                       = 63811, // Cast by Areal Command Unit
-    SPELL_BOMB_BOT_AURA                         = 63767, // Added in creature_template_addon
+    SPELL_SUMMON_BOMB_BOT                       = 63811, // 召唤炸弹机器人（由空中指挥单元施放）
+    SPELL_BOMB_BOT_AURA                         = 63767, // 炸弹机器人光环（在creature_template_addon中添加）
 
-    // Miscellaneous
-    SPELL_SELF_DESTRUCTION_AURA                 = 64610,
-    SPELL_SELF_DESTRUCTION_VISUAL               = 64613,
-    SPELL_NOT_SO_FRIENDLY_FIRE                  = 65040,
-    SPELL_ELEVATOR_KNOCKBACK                    = 65096, // Cast by worldtrigger.
-    SPELL_VEHICLE_DAMAGED                       = 63415,
-    SPELL_EMERGENCY_MODE                        = 64582, // mkii, vx001, aerial, assault, junk
-    SPELL_EMERGENCY_MODE_TURRET                 = 65101, // Cast by Leviathan MK II, only hits Leviathan MK II turret
-    SPELL_SELF_REPAIR                           = 64383,
-    SPELL_MAGNETIC_CORE                         = 64436,
-    SPELL_MAGNETIC_CORE_VISUAL                  = 64438,
-    SPELL_HALF_HEAL                             = 64188,
-    SPELL_CLEAR_ALL_DEBUFFS                     = 34098, /// @todo: make use of this spell...
-    SPELL_FREEZE_ANIM_STUN                      = 63354, // used to prevent mkii from doing stuff?..
-    SPELL_FREEZE_ANIM                           = 16245  // Idle aura. Freezes animation.
+    // Miscellaneous - 杂项
+    SPELL_SELF_DESTRUCTION_AURA                 = 64610, // 自毁光环
+    SPELL_SELF_DESTRUCTION_VISUAL               = 64613, // 自毁视觉效果
+    SPELL_NOT_SO_FRIENDLY_FIRE                  = 65040, // 并不友好的火焰
+    SPELL_ELEVATOR_KNOCKBACK                    = 65096, // 电梯击退（由世界触发器施放）
+    SPELL_VEHICLE_DAMAGED                       = 63415, // 载具受损
+    SPELL_EMERGENCY_MODE                        = 64582, // 紧急模式（MK-II、VX-001、空中、突击、废料）
+    SPELL_EMERGENCY_MODE_TURRET                 = 65101, // 紧急模式炮塔（由利维坦MK-II施放，仅影响MK-II炮塔）
+    SPELL_SELF_REPAIR                           = 64383, // 自我修复
+    SPELL_MAGNETIC_CORE                         = 64436, // 磁力核心
+    SPELL_MAGNETIC_CORE_VISUAL                  = 64438, // 磁力核心视觉效果
+    SPELL_HALF_HEAL                             = 64188, // 半血治疗
+    SPELL_CLEAR_ALL_DEBUFFS                     = 34098, // 清除所有负面效果 @todo: 使用此法术
+    SPELL_FREEZE_ANIM_STUN                      = 63354, // 冻结动画眩晕（用于阻止MK-II做某些事）
+    SPELL_FREEZE_ANIM                           = 16245  // 冻结动画（空闲光环，冻结动画）
 };
 
 enum Data

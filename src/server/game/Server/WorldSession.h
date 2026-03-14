@@ -15,6 +15,50 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file WorldSession.h
+ * @brief 世界会话模块 - 管理玩家与服务器之间的会话连接
+ *
+ * WorldSession是TrinityCore服务器架构的核心组件之一，负责管理单个玩家账号
+ * 与服务器之间的所有交互。每个连接的玩家都有一个对应的WorldSession实例。
+ *
+ * 主要职责：
+ * 1. 网络通信管理
+ *    - 维护与客户端的Socket连接
+ *    - 接收和发送网络数据包
+ *    - 管理数据包队列和处理
+ *
+ * 2. 会话状态管理
+ *    - 认证状态（已认证、已登录、传送中等）
+ *    - 登入/登出流程控制
+ *    - 超时和空闲检测
+ *
+ * 3. 玩家数据管理
+ *    - 账号信息（ID、名称、权限等级）
+ *    - 角色数据（Player对象指针）
+ *    - 账号缓存数据（配置、宏、快捷键等）
+ *
+ * 4. 权限和安全
+ *    - RBAC权限控制
+ *    - Warden反作弊系统
+ *    - DoS攻击防护
+ *
+ * 5. 操作码处理
+ *    - 提供数百个操作码处理函数
+ *    - 处理客户端请求（移动、聊天、交易、战斗等）
+ *    - 异步数据库查询回调
+ *
+ * 设计模式：
+ * - 单例模式：每个玩家账号对应唯一的WorldSession
+ * - 观察者模式：响应各种游戏事件
+ * - 状态模式：不同的会话状态有不同的行为
+ *
+ * 生命周期：
+ * 1. 创建：玩家认证成功后创建
+ * 2. 活跃：玩家在线期间持续存在
+ * 3. 销毁：玩家断开连接后销毁
+ */
+
 /// \addtogroup u2w
 /// @{
 /// \file
@@ -250,16 +294,17 @@ namespace WorldPackets
     }
 }
 
+/// 账号数据类型枚举 - 定义不同类型的账号缓存数据
 enum AccountDataType
 {
-    GLOBAL_CONFIG_CACHE             = 0,                    // 0x01 g
-    PER_CHARACTER_CONFIG_CACHE      = 1,                    // 0x02 p
-    GLOBAL_BINDINGS_CACHE           = 2,                    // 0x04 g
-    PER_CHARACTER_BINDINGS_CACHE    = 3,                    // 0x08 p
-    GLOBAL_MACROS_CACHE             = 4,                    // 0x10 g
-    PER_CHARACTER_MACROS_CACHE      = 5,                    // 0x20 p
-    PER_CHARACTER_LAYOUT_CACHE      = 6,                    // 0x40 p
-    PER_CHARACTER_CHAT_CACHE        = 7                     // 0x80 p
+    GLOBAL_CONFIG_CACHE             = 0,                    // 全局配置缓存 (0x01)
+    PER_CHARACTER_CONFIG_CACHE      = 1,                    // 角色专属配置缓存 (0x02)
+    GLOBAL_BINDINGS_CACHE           = 2,                    // 全局快捷键绑定缓存 (0x04)
+    PER_CHARACTER_BINDINGS_CACHE    = 3,                    // 角色专属快捷键绑定缓存 (0x08)
+    GLOBAL_MACROS_CACHE             = 4,                    // 全局宏缓存 (0x10)
+    PER_CHARACTER_MACROS_CACHE      = 5,                    // 角色专属宏缓存 (0x20)
+    PER_CHARACTER_LAYOUT_CACHE      = 6,                    // 角色专属界面布局缓存 (0x40)
+    PER_CHARACTER_CHAT_CACHE        = 7                     // 角色专属聊天设置缓存 (0x80)
 };
 
 #define NUM_ACCOUNT_DATA_TYPES        8
@@ -269,12 +314,13 @@ enum AccountDataType
 
 uint32 constexpr MAX_CHARACTERS_PER_REALM = 10; // max supported by client in char enum
 
+/// 账号数据结构 - 存储账号相关的缓存数据
 struct AccountData
 {
     AccountData() : Time(0), Data("") { }
 
-    time_t Time;
-    std::string Data;
+    time_t Time;        // 数据最后更新时间戳
+    std::string Data;   // 数据内容字符串
 };
 
 enum PartyOperation
@@ -323,8 +369,8 @@ enum TutorialsFlag : uint8
     TUTORIALS_FLAG_LOADED_FROM_DB                 = 0x02
 };
 
-//class to deal with packet processing
-//allows to determine if next packet is safe to be processed
+/// 数据包过滤器基类 - 用于确定下一个数据包是否可以安全处理
+/// 主要用于在Map::Update()等场景中过滤线程安全的数据包
 class PacketFilter
 {
 public:
@@ -341,7 +387,8 @@ private:
     PacketFilter(PacketFilter const& right) = delete;
     PacketFilter& operator=(PacketFilter const& right) = delete;
 };
-//process only thread-safe packets in Map::Update()
+/// 地图会话过滤器 - 仅处理线程安全的数据包
+/// 用于在Map::Update()中处理数据包，不处理玩家登出
 class MapSessionFilter : public PacketFilter
 {
 public:
@@ -353,8 +400,8 @@ public:
     virtual bool ProcessUnsafe() const override { return false; }
 };
 
-//class used to filer only thread-unsafe packets from queue
-//in order to update only be used in World::UpdateSessions()
+/// 世界会话过滤器 - 用于过滤线程不安全的数据包
+/// 在World::UpdateSessions()中使用，只处理非线程安全的数据包
 class WorldSessionFilter : public PacketFilter
 {
 public:
@@ -364,148 +411,247 @@ public:
     virtual bool Process(WorldPacket* packet) override;
 };
 
-// Proxy structure to contain data passed to callback function,
-// only to prevent bloating the parameter list
+/// 角色创建信息类 - 传递给回调函数的数据容器
+/// 用于存储创建角色时的用户输入和服务器端数据
 class CharacterCreateInfo
 {
     friend class WorldSession;
     friend class Player;
 
     protected:
-        /// User specified variables
-        std::string Name;
-        uint8 Race       = 0;
-        uint8 Class      = 0;
-        uint8 Gender     = GENDER_NONE;
-        uint8 Skin       = 0;
-        uint8 Face       = 0;
-        uint8 HairStyle  = 0;
-        uint8 HairColor  = 0;
-        uint8 FacialHair = 0;
-        uint8 OutfitId   = 0;
+        /// 用户指定的变量 - 角色创建时用户输入的数据
+        std::string Name;           // 角色名称
+        uint8 Race       = 0;       // 种族ID
+        uint8 Class      = 0;       // 职业ID
+        uint8 Gender     = GENDER_NONE; // 性别
+        uint8 Skin       = 0;       // 肤色
+        uint8 Face       = 0;       // 脸型
+        uint8 HairStyle  = 0;       // 发型
+        uint8 HairColor  = 0;       // 发色
+        uint8 FacialHair = 0;       // 面部毛发（胡须等）
+        uint8 OutfitId   = 0;       // 初始装备套装ID
 
-        /// Server side data
-        uint8 CharCount = 0;
+        /// 服务器端数据 - 由服务器生成或查询的数据
+        uint8 CharCount = 0;        // 账号已有角色数量
 };
 
+/// 角色重命名信息结构 - 存储角色改名所需的数据
 struct CharacterRenameInfo
 {
     friend class WorldSession;
 
     protected:
-        ObjectGuid Guid;
-        std::string Name;
+        ObjectGuid Guid;        // 角色GUID
+        std::string Name;       // 新角色名称
 };
 
+/// 角色自定义信息结构 - 存储角色外观定制数据（继承自重命名信息）
 struct CharacterCustomizeInfo : public CharacterRenameInfo
 {
     friend class Player;
     friend class WorldSession;
 
     protected:
-        uint8 Gender     = GENDER_NONE;
-        uint8 Skin       = 0;
-        uint8 Face       = 0;
-        uint8 HairStyle  = 0;
-        uint8 HairColor  = 0;
-        uint8 FacialHair = 0;
+        uint8 Gender     = GENDER_NONE; // 性别
+        uint8 Skin       = 0;           // 肤色
+        uint8 Face       = 0;           // 脸型
+        uint8 HairStyle  = 0;           // 发型
+        uint8 HairColor  = 0;           // 发色
+        uint8 FacialHair = 0;           // 面部毛发
 };
 
+/// 角色阵营变更信息结构 - 存储阵营转换所需数据（继承自自定义信息）
 struct CharacterFactionChangeInfo : public CharacterCustomizeInfo
 {
     friend class Player;
     friend class WorldSession;
 
     protected:
-        uint8 Race = 0;
-        bool FactionChange = false;
+        uint8 Race = 0;             // 新种族ID
+        bool FactionChange = false; // 是否进行阵营变更
 };
 
+/// 数据包计数器结构 - 用于DoS防护中的频率统计
 struct PacketCounter
 {
-    time_t lastReceiveTime;
-    uint32 amountCounter;
+    time_t lastReceiveTime;     // 上次接收该操作码的时间戳
+    uint32 amountCounter;       // 该操作码的累计计数
 };
 
-/// Player session in the World
+/// 玩家会话类 - 管理玩家与服务器的连接和通信
+/// WorldSession 类是服务器端的核心类之一，负责：
+/// 1. 管理玩家与服务器之间的网络连接
+/// 2. 处理客户端发送的各种数据包（Opcode）
+/// 3. 维护玩家的账号信息、权限、状态等
+/// 4. 提供登入、登出、踢人等会话管理功能
 class TC_GAME_API WorldSession
 {
     public:
+        /// 构造函数 - 初始化玩家会话
+        /// @param id 账号ID
+        /// @param name 账号名称
+        /// @param sock 网络套接字连接
+        /// @param sec 账号安全等级
+        /// @param expansion 客户端资料片版本
+        /// @param mute_time 禁言结束时间
+        /// @param timezoneOffset 时区偏移
+        /// @param locale 客户端语言设置
+        /// @param recruiter 招募者ID
+        /// @param isARecruiter 是否为招募者
         WorldSession(uint32 id, std::string&& name, std::shared_ptr<WorldSocket> sock, AccountTypes sec, uint8 expansion, time_t mute_time,
             Minutes timezoneOffset, LocaleConstant locale, uint32 recruiter, bool isARecruiter);
+        /// 析构函数 - 清理会话资源
         ~WorldSession();
 
+        /// 检查玩家是否正在加载中
         bool PlayerLoading() const { return m_playerLoading; }
+        /// 检查玩家是否正在登出中
         bool PlayerLogout() const { return m_playerLogout; }
+        /// 检查玩家是否正在登出且需要保存
         bool PlayerLogoutWithSave() const { return m_playerLogout && m_playerSave; }
+        /// 检查玩家是否最近刚登出
         bool PlayerRecentlyLoggedOut() const { return m_playerRecentlyLogout; }
+        /// 检查玩家是否已断开连接（套接字为空）
         bool PlayerDisconnected() const { return !m_Socket; }
 
+        /// 读取插件信息
+        /// @param data 数据缓冲区
         void ReadAddonsInfo(ByteBuffer& data);
+        /// 发送插件信息给客户端
         void SendAddonsInfo();
 
+        /// 读取移动信息
+        /// @param data 数据包
+        /// @param mi 移动信息结构指针
         void ReadMovementInfo(WorldPacket& data, MovementInfo* mi);
+        /// 写入移动信息（静态方法）
+        /// @param data 数据包指针
+        /// @param mi 移动信息结构指针
         void static WriteMovementInfo(WorldPacket* data, MovementInfo* mi);
 
+        /// 发送数据包给客户端
+        /// @param packet 要发送的数据包指针
         void SendPacket(WorldPacket const* packet);
+        /// 发送通知消息给客户端 - 格式化字符串版本
+        /// @param format 格式化字符串
+        /// @param ... 可变参数
         void SendNotification(const char *format, ...) ATTR_PRINTF(2, 3);
+        /// 发送通知消息给客户端 - 字符串ID版本
+        /// @param string_id 字符串模板ID
+        /// @param ... 可变参数
         void SendNotification(uint32 string_id, ...);
+        /// 发送宠物名称无效错误消息
         void SendPetNameInvalid(uint32 error, std::string const& name, DeclinedName *declinedName);
+        /// 发送队伍操作结果
+        /// @param operation 队伍操作类型
+        /// @param member 成员名称
+        /// @param res 操作结果
+        /// @param val 附加值
         void SendPartyResult(PartyOperation operation, std::string const& member, PartyResult res, uint32 val = 0);
+        /// 发送区域触发消息
+        /// @param Text 格式化文本
+        /// @param ... 可变参数
         void SendAreaTriggerMessage(char const* Text, ...) ATTR_PRINTF(2, 3);
+        /// 发送相位偏移设置
+        /// @param phaseShift 相位ID
         void SendSetPhaseShift(uint32 phaseShift);
+        /// 发送服务器时间查询响应
         void SendQueryTimeResponse();
 
+        /// 发送认证响应给客户端
+        /// @param code 认证结果代码
+        /// @param shortForm 是否使用短格式
+        /// @param queuePos 队列位置（默认为0）
         void SendAuthResponse(uint8 code, bool shortForm, uint32 queuePos = 0);
+        /// 发送客户端缓存版本号
+        /// @param version 缓存版本号
         void SendClientCacheVersion(uint32 version);
 
+        /// 初始化会话 - 在玩家登录后设置会话状态
         void InitializeSession();
+        /// 初始化会话回调 - 异步加载角色数据后的回调处理
+        /// @param realmHolder 角色数据库查询结果持有者
         void InitializeSessionCallback(CharacterDatabaseQueryHolder const& realmHolder);
 
+        /// 获取游戏客户端对象
         GameClient* GetGameClient() const { return _gameClient; };
 
+        /// 获取RBAC权限数据对象
         rbac::RBACData* GetRBACData() const;
+        /// 检查是否拥有指定权限
+        /// @param permissionId 权限ID
+        /// @return 返回true表示拥有该权限
         bool HasPermission(uint32 permissionId);
+        /// 加载权限数据 - 从数据库加载账号权限
         void LoadPermissions();
+        /// 异步加载权限数据
         QueryCallback LoadPermissionsAsync();
-        void InvalidateRBACData(); // Used to force LoadPermissions at next HasPermission check
+        /// 使RBAC数据失效 - 强制下次HasPermission检查时重新加载权限
+        void InvalidateRBACData();
 
+        /// 获取账号安全等级
         AccountTypes GetSecurity() const { return _security; }
+        /// 获取账号ID
         uint32 GetAccountId() const { return _accountId; }
+        /// 获取账号名称
         std::string const& GetAccountName() const { return _accountName; }
+        /// 获取玩家对象指针
         Player* GetPlayer() const { return _player; }
+        /// 获取玩家名称
         std::string const& GetPlayerName() const;
+        /// 获取玩家信息字符串（用于日志等）
         std::string GetPlayerInfo() const;
 
+        /// 获取玩家GUID的低32位
         ObjectGuid::LowType GetGUIDLow() const;
+        /// 设置账号安全等级
+        /// @param security 新的安全等级
         void SetSecurity(AccountTypes security) { _security = security; }
+        /// 获取客户端远程地址（IP地址）
         std::string const& GetRemoteAddress() const { return m_Address; }
+        /// 设置玩家对象指针
+        /// @param player 玩家对象指针
         void SetPlayer(Player* player);
+        /// 获取资料片版本
         uint8 Expansion() const { return m_expansion; }
 
+        /// 初始化Warden反作弊系统
+        /// @param k 会话密钥
+        /// @param os 操作系统类型
         void InitWarden(SessionKey const& k, std::string const& os);
+        /// 获取Warden模块指针（可修改）
         Warden* GetWarden() { return _warden.get(); }
+        /// 获取Warden模块指针（只读）
         Warden const* GetWarden() const { return _warden.get(); }
 
-        /// Session in auth.queue currently
+        /// 设置会话是否在认证队列中
+        /// @param state 是否在队列中
         void SetInQueue(bool state) { m_inQueue = state; }
 
-        /// Is the user engaged in a log out process?
+        /// 检查用户是否正在登出过程中
         bool isLogingOut() const { return _logoutTime || m_playerLogout; }
 
-        /// Engage the logout process for the user
+        /// 设置登出开始时间 - 启动登出流程
+        /// @param requestTime 登出请求的时间戳
         void SetLogoutStartTime(time_t requestTime)
         {
             _logoutTime = requestTime;
         }
 
-        /// Is logout cooldown expired?
+        /// 检查是否应该执行登出（登出冷却时间是否已过）
+        /// @param currTime 当前时间戳
+        /// @return 返回true表示登出冷却已过，可以执行登出
         bool ShouldLogOut(time_t currTime) const
         {
             return (_logoutTime > 0 && currTime >= _logoutTime + 20);
         }
 
+        /// 登出玩家 - 执行玩家登出流程
+        /// @param save 是否保存玩家数据到数据库
         void LogoutPlayer(bool save);
+
+        /// 踢出玩家 - 强制断开玩家连接
+        /// @param reason 踢人原因描述
         void KickPlayer(std::string const& reason);
         // Returns true if all contained hyperlinks are valid
         // May kick player on false depending on world config (handler should abort)
@@ -514,12 +660,21 @@ class TC_GAME_API WorldSession
         // May kick player on false depending on world config (handler should abort)
         bool DisallowHyperlinksAndMaybeKick(std::string const& str);
 
+        /// 将数据包加入接收队列等待处理
+        /// @param new_packet 要入队的数据包指针
         void QueuePacket(WorldPacket* new_packet);
+
+        /// 更新会话状态 - 每帧调用，处理队列中的数据包
+        /// @param diff 距离上次更新的时间间隔（毫秒）
+        /// @param updater 数据包过滤器，用于筛选可处理的数据包
+        /// @return 返回是否成功处理
         bool Update(uint32 diff, PacketFilter& updater);
 
-        /// Handle the authentication waiting queue (to be completed)
+        /// 发送认证等待队列位置信息
+        /// @param position 在队列中的位置
         void SendAuthWaitQueue(uint32 position);
 
+        /// 发送功能系统状态给客户端（包含各种系统开关状态）
         void SendFeatureSystemStatus();
 
         void SendNameQueryOpcode(ObjectGuid guid);
@@ -552,16 +707,40 @@ class TC_GAME_API WorldSession
         void SendPetStableResult(uint8 guid);
         bool CheckStableMaster(ObjectGuid guid);
 
-        // Account Data
+        // 账号数据管理
+        /// 获取指定类型的账号数据
+        /// @param type 账号数据类型
+        /// @return 返回账号数据指针
         AccountData* GetAccountData(AccountDataType type) { return &m_accountData[type]; }
+        /// 设置账号数据
+        /// @param type 账号数据类型
+        /// @param tm 时间戳
+        /// @param data 数据内容
         void SetAccountData(AccountDataType type, time_t tm, std::string const& data);
+        /// 发送账号数据时间戳给客户端
+        /// @param mask 数据类型掩码
         void SendAccountDataTimes(uint32 mask);
+        /// 从数据库加载账号数据
+        /// @param result 数据库查询结果
+        /// @param mask 数据类型掩码
         void LoadAccountData(PreparedQueryResult result, uint32 mask);
 
+        // 教程数据管理
+        /// 从数据库加载教程数据
+        /// @param result 数据库查询结果
         void LoadTutorialsData(PreparedQueryResult result);
+        /// 发送教程数据给客户端
         void SendTutorialsData();
+        /// 保存教程数据到数据库
+        /// @param trans 数据库事务
         void SaveTutorialsData(CharacterDatabaseTransaction trans);
+        /// 获取指定索引的教程整数值
+        /// @param index 教程索引（0到MAX_ACCOUNT_TUTORIAL_VALUES-1）
+        /// @return 返回教程值
         uint32 GetTutorialInt(uint8 index) const { return m_Tutorials[index]; }
+        /// 设置指定索引的教程整数值
+        /// @param index 教程索引
+        /// @param value 新的教程值
         void SetTutorialInt(uint8 index, uint32 value)
         {
             if (m_Tutorials[index] != value)
@@ -570,10 +749,21 @@ class TC_GAME_API WorldSession
                 m_TutorialsChanged |= TUTORIALS_FLAG_CHANGED;
             }
         }
-        //auction
+        // 拍卖行功能
+        /// 发送拍卖行NPC问候消息
+        /// @param guid NPC的GUID
+        /// @param unit NPC生物对象
         void SendAuctionHello(ObjectGuid guid, Creature* unit);
+        /// 发送拍卖命令结果
+        /// @param auctionItemId 拍卖物品ID
+        /// @param command 拍卖操作类型
+        /// @param errorCode 错误码
+        /// @param bagResult 背包结果码
         void SendAuctionCommandResult(uint32 auctionItemId, AuctionAction command, AuctionError errorCode, InventoryResult bagResult = InventoryResult(0));
+        /// 发送拍卖竞拍者通知
         void SendAuctionBidderNotification(uint32 location, uint32 auctionId, ObjectGuid bidder, uint32 bidSum, uint32 diff, uint32 item_template);
+        /// 发送拍卖所有者通知
+        /// @param auction 拍卖条目指针
         void SendAuctionOwnerNotification(AuctionEntry* auction);
 
         //Item Enchantment
@@ -596,9 +786,10 @@ class TC_GAME_API WorldSession
 
         void DoLootRelease(ObjectGuid lguid);
 
-        // Account mute time
+        // 账号禁言时间管理
+        /// 检查玩家是否可以发言（是否已过禁言期）
         bool CanSpeak() const;
-        time_t m_muteTime;
+        time_t m_muteTime;                                  // 禁言结束时间 - 0表示未禁言，非0表示禁言结束的时间戳
 
         // Locales
         LocaleConstant GetSessionDbcLocale() const { return m_sessionDbcLocale; }
@@ -608,33 +799,45 @@ class TC_GAME_API WorldSession
 
         char const* GetTrinityString(uint32 entry) const;
 
+        /// 获取网络延迟（毫秒）
         uint32 GetLatency() const { return m_latency; }
+        /// 设置网络延迟（毫秒）
         void SetLatency(uint32 latency) { m_latency = latency; }
 
-        std::atomic<time_t> m_timeOutTime;
+        std::atomic<time_t> m_timeOutTime;                  // 会话超时时间 - 用于检测空闲连接
 
+        /// 重置超时时间
+        /// @param onlyActive 是否仅针对活跃连接
         void ResetTimeOutTime(bool onlyActive);
 
+        /// 检查连接是否空闲
         bool IsConnectionIdle() const;
 
-        // Recruit-A-Friend Handling
+        // 招募好友（Recruit-A-Friend）功能处理
+        /// 获取招募者ID
         uint32 GetRecruiterId() const { return recruiterId; }
+        /// 检查是否为招募者
         bool IsARecruiter() const { return isRecruiter; }
 
-        // Time Synchronisation
+        // 时间同步功能
+        /// 重置时间同步计数器
         void ResetTimeSync();
+        /// 发送时间同步数据包给客户端
         void SendTimeSync();
 
-        // Packets cooldown
+        // 数据包冷却时间
+        /// 获取日历事件创建冷却时间
         time_t GetCalendarEventCreationCooldown() const { return _calendarEventCreationCooldown; }
+        /// 设置日历事件创建冷却时间
+        /// @param cooldown 冷却结束时间戳
         void SetCalendarEventCreationCooldown(time_t cooldown) { _calendarEventCreationCooldown = cooldown; }
 
-    public:                                                 // opcodes handlers
+    public:                                                 // 操作码处理器 - 处理各种客户端请求
 
-        void Handle_NULL(WorldPacket& recvPacket);          // not used
-        void Handle_EarlyProccess(WorldPacket& recvPacket); // just mark packets processed in WorldSocket::ReadDataHandler
-        void Handle_ServerSide(WorldPacket& recvPacket);    // sever side only, can't be accepted from client
-        void Handle_Deprecated(WorldPacket& recvPacket);    // never used anymore by client
+        void Handle_NULL(WorldPacket& recvPacket);          // 未使用的操作码处理器
+        void Handle_EarlyProccess(WorldPacket& recvPacket); // 早期处理 - 在WorldSocket::ReadDataHandler中标记已处理的数据包
+        void Handle_ServerSide(WorldPacket& recvPacket);    // 服务器端专用 - 不应从客户端接收
+        void Handle_Deprecated(WorldPacket& recvPacket);    // 已弃用的操作码 - 客户端不再使用
 
         void HandleCharEnumOpcode(WorldPacket& recvPacket);
         void HandleCharDeleteOpcode(WorldPacket& recvPacket);
@@ -1153,55 +1356,81 @@ class TC_GAME_API WorldSession
         void HandleUpdateMissileTrajectory(WorldPacket& recvPacket);
 
     public:
+        /// 获取查询处理器引用 - 用于处理异步数据库查询
         QueryCallbackProcessor& GetQueryProcessor() { return _queryProcessor; }
+        /// 添加事务回调 - 用于异步数据库事务处理
         TransactionCallback& AddTransactionCallback(TransactionCallback&& callback);
+        /// 添加查询持有者回调 - 用于处理包含多个查询的复杂操作
         SQLQueryHolderCallback& AddQueryHolderCallback(SQLQueryHolderCallback&& callback);
 
     private:
+        /// 处理查询回调 - 每帧调用，处理已完成的异步查询
         void ProcessQueryCallbacks();
 
-        QueryCallbackProcessor _queryProcessor;
-        AsyncCallbackProcessor<TransactionCallback> _transactionCallbacks;
-        AsyncCallbackProcessor<SQLQueryHolderCallback> _queryHolderProcessor;
+        QueryCallbackProcessor _queryProcessor;                                 // 查询回调处理器
+        AsyncCallbackProcessor<TransactionCallback> _transactionCallbacks;      // 事务回调处理器
+        AsyncCallbackProcessor<SQLQueryHolderCallback> _queryHolderProcessor;   // 查询持有者回调处理器
 
     friend class World;
     protected:
+        /// DoS攻击防护类 - 检测和防止拒绝服务攻击
+        /// 通过监控数据包频率来识别恶意客户端
         class DosProtection
         {
             friend class World;
             public:
                 DosProtection(WorldSession* s);
+                /// 评估操作码是否超过频率限制
+                /// @param p 数据包引用
+                /// @param time 当前时间
+                /// @return 返回true表示数据包可以处理
                 bool EvaluateOpcode(WorldPacket& p, time_t time) const;
             protected:
+                /// 防护策略枚举
                 enum Policy
                 {
-                    POLICY_LOG,
-                    POLICY_KICK,
-                    POLICY_BAN,
+                    POLICY_LOG,     // 仅记录日志
+                    POLICY_KICK,    // 踢出玩家
+                    POLICY_BAN,     // 封禁账号
                 };
 
+                /// 获取指定操作码允许的最大数据包计数
+                /// @param opcode 操作码
+                /// @return 最大允许的数据包数量
                 uint32 GetMaxPacketCounterAllowed(uint16 opcode) const;
 
-                WorldSession* Session;
+                WorldSession* Session;      // 关联的会话指针
 
             private:
-                Policy _policy;
+                Policy _policy;             // 当前防护策略
                 typedef std::unordered_map<uint16, PacketCounter> PacketThrottlingMap;
-                // mark this member as "mutable" so it can be modified even in const functions
-                mutable PacketThrottlingMap _PacketThrottlingMap;
+                // 标记为"mutable"以便在const函数中也能修改
+                mutable PacketThrottlingMap _PacketThrottlingMap;   // 数据包节流映射表
 
                 DosProtection(DosProtection const& right) = delete;
                 DosProtection& operator=(DosProtection const& right) = delete;
-        } AntiDOS;
+        } AntiDOS;          // 反DoS攻击实例
 
     private:
-        // private trade methods
+        // 私有交易方法
+        /// 移动物品 - 在交易过程中交换物品
+        /// @param myItems 我的物品数组
+        /// @param hisItems 对方的物品数组
         void moveItems(Item* myItems[], Item* hisItems[]);
 
+        /// 检查是否可以使用银行
+        /// @param bankerGUID 银行家GUID（默认为空）
+        /// @return 返回true表示可以使用银行
         bool CanUseBank(ObjectGuid bankerGUID = ObjectGuid::Empty) const;
 
-        // logging helper
+        // 日志辅助方法
+        /// 记录意外的操作码
+        /// @param packet 数据包指针
+        /// @param status 状态描述
+        /// @param reason 原因描述
         void LogUnexpectedOpcode(WorldPacket* packet, char const* status, const char *reason);
+        /// 记录未处理的数据包尾部
+        /// @param packet 数据包指针
         void LogUnprocessedTail(WorldPacket* packet);
 
         // EnumData helpers
@@ -1210,76 +1439,84 @@ class TC_GAME_API WorldSession
             return _legitCharacters.find(lowGUID) != _legitCharacters.end();
         }
 
-        // Movement helpers
+        // 移动辅助方法
+        /// 检查是否是正确的被移动单位
+        /// @param guid 单位GUID
+        /// @return 返回true表示是正确的单位
         bool IsRightUnitBeingMoved(ObjectGuid guid);
 
-        // this stores the GUIDs of the characters who can login
-        // characters who failed on Player::BuildEnumData shouldn't login
+        // 存储可以登录的角色GUID集合
+        // 在Player::BuildEnumData中失败的角色不应该登录
         GuidSet _legitCharacters;
 
-        ObjectGuid::LowType m_GUIDLow;                      // set logined or recently logout player (while m_playerRecentlyLogout set)
-        Player* _player;
-        std::shared_ptr<WorldSocket> m_Socket;
-        std::string m_Address;                              // Current Remote Address
+        ObjectGuid::LowType m_GUIDLow;                      // 当前登录或最近登出玩家的GUID低32位（当m_playerRecentlyLogout设置时有效）
+        Player* _player;                                    // 玩家对象指针 - 指向当前登录的玩家角色实例
+        std::shared_ptr<WorldSocket> m_Socket;              // 网络套接字 - 管理与客户端的网络连接
+        std::string m_Address;                              // 当前远程地址 - 客户端的IP地址
      // std::string m_LAddress;                             // Last Attempted Remote Adress - we can not set attempted ip for a non-existing session!
 
-        AccountTypes _security;
-        uint32 _accountId;
-        std::string _accountName;
-        uint8 m_expansion;
+        AccountTypes _security;                             // 账号安全等级 - 用于权限控制（如GM权限）
+        uint32 _accountId;                                  // 账号ID - 唯一标识符
+        std::string _accountName;                           // 账号名称
+        uint8 m_expansion;                                  // 资料片版本 - 客户端支持的资料片等级
 
-        // Warden
-        std::unique_ptr<Warden> _warden;                                    // Remains NULL if Warden system is not enabled by config
+        // Warden 反作弊系统
+        std::unique_ptr<Warden> _warden;                    // Warden模块指针 - 如果配置未启用则为NULL，用于检测作弊
 
-        time_t _logoutTime;
-        bool m_inQueue;                                     // session wait in auth.queue
-        bool m_playerLoading;                               // code processed in LoginPlayer
-        bool m_playerLogout;                                // code processed in LogoutPlayer
-        bool m_playerRecentlyLogout;
-        bool m_playerSave;
-        LocaleConstant m_sessionDbcLocale;
-        LocaleConstant m_sessionDbLocaleIndex;
-        Minutes _timezoneOffset;
-        std::atomic<uint32> m_latency;
-        AccountData m_accountData[NUM_ACCOUNT_DATA_TYPES];
-        uint32 m_Tutorials[MAX_ACCOUNT_TUTORIAL_VALUES];
-        uint8  m_TutorialsChanged;
+        time_t _logoutTime;                                 // 登出开始时间 - 记录玩家开始登出的时间戳，用于计算登出冷却
+        bool m_inQueue;                                     // 会话是否在认证队列中等待
+        bool m_playerLoading;                               // 玩家是否正在加载中（LoginPlayer处理中）
+        bool m_playerLogout;                                // 玩家是否正在登出中（LogoutPlayer处理中）
+        bool m_playerRecentlyLogout;                        // 玩家是否最近刚登出
+        bool m_playerSave;                                  // 登出时是否需要保存玩家数据
+        LocaleConstant m_sessionDbcLocale;                  // DBC语言设置 - 客户端DBC文件的语言
+        LocaleConstant m_sessionDbLocaleIndex;              // 数据库语言索引 - 用于本地化字符串查询
+        Minutes _timezoneOffset;                            // 时区偏移 - 玩家的时区信息
+        std::atomic<uint32> m_latency;                      // 网络延迟 - 客户端与服务器之间的延迟（毫秒）
+        AccountData m_accountData[NUM_ACCOUNT_DATA_TYPES];  // 账号数据缓存 - 存储配置、宏、快捷键等
+        uint32 m_Tutorials[MAX_ACCOUNT_TUTORIAL_VALUES];    // 教程数据 - 存储玩家教程进度
+        uint8  m_TutorialsChanged;                          // 教程数据变更标志
+        /// 插件（Addon）相关数据结构
         struct Addons
         {
+            /// 安全插件信息结构
             struct SecureAddonInfo
             {
+                /// 安全插件状态枚举
                 enum SecureAddonStatus : uint8
                 {
-                    BANNED          = 0,
-                    SECURE_VISIBLE  = 1,
-                    SECURE_HIDDEN   = 2
+                    BANNED          = 0,    // 被禁用的插件
+                    SECURE_VISIBLE  = 1,    // 安全可见插件
+                    SECURE_HIDDEN   = 2     // 安全隐藏插件
                 };
 
-                std::string Name;
-                SecureAddonStatus Status = BANNED;
-                bool HasKey = false;
+                std::string Name;           // 插件名称
+                SecureAddonStatus Status = BANNED;  // 插件状态
+                bool HasKey = false;        // 是否拥有密钥
             };
 
-            static uint32 constexpr MaxSecureAddons = 25;
+            static uint32 constexpr MaxSecureAddons = 25;   // 最大安全插件数量
 
-            std::vector<SecureAddonInfo> SecureAddons;
-            uint32 LastBannedAddOnTimestamp = 0;
-        } _addons;
-        uint32 recruiterId;
-        bool isRecruiter;
-        LockedQueue<WorldPacket*> _recvQueue;
-        rbac::RBACData* _RBACData;
-        uint32 expireTime;
-        bool forceExit;
-        ObjectGuid m_currentBankerGUID;
+            std::vector<SecureAddonInfo> SecureAddons;      // 安全插件列表
+            uint32 LastBannedAddOnTimestamp = 0;            // 上次检测到禁用插件的时间戳
+        } _addons;          // 插件数据实例
+        uint32 recruiterId;                                 // 招募者ID - 招募该账号的玩家ID
+        bool isRecruiter;                                   // 是否为招募者 - 该账号是否招募过其他玩家
+        LockedQueue<WorldPacket*> _recvQueue;               // 接收队列 - 存储待处理的数据包
+        rbac::RBACData* _RBACData;                          // RBAC权限数据 - 基于角色的访问控制数据
+        uint32 expireTime;                                  // 会话过期时间
+        bool forceExit;                                     // 强制退出标志
+        ObjectGuid m_currentBankerGUID;                     // 当前正在交互的银行家GUID
 
-        std::unique_ptr<boost::circular_buffer<std::pair<int64, uint32>>> _timeSyncClockDeltaQueue; // first member: clockDelta. Second member: latency of the packet exchange that was used to compute that clockDelta.
-        int64 _timeSyncClockDelta;
-        void ComputeNewClockDelta();
+        // 时间同步相关数据
+        // 时间同步时钟差值队列 - first: 时钟差值, second: 用于计算该差值的数据包交换延迟
+        std::unique_ptr<boost::circular_buffer<std::pair<int64, uint32>>> _timeSyncClockDeltaQueue;
+        int64 _timeSyncClockDelta;                          // 当前时间同步时钟差值
+        void ComputeNewClockDelta();                        // 计算新的时钟差值
 
-        std::map<uint32, uint32> _pendingTimeSyncRequests; // key: counter. value: server time when packet with that counter was sent.
-        uint32 _timeSyncNextCounter;
-        uint32 _timeSyncTimer;
+        std::map<uint32, uint32> _pendingTimeSyncRequests;  // 待处理的时间同步请求映射表 (key: 计数器, value: 发送时的服务器时间)
+        uint32 _timeSyncNextCounter;                        // 下一个时间同步计数器值
+        uint32 _timeSyncTimer;                              // 时间同步定时器
 
         // Packets cooldown
         time_t _calendarEventCreationCooldown;

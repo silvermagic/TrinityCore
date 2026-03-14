@@ -15,10 +15,18 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-/*
- * Scripts for spells with SPELLFAMILY_ROGUE and SPELLFAMILY_GENERIC spells used by rogue players.
- * Ordered alphabetically using scriptname.
- * Scriptnames of files in this file should be prefixed with "spell_rog_".
+/**
+ * @file    spell_rogue.cpp
+ * @brief   盗贼职业法术脚本模块
+ *
+ * 本文件实现了盗贼职业特有的法术脚本，包含以下主要功能：
+ * - 攻击技能：剑刃乱舞、杀戮盛宴、毒伤、刺骨等
+ * - 生存技能：佯攻、闪避、暗影斗篷等
+ * - 控制技能：致盲、凿击、偷袭等
+ * - 天赋效果：欺诈、冷酷攻击、野蛮战斗、迅捷毒药等
+ *
+ * 法术脚本按脚本名称字母顺序排列。
+ * 本文件中的脚本名称应以 "spell_rog_" 为前缀。
  */
 
 #include "ScriptMgr.h"
@@ -33,48 +41,81 @@
 #include "SpellMgr.h"
 #include "SpellScript.h"
 
+/**
+ * @brief 盗贼职业法术ID枚举
+ *
+ * 定义了盗贼职业相关法术的ID常量，用于法术脚本中引用具体的法术效果。
+ * 包含攻击技能、控制技能、天赋效果和套装奖励等法术。
+ */
 enum RogueSpells
 {
-    SPELL_ROGUE_BLADE_FLURRY_EXTRA_ATTACK       = 22482,
-    SPELL_ROGUE_CHEAT_DEATH_COOLDOWN            = 31231,
-    SPELL_ROGUE_GLYPH_OF_PREPARATION            = 56819,
-    SPELL_ROGUE_KILLING_SPREE                   = 51690,
-    SPELL_ROGUE_KILLING_SPREE_TELEPORT          = 57840,
-    SPELL_ROGUE_KILLING_SPREE_WEAPON_DMG        = 57841,
-    SPELL_ROGUE_KILLING_SPREE_DMG_BUFF          = 61851,
-    SPELL_ROGUE_PREY_ON_THE_WEAK                = 58670,
-    SPELL_ROGUE_SHIV_TRIGGERED                  =  5940,
-    SPELL_ROGUE_TRICKS_OF_THE_TRADE             = 57934,
-    SPELL_ROGUE_TRICKS_OF_THE_TRADE_DMG_BOOST   = 57933,
-    SPELL_ROGUE_TRICKS_OF_THE_TRADE_PROC        = 59628,
-    SPELL_ROGUE_HONOR_AMONG_THIEVES             = 51698,
-    SPELL_ROGUE_HONOR_AMONG_THIEVES_PROC        = 52916,
-    SPELL_ROGUE_HONOR_AMONG_THIEVES_2           = 51699,
-    SPELL_ROGUE_T10_2P_BONUS                    = 70804,
-    SPELL_ROGUE_GLYPH_OF_BACKSTAB_TRIGGER       = 63975,
-    SPELL_ROGUE_QUICK_RECOVERY_ENERGY           = 31663,
-    SPELL_ROGUE_CRIPPLING_POISON                =  3409,
-    SPELL_ROGUE_MASTER_OF_SUBTLETY_BUFF         = 31665,
-    SPELL_ROGUE_OVERKILL_BUFF                   = 58427,
-    SPELL_ROGUE_STEALTH                         =  1784
+    SPELL_ROGUE_BLADE_FLURRY_EXTRA_ATTACK       = 22482,   ///< 剑刃乱舞额外攻击
+    SPELL_ROGUE_CHEAT_DEATH_COOLDOWN            = 31231,   ///< 诈死冷却
+    SPELL_ROGUE_GLYPH_OF_PREPARATION            = 56819,   ///< 准备雕文
+    SPELL_ROGUE_KILLING_SPREE                   = 51690,   ///< 杀戮盛宴
+    SPELL_ROGUE_KILLING_SPREE_TELEPORT          = 57840,   ///< 杀戮盛宴传送
+    SPELL_ROGUE_KILLING_SPREE_WEAPON_DMG        = 57841,   ///< 杀戮盛宴武器伤害
+    SPELL_ROGUE_KILLING_SPREE_DMG_BUFF          = 61851,   ///< 杀戮盛宴伤害增益
+    SPELL_ROGUE_PREY_ON_THE_WEAK                = 58670,   ///< 弱点攻击
+    SPELL_ROGUE_SHIV_TRIGGERED                  =  5940,   ///< 毒伤触发
+    SPELL_ROGUE_TRICKS_OF_THE_TRADE             = 57934,   ///< 嫁祸诀窍
+    SPELL_ROGUE_TRICKS_OF_THE_TRADE_DMG_BOOST   = 57933,   ///< 嫁祸诀窍伤害提升
+    SPELL_ROGUE_TRICKS_OF_THE_TRADE_PROC        = 59628,   ///< 嫁祸诀窍触发
+    SPELL_ROGUE_HONOR_AMONG_THIEVES             = 51698,   ///< 盗贼的荣誉
+    SPELL_ROGUE_HONOR_AMONG_THIEVES_PROC        = 52916,   ///< 盗贼的荣誉触发
+    SPELL_ROGUE_HONOR_AMONG_THIEVES_2           = 51699,   ///< 盗贼的荣誉2
+    SPELL_ROGUE_T10_2P_BONUS                    = 70804,   ///< T10 2件套奖励
+    SPELL_ROGUE_GLYPH_OF_BACKSTAB_TRIGGER       = 63975,   ///< 背刺雕文触发
+    SPELL_ROGUE_QUICK_RECOVERY_ENERGY           = 31663,   ///< 快速恢复能量
+    SPELL_ROGUE_CRIPPLING_POISON                =  3409,   ///< 致残药膏
+    SPELL_ROGUE_MASTER_OF_SUBTLETY_BUFF         = 31665,   ///< 欺诈大师增益
+    SPELL_ROGUE_OVERKILL_BUFF                   = 58427,   ///< 杀戮充盈增益
+    SPELL_ROGUE_STEALTH                         =  1784    ///< 潜行
 };
 
-// 13877, 33735, (check 51211, 65956) - Blade Flurry
+/**
+ * @class   spell_rog_blade_flurry
+ * @brief   剑刃乱舞光环脚本 (SpellID: 13877, 33735)
+ *
+ * 处理盗贼剑刃乱舞技能的效果。
+ * 剑刃乱舞使盗贼的近战攻击对附近额外的目标造成相同的伤害。
+ *
+ * 调用时机：当盗贼造成近战伤害时触发
+ */
 class spell_rog_blade_flurry : public AuraScript
 {
     PrepareAuraScript(spell_rog_blade_flurry);
 
+    /**
+     * @brief 验证法术信息
+     * @param spellInfo 法术信息指针
+     * @return 法术信息有效返回true，否则返回false
+     */
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
         return ValidateSpellInfo({ SPELL_ROGUE_BLADE_FLURRY_EXTRA_ATTACK });
     }
 
+    /**
+     * @brief 检查触发条件
+     * @param eventInfo 触发事件信息
+     * @return 有附近目标返回true，否则返回false
+     *
+     * 选择附近的一个目标作为剑刃乱舞的额外目标。
+     */
     bool CheckProc(ProcEventInfo& eventInfo)
     {
         _procTarget = eventInfo.GetActor()->SelectNearbyTarget(eventInfo.GetProcTarget());
         return _procTarget != nullptr;
     }
 
+    /**
+     * @brief 处理触发效果
+     * @param aurEff 光环效果指针
+     * @param eventInfo 触发事件信息
+     *
+     * 对额外目标施放相同伤害的攻击。
+     */
     void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
     {
         PreventDefaultAction();
@@ -92,33 +133,74 @@ class spell_rog_blade_flurry : public AuraScript
         OnEffectProc += AuraEffectProcFn(spell_rog_blade_flurry::HandleProc, EFFECT_0, SPELL_AURA_MOD_MELEE_HASTE);
     }
 
-    Unit* _procTarget = nullptr;
+    Unit* _procTarget = nullptr;  ///< 剑刃乱舞的额外目标
 };
 
-// -31228 - Cheat Death
+/**
+ * @class   spell_rog_cheat_death
+ * @brief   诈死光环脚本 (SpellID: 31228)
+ *
+ * 处理盗贼诈死天赋的效果。
+ * 诈死有几率使原本致命的攻击变得只将生命值降至10%，
+ * 并在短时间内完全吸收伤害。
+ *
+ * 调用时机：当盗贼受到伤害时触发
+ */
 class spell_rog_cheat_death : public AuraScript
 {
     PrepareAuraScript(spell_rog_cheat_death);
 
-    uint32 absorbChance = 0;
+    uint32 absorbChance = 0;  ///< 吸收几率
 
+    /**
+     * @brief 验证法术信息
+     * @param spellInfo 法术信息指针
+     * @return 法术信息有效返回true，否则返回false
+     */
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
         return ValidateSpellInfo({ SPELL_ROGUE_CHEAT_DEATH_COOLDOWN });
     }
 
+    /**
+     * @brief 加载光环
+     * @return 目标是玩家返回true，否则返回false
+     *
+     * 初始化吸收几率，确保目标类型为玩家。
+     */
     bool Load() override
     {
         absorbChance = GetEffectInfo(EFFECT_0).CalcValue();
         return GetUnitOwner()->GetTypeId() == TYPEID_PLAYER;
     }
 
+    /**
+     * @brief 计算吸收量
+     * @param aurEff 光环效果指针
+     * @param amount 吸收量引用
+     * @param canBeRecalculated 是否可重新计算引用
+     *
+     * 设置吸收量为无限（-1），以便在Absorb函数中进行自定义计算。
+     */
     void CalculateAmount(AuraEffect const* /*aurEff*/, int32 & amount, bool & /*canBeRecalculated*/)
     {
-        // Set absorbtion amount to unlimited
+        // 设置吸收量为无限
         amount = -1;
     }
 
+    /**
+     * @brief 处理吸收
+     * @param aurEff 光环效果指针
+     * @param dmgInfo 伤害信息引用
+     * @param absorbAmount 吸收量引用
+     *
+     * 检查是否触发诈死效果：
+     * - 伤害足以致命
+     * - 诈死不在冷却中
+     * - 通过几率判定
+     *
+     * 如果触发，将生命值保留在10%，并吸收剩余伤害。
+     */
     void Absorb(AuraEffect* /*aurEff*/, DamageInfo & dmgInfo, uint32 & absorbAmount)
     {
         Player* target = GetTarget()->ToPlayer();
@@ -130,10 +212,10 @@ class spell_rog_cheat_death : public AuraScript
 
         uint32 health10 = target->CountPctFromMaxHealth(10);
 
-        // hp > 10% - absorb hp till 10%
+        // 生命值 > 10% - 吸收伤害直到生命值降至10%
         if (target->GetHealth() > health10)
             absorbAmount = dmgInfo.GetDamage() - target->GetHealth() + health10;
-        // hp lower than 10% - absorb everything
+        // 生命值 <= 10% - 吸收所有伤害
         else
             absorbAmount = dmgInfo.GetDamage();
     }
@@ -145,21 +227,36 @@ class spell_rog_cheat_death : public AuraScript
     }
 };
 
-// -51664 - Cut to the Chase
+/**
+ * @class   spell_rog_cut_to_the_chase
+ * @brief   锯齿利刃光环脚本 (SpellID: 51664)
+ *
+ * 处理盗贼锯齿利刃天赋的效果。
+ * 当使用刺骨技能时，刷新切割的持续时间到5个连击点的最大持续时间。
+ *
+ * 调用时机：当刺骨技能触发时
+ */
 class spell_rog_cut_to_the_chase : public AuraScript
 {
     PrepareAuraScript(spell_rog_cut_to_the_chase);
 
+    /**
+     * @brief 处理触发效果
+     * @param aurEff 光环效果指针
+     * @param eventInfo 触发事件信息
+     *
+     * 查找切割光环并将其持续时间刷新到5个连击点的最大持续时间。
+     */
     void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
     {
         PreventDefaultAction();
 
-        // "refresh your Slice and Dice duration to its 5 combo point maximum"
+        // "将切割持续时间刷新到5个连击点的最大持续时间"
         Unit* caster = eventInfo.GetActor();
-        // lookup Slice and Dice
+        // 查找切割光环
         if (AuraEffect const* snd = caster->GetAuraEffect(SPELL_AURA_MOD_MELEE_HASTE, SPELLFAMILY_ROGUE, 0x00040000, 0x00000000, 0x00000000, caster->GetGUID()))
         {
-            // Max 5 cp duration
+            // 5个连击点的最大持续时间
             uint32 countMax = snd->GetSpellInfo()->GetMaxDuration();
 
             snd->GetBase()->SetDuration(countMax, true);
@@ -173,16 +270,36 @@ class spell_rog_cut_to_the_chase : public AuraScript
     }
 };
 
-// -51625 - Deadly Brew
+/**
+ * @class   spell_rog_deadly_brew
+ * @brief   毒酿光环脚本 (SpellID: 51625)
+ *
+ * 处理盗贼毒酿天赋的效果。
+ * 当对目标施放致命毒药时，自动施放致残药膏效果。
+ *
+ * 调用时机：当致命毒药触发时
+ */
 class spell_rog_deadly_brew : public AuraScript
 {
     PrepareAuraScript(spell_rog_deadly_brew);
 
+    /**
+     * @brief 验证法术信息
+     * @param spellInfo 法术信息指针
+     * @return 法术信息有效返回true，否则返回false
+     */
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
         return ValidateSpellInfo({ SPELL_ROGUE_CRIPPLING_POISON });
     }
 
+    /**
+     * @brief 处理触发效果
+     * @param aurEff 光环效果指针
+     * @param eventInfo 触发事件信息
+     *
+     * 对目标施放致残药膏效果。
+     */
     void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
     {
         PreventDefaultAction();
@@ -195,28 +312,51 @@ class spell_rog_deadly_brew : public AuraScript
     }
 };
 
-// -2818 - Deadly Poison
+/**
+ * @class   spell_rog_deadly_poison
+ * @brief   致命毒药法术脚本 (SpellID: 2818)
+ *
+ * 处理盗贼致命毒药的效果。
+ * 当致命毒药达到5层时，触发武器上的其他毒药效果。
+ *
+ * 调用时机：当致命毒药施放时触发
+ */
 class spell_rog_deadly_poison : public SpellScript
 {
     PrepareSpellScript(spell_rog_deadly_poison);
 
+    /**
+     * @brief 加载法术
+     * @return 施法者是玩家且有施法物品返回true，否则返回false
+     */
     bool Load() override
     {
-        // at this point CastItem must already be initialized
+        // 此时CastItem必须已经初始化
         return GetCaster()->GetTypeId() == TYPEID_PLAYER && GetCastItem();
     }
 
+    /**
+     * @brief 处理命中前效果
+     * @param missInfo 未命中信息
+     *
+     * 记录目标身上致命毒药的层数。
+     */
     void HandleBeforeHit(SpellMissInfo missInfo)
     {
         if (missInfo != SPELL_MISS_NONE)
             return;
 
         if (Unit* target = GetHitUnit())
-            // Deadly Poison
+            // 致命毒药
             if (AuraEffect const* aurEff = target->GetAuraEffect(SPELL_AURA_PERIODIC_DAMAGE, SPELLFAMILY_ROGUE, 0x10000, 0x80000, 0, GetCaster()->GetGUID()))
                 _stackAmount = aurEff->GetBase()->GetStackAmount();
     }
 
+    /**
+     * @brief 处理命中后效果
+     *
+     * 如果致命毒药达到5层，触发武器上的其他毒药效果。
+     */
     void HandleAfterHit()
     {
         if (_stackAmount < 5)
@@ -235,7 +375,7 @@ class spell_rog_deadly_poison : public SpellScript
             if (!item)
                 return;
 
-            // item combat enchantments
+            // 物品战斗附魔
             for (uint8 slot = 0; slot < MAX_ENCHANTMENT_SLOT; ++slot)
             {
                 SpellItemEnchantmentEntry const* enchant = sSpellItemEnchantmentStore.LookupEntry(item->GetEnchantmentId(EnchantmentSlot(slot)));
@@ -254,11 +394,11 @@ class spell_rog_deadly_poison : public SpellScript
                         continue;
                     }
 
-                    // Proc only rogue poisons
+                    // 仅触发盗贼毒药
                     if (spellInfo->SpellFamilyName != SPELLFAMILY_ROGUE || spellInfo->Dispel != DISPEL_POISON)
                         continue;
 
-                    // Do not reproc deadly
+                    // 不要重复触发致命毒药
                     if (spellInfo->SpellFamilyFlags.IsEqual(0x10000, 0x80000, 0))
                         continue;
 
@@ -277,10 +417,18 @@ class spell_rog_deadly_poison : public SpellScript
         AfterHit += SpellHitFn(spell_rog_deadly_poison::HandleAfterHit);
     }
 
-    uint8 _stackAmount = 0;
+    uint8 _stackAmount = 0;  ///< 致命毒药层数
 };
 
-// 51690 - Killing Spree
+/**
+ * @class   spell_rog_killing_spree
+ * @brief   杀戮盛宴法术脚本 (SpellID: 51690)
+ *
+ * 处理盗贼杀戮盛宴技能的效果。
+ * 杀戮盛宴使盗贼在多个目标之间快速传送并造成武器伤害。
+ *
+ * 调用时机：当杀戮盛宴施放时触发
+ */
 class spell_rog_killing_spree : public SpellScriptLoader
 {
     public:
@@ -288,16 +436,34 @@ class spell_rog_killing_spree : public SpellScriptLoader
 
         spell_rog_killing_spree() : SpellScriptLoader(ScriptName) { }
 
+        /**
+         * @class   spell_rog_killing_spree_SpellScript
+         * @brief   杀戮盛宴法术脚本内部类
+         *
+         * 处理目标选择和添加目标到光环脚本。
+         */
         class spell_rog_killing_spree_SpellScript : public SpellScript
         {
             PrepareSpellScript(spell_rog_killing_spree_SpellScript);
 
+            /**
+             * @brief 过滤目标
+             * @param targets 目标列表
+             *
+             * 如果没有目标或盗贼在载具上，施法失败。
+             */
             void FilterTargets(std::list<WorldObject*>& targets)
             {
                 if (targets.empty() || GetCaster()->GetVehicleBase())
                     FinishCast(SPELL_FAILED_OUT_OF_RANGE);
             }
 
+            /**
+             * @brief 处理虚拟效果
+             * @param effIndex 法术效果索引
+             *
+             * 将目标添加到光环脚本的目标列表中。
+             */
             void HandleDummy(SpellEffIndex /*effIndex*/)
             {
                 if (Aura* aura = GetCaster()->GetAura(SPELL_ROGUE_KILLING_SPREE))
@@ -317,10 +483,21 @@ class spell_rog_killing_spree : public SpellScriptLoader
             return new spell_rog_killing_spree_SpellScript();
         }
 
+        /**
+         * @class   spell_rog_killing_spree_AuraScript
+         * @brief   杀戮盛宴光环脚本内部类
+         *
+         * 处理杀戮盛宴的周期性效果，在目标之间传送并造成伤害。
+         */
         class spell_rog_killing_spree_AuraScript : public AuraScript
         {
             PrepareAuraScript(spell_rog_killing_spree_AuraScript);
 
+            /**
+             * @brief 验证法术信息
+             * @param spellInfo 法术信息指针
+             * @return 法术信息有效返回true，否则返回false
+             */
             bool Validate(SpellInfo const* /*spellInfo*/) override
             {
                 return ValidateSpellInfo(
@@ -331,11 +508,24 @@ class spell_rog_killing_spree : public SpellScriptLoader
                 });
             }
 
+            /**
+             * @brief 处理光环施加
+             * @param aurEff 光环效果指针
+             * @param mode 光环效果处理模式
+             *
+             * 施放伤害增益效果。
+             */
             void HandleApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
             {
                 GetTarget()->CastSpell(GetTarget(), SPELL_ROGUE_KILLING_SPREE_DMG_BUFF, true);
             }
 
+            /**
+             * @brief 处理周期性效果
+             * @param aurEff 光环效果指针
+             *
+             * 随机选择一个目标，传送到该目标并造成武器伤害。
+             */
             void HandleEffectPeriodic(AuraEffect const* /*aurEff*/)
             {
                 while (!_targets.empty())
@@ -352,6 +542,13 @@ class spell_rog_killing_spree : public SpellScriptLoader
                 }
             }
 
+            /**
+             * @brief 处理光环移除
+             * @param aurEff 光环效果指针
+             * @param mode 光环效果处理模式
+             *
+             * 移除伤害增益效果。
+             */
             void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
             {
                 GetTarget()->RemoveAurasDueToSpell(SPELL_ROGUE_KILLING_SPREE_DMG_BUFF);
@@ -365,13 +562,19 @@ class spell_rog_killing_spree : public SpellScriptLoader
             }
 
         public:
+            /**
+             * @brief 添加目标
+             * @param target 目标单位
+             *
+             * 将目标添加到目标列表中。
+             */
             void AddTarget(Unit* target)
             {
                 _targets.push_back(target->GetGUID());
             }
 
         private:
-            GuidList _targets;
+            GuidList _targets;  ///< 目标GUID列表
         };
 
         AuraScript* GetAuraScript() const override

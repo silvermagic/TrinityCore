@@ -15,6 +15,25 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file ArenaTeam.cpp
+ * @brief 竞技场队伍系统实现文件
+ *
+ * 本文件实现了竞技场队伍的核心功能，包括：
+ * - 队伍的创建、解散和管理
+ * - 成员的添加、移除和权限管理
+ * - 竞技场等级积分（Rating）和匹配等级积分（MMR）的计算
+ * - 赛季和周统计数据的跟踪
+ * - 竞技场点数的计算和分配
+ *
+ * 竞技场系统支持三种队伍类型：
+ * - 2v2 竞技场（ARENA_TEAM_2v2）
+ * - 3v3 竞技场（ARENA_TEAM_3v3）
+ * - 5v5 竞技场（ARENA_TEAM_5v5）
+ *
+ * 积分系统基于 ELO 算法，根据队伍等级积分和对手等级积分计算胜负后的积分变化。
+ */
+
 #include "ArenaTeam.h"
 #include "ArenaTeamMgr.h"
 #include "BattlegroundMgr.h"
@@ -30,21 +49,56 @@
 #include "World.h"
 #include "WorldSession.h"
 
+/**
+ * @brief 构造函数 - 初始化竞技场队伍对象
+ *
+ * 初始化队伍的基本属性：
+ * - TeamId: 队伍ID（初始化为0，后续通过GenerateArenaTeamId生成）
+ * - Type: 队伍类型（2v2, 3v3, 5v5）
+ * - CaptainGuid: 队长GUID
+ * - BackgroundColor, EmblemStyle, EmblemColor, BorderStyle, BorderColor: 队徽相关
+ * - Stats: 统计数据（周场次、赛季场次、排名、等级积分等）
+ */
 ArenaTeam::ArenaTeam()
     : TeamId(0), Type(0), TeamName(), CaptainGuid(), BackgroundColor(0), EmblemStyle(0), EmblemColor(0),
     BorderStyle(0), BorderColor(0), PreviousOpponents(0)
 {
-    Stats.WeekGames   = 0;
-    Stats.SeasonGames = 0;
-    Stats.Rank        = 0;
-    Stats.Rating      = sWorld->getIntConfig(CONFIG_ARENA_START_RATING);
-    Stats.WeekWins    = 0;
-    Stats.SeasonWins  = 0;
+    Stats.WeekGames   = 0;   ///< 本周比赛场次
+    Stats.SeasonGames = 0;   ///< 本赛季比赛场次
+    Stats.Rank        = 0;   ///< 队伍排名
+    Stats.Rating      = sWorld->getIntConfig(CONFIG_ARENA_START_RATING);  ///< 队伍等级积分，从配置读取初始值
+    Stats.WeekWins    = 0;   ///< 本周胜场
+    Stats.SeasonWins  = 0;   ///< 本赛季胜场
 }
 
+/**
+ * @brief 析构函数
+ */
 ArenaTeam::~ArenaTeam()
 { }
 
+/**
+ * @brief 创建新的竞技场队伍
+ *
+ * 执行竞技场队伍的创建流程：
+ * 1. 验证队长角色是否存在
+ * 2. 检查队伍名称是否已被使用
+ * 3. 生成唯一的队伍ID
+ * 4. 设置队伍属性（名称、类型、队徽等）
+ * 5. 将队伍信息保存到数据库
+ * 6. 将队长添加为第一个成员
+ *
+ * @param captainGuid 队长的角色GUID
+ * @param type 队伍类型（2=2v2, 3=3v3, 5=5v5）
+ * @param teamName 队伍名称（最多24个字符）
+ * @param backgroundColor 队徽背景颜色
+ * @param emblemStyle 队徽图标样式
+ * @param emblemColor 队徽图标颜色
+ * @param borderStyle 队徽边框样式
+ * @param borderColor 队徽边框颜色
+ * @return true 创建成功
+ * @return false 创建失败（队长不存在或名称已被占用）
+ */
 bool ArenaTeam::Create(ObjectGuid captainGuid, uint8 type, std::string const& teamName, uint32 backgroundColor, uint8 emblemStyle, uint32 emblemColor, uint8 borderStyle, uint32 borderColor)
 {
     // Check if captain exists
@@ -90,6 +144,22 @@ bool ArenaTeam::Create(ObjectGuid captainGuid, uint8 type, std::string const& te
     return true;
 }
 
+/**
+ * @brief 添加成员到竞技场队伍
+ *
+ * 执行成员添加流程：
+ * 1. 检查队伍是否已满（最大成员数 = 队伍类型 * 2，例如3v3队伍最多6人）
+ * 2. 获取玩家信息（名称、职业）
+ * 3. 检查玩家是否已加入同类型的其他竞技场队伍
+ * 4. 设置玩家的个人积分（Personal Rating）和匹配积分（MMR）
+ * 5. 移除玩家的其他竞技场申请书签名，避免数据冲突
+ * 6. 将成员信息保存到数据库
+ * 7. 如果玩家在线，更新其客户端状态
+ *
+ * @param playerGuid 要添加的玩家GUID
+ * @return true 添加成功
+ * @return false 添加失败（队伍已满、玩家不存在或已在同类型队伍中）
+ */
 bool ArenaTeam::AddMember(ObjectGuid playerGuid)
 {
     std::string playerName;
@@ -185,6 +255,18 @@ bool ArenaTeam::AddMember(ObjectGuid playerGuid)
     return true;
 }
 
+/**
+ * @brief 从数据库加载竞技场队伍信息
+ *
+ * 从数据库查询结果中加载队伍的基本属性，包括：
+ * - 队伍ID、名称、队长、类型
+ * - 队徽样式（背景色、图标样式/颜色、边框样式/颜色）
+ * - 队伍统计数据（等级积分、周场次/胜场、赛季场次/胜场、排名）
+ *
+ * @param result 数据库查询结果
+ * @return true 加载成功
+ * @return false 加载失败（查询结果为空）
+ */
 bool ArenaTeam::LoadArenaTeamFromDB(QueryResult result)
 {
     if (!result)
@@ -211,6 +293,23 @@ bool ArenaTeam::LoadArenaTeamFromDB(QueryResult result)
     return true;
 }
 
+/**
+ * @brief 从数据库加载竞技场队伍成员列表
+ *
+ * 遍历数据库查询结果，加载所有成员信息：
+ * - 成员GUID、名称、职业
+ * - 周场次/胜场、赛季场次/胜场
+ * - 个人积分、匹配积分（MMR）
+ *
+ * 加载过程中执行以下验证：
+ * 1. 检查成员名称是否为空（角色可能已删除），若为空则删除该成员
+ * 2. 验证队长是否存在于队伍中
+ * 3. 如果队伍为空或队长不存在，解散队伍
+ *
+ * @param result 数据库查询结果（可能包含多个队伍的成员，按队伍ID排序）
+ * @return true 加载成功且队伍有效
+ * @return false 加载失败、队伍为空或队长不存在
+ */
 bool ArenaTeam::LoadMembersFromDB(QueryResult result)
 {
     if (!result)
@@ -271,6 +370,20 @@ bool ArenaTeam::LoadMembersFromDB(QueryResult result)
     return true;
 }
 
+/**
+ * @brief 设置竞技场队伍名称
+ *
+ * 验证并更新队伍名称，执行以下检查：
+ * 1. 新名称不能与旧名称相同
+ * 2. 名称不能为空
+ * 3. 名称长度不能超过24个字符
+ * 4. 名称不能是保留名称（如GM、Admin等）
+ * 5. 名称必须符合竞技场队伍命名规范
+ *
+ * @param name 新的队伍名称
+ * @return true 设置成功
+ * @return false 设置失败（名称无效）
+ */
 bool ArenaTeam::SetName(std::string const& name)
 {
     if (TeamName == name || name.empty() || name.length() > 24 || sObjectMgr->IsReservedName(name) || !ObjectMgr::IsValidCharterName(name))
@@ -284,6 +397,18 @@ bool ArenaTeam::SetName(std::string const& name)
     return true;
 }
 
+/**
+ * @brief 设置新的队伍队长
+ *
+ * 执行队长转让流程：
+ * 1. 禁用旧队长的管理按钮（提升/移除成员）
+ * 2. 更新队长GUID到新玩家
+ * 3. 更新数据库中的队长信息
+ * 4. 启用新队长的管理按钮
+ * 5. 记录日志
+ *
+ * @param guid 新队长的角色GUID
+ */
 void ArenaTeam::SetCaptain(ObjectGuid guid)
 {
     // Disable remove/promote buttons
@@ -313,6 +438,21 @@ void ArenaTeam::SetCaptain(ObjectGuid guid)
     }
 }
 
+/**
+ * @brief 从竞技场队伍中移除成员
+ *
+ * 执行成员移除流程：
+ * 1. 遍历队伍成员，找到要移除的成员
+ * 2. 移除该成员所在队伍的竞技场队列（如果成员在队列中）
+ * 3. 从成员列表中删除该成员
+ * 4. 更新角色缓存中的竞技场队伍ID
+ * 5. 通知在线玩家（发送退出消息）
+ * 6. 清除玩家客户端中的竞技场队伍信息
+ * 7. 根据参数决定是否从数据库中删除成员记录
+ *
+ * @param guid 要移除的玩家GUID
+ * @param cleanDb 是否从数据库中删除成员记录（true=单个成员删除，false=队伍解散时批量删除）
+ */
 void ArenaTeam::DelMember(ObjectGuid guid, bool cleanDb)
 {
     Player* player = ObjectAccessor::FindConnectedPlayer(guid);
@@ -371,6 +511,17 @@ void ArenaTeam::DelMember(ObjectGuid guid, bool cleanDb)
     }
 }
 
+/**
+ * @brief 解散竞技场队伍（带会话通知）
+ *
+ * 执行队伍解散流程：
+ * 1. 移除所有成员（不单独清理数据库，稍后批量删除）
+ * 2. 如果提供了会话，广播解散消息
+ * 3. 从数据库中删除队伍记录和所有成员记录
+ * 4. 从ArenaTeamMgr中移除队伍对象
+ *
+ * @param session 发起解散的玩家会话（用于广播消息）
+ */
 void ArenaTeam::Disband(WorldSession* session)
 {
     // Remove all members from arena team
@@ -403,6 +554,12 @@ void ArenaTeam::Disband(WorldSession* session)
     sArenaTeamMgr->RemoveArenaTeam(TeamId);
 }
 
+/**
+ * @brief 解散竞技场队伍（无会话通知）
+ *
+ * 执行队伍解散流程，不广播解散消息。
+ * 通常用于服务器内部清理无效队伍。
+ */
 void ArenaTeam::Disband()
 {
     // Remove all members from arena team
@@ -426,6 +583,19 @@ void ArenaTeam::Disband()
     sArenaTeamMgr->RemoveArenaTeam(TeamId);
 }
 
+/**
+ * @brief 发送竞技场队伍成员列表给客户端
+ *
+ * 构建并发送SMSG_ARENA_TEAM_ROSTER数据包，包含：
+ * - 队伍ID、成员数量、队伍类型
+ * - 每个成员的详细信息：
+ *   - GUID、在线状态、名称
+ *   - 是否为队长、等级、职业
+ *   - 本周场次/胜场、本赛季场次/胜场
+ *   - 个人积分
+ *
+ * @param session 目标会话（接收数据的客户端）
+ */
 void ArenaTeam::Roster(WorldSession* session)
 {
     Player* player = nullptr;
@@ -464,6 +634,15 @@ void ArenaTeam::Roster(WorldSession* session)
     TC_LOG_DEBUG("network", "WORLD: Sent SMSG_ARENA_TEAM_ROSTER");
 }
 
+/**
+ * @brief 响应竞技场队伍查询请求
+ *
+ * 构建并发送SMSG_ARENA_TEAM_QUERY_RESPONSE数据包，包含：
+ * - 队伍ID、名称、类型（2v2, 3v3, 5v5）
+ * - 队徽样式信息（背景色、图标样式/颜色、边框样式/颜色）
+ *
+ * @param session 目标会话（接收数据的客户端）
+ */
 void ArenaTeam::Query(WorldSession* session)
 {
     WorldPacket data(SMSG_ARENA_TEAM_QUERY_RESPONSE, 4*7+GetName().size()+1);
@@ -479,6 +658,16 @@ void ArenaTeam::Query(WorldSession* session)
     TC_LOG_DEBUG("network", "WORLD: Sent SMSG_ARENA_TEAM_QUERY_RESPONSE");
 }
 
+/**
+ * @brief 发送竞技场队伍统计数据给客户端
+ *
+ * 构建并发送SMSG_ARENA_TEAM_STATS数据包，包含：
+ * - 队伍ID、等级积分
+ * - 本周场次/胜场、本赛季场次/胜场
+ * - 队伍排名
+ *
+ * @param session 目标会话（接收数据的客户端）
+ */
 void ArenaTeam::SendStats(WorldSession* session)
 {
     WorldPacket data(SMSG_ARENA_TEAM_STATS, 4*7);
@@ -492,6 +681,12 @@ void ArenaTeam::SendStats(WorldSession* session)
     session->SendPacket(&data);
 }
 
+/**
+ * @brief 通知所有在线成员统计数据已更新
+ *
+ * 在竞技场比赛结束后调用，向所有在线的队伍成员发送最新的统计数据。
+ * 注意：此方法会通知所有成员，即使他们没有参与该场比赛。
+ */
 void ArenaTeam::NotifyStatsChanged()
 {
     // This is called after a rated match ended
@@ -501,6 +696,18 @@ void ArenaTeam::NotifyStatsChanged()
             SendStats(player->GetSession());
 }
 
+/**
+ * @brief 响应角色观察时的竞技场队伍信息查询
+ *
+ * 构建并发送MSG_INSPECT_ARENA_TEAMS数据包，包含：
+ * - 被观察玩家的GUID和竞技场槽位
+ * - 队伍ID、等级积分
+ * - 队伍本赛季场次/胜场
+ * - 被观察成员的赛季场次和个人积分
+ *
+ * @param session 目标会话（发起观察的客户端）
+ * @param guid 被观察玩家的GUID
+ */
 void ArenaTeam::Inspect(WorldSession* session, ObjectGuid guid)
 {
     ArenaTeamMember* member = GetMember(guid);
@@ -519,6 +726,16 @@ void ArenaTeam::Inspect(WorldSession* session, ObjectGuid guid)
     session->SendPacket(&data);
 }
 
+/**
+ * @brief 修改成员的个人积分（Personal Rating）
+ *
+ * 更新成员的个人积分，确保不会低于0。
+ * 如果玩家在线，同时更新客户端字段和成就进度。
+ *
+ * @param player 玩家对象（可以为nullptr）
+ * @param mod 积分变化量（可正可负）
+ * @param type 竞技场队伍类型（用于确定槽位）
+ */
 void ArenaTeamMember::ModifyPersonalRating(Player* player, int32 mod, uint32 type)
 {
     if (int32(PersonalRating) + mod < 0)
@@ -533,6 +750,15 @@ void ArenaTeamMember::ModifyPersonalRating(Player* player, int32 mod, uint32 typ
     }
 }
 
+/**
+ * @brief 修改成员的匹配积分（Matchmaker Rating）
+ *
+ * 更新成员的匹配积分（MMR），确保不会低于0。
+ * MMR用于匹配系统，决定对手的强弱。
+ *
+ * @param mod 积分变化量（可正可负）
+ * @param slot 竞技场槽位（未使用）
+ */
 void ArenaTeamMember::ModifyMatchmakerRating(int32 mod, uint32 /*slot*/)
 {
     if (int32(MatchMakerRating) + mod < 0)
@@ -541,6 +767,14 @@ void ArenaTeamMember::ModifyMatchmakerRating(int32 mod, uint32 /*slot*/)
         MatchMakerRating += mod;
 }
 
+/**
+ * @brief 向所有在线成员广播数据包
+ *
+ * 遍历成员列表，向每个在线的成员发送指定的数据包。
+ * 用于队伍内部的消息广播。
+ *
+ * @param packet 要发送的数据包
+ */
 void ArenaTeam::BroadcastPacket(WorldPacket* packet)
 {
     for (MemberList::const_iterator itr = Members.begin(); itr != Members.end(); ++itr)
@@ -548,6 +782,26 @@ void ArenaTeam::BroadcastPacket(WorldPacket* packet)
             player->SendDirectMessage(packet);
 }
 
+/**
+ * @brief 广播竞技场队伍事件消息
+ *
+ * 构建并发送SMSG_ARENA_TEAM_EVENT数据包，向所有在线成员广播事件消息。
+ * 支持包含0-3个字符串参数的事件消息。
+ *
+ * 常见事件类型：
+ * - ERR_ARENA_TEAM_JOIN_SS: 成员加入
+ * - ERR_ARENA_TEAM_LEAVE_SS: 成员离开
+ * - ERR_ARENA_TEAM_REMOVE_SSS: 成员被移除
+ * - ERR_ARENA_TEAM_LEADER_CHANGED_SSS: 队长变更
+ * - ERR_ARENA_TEAM_DISBANDED_S: 队伍解散
+ *
+ * @param event 事件类型
+ * @param guid 相关角色的GUID（可选）
+ * @param strCount 字符串参数数量（0-3）
+ * @param str1 第一个字符串参数
+ * @param str2 第二个字符串参数
+ * @param str3 第三个字符串参数
+ */
 void ArenaTeam::BroadcastEvent(ArenaTeamEvents event, ObjectGuid guid, uint8 strCount, std::string const& str1, std::string const& str2, std::string const& str3)
 {
     WorldPacket data(SMSG_ARENA_TEAM_EVENT, 1+1+1);
@@ -579,6 +833,14 @@ void ArenaTeam::BroadcastEvent(ArenaTeamEvents event, ObjectGuid guid, uint8 str
     TC_LOG_DEBUG("network", "WORLD: Sent SMSG_ARENA_TEAM_EVENT");
 }
 
+/**
+ * @brief 批量邀请队伍成员到日历事件
+ *
+ * 用于竞技场队伍的日历事件邀请功能。
+ * 向除发起者外的所有成员发送日历事件邀请。
+ *
+ * @param session 发起邀请的会话
+ */
 void ArenaTeam::MassInviteToEvent(WorldSession* session)
 {
     WorldPackets::Calendar::CalendarEventInitialInvites packet(false);
@@ -590,6 +852,17 @@ void ArenaTeam::MassInviteToEvent(WorldSession* session)
     session->SendPacket(packet.Write());
 }
 
+/**
+ * @brief 根据竞技场队伍类型获取槽位索引
+ *
+ * 将竞技场队伍类型映射到玩家数据中的槽位索引：
+ * - ARENA_TEAM_2v2 (2) -> 槽位 0
+ * - ARENA_TEAM_3v3 (3) -> 槽位 1
+ * - ARENA_TEAM_5v5 (5) -> 槽位 2
+ *
+ * @param type 竞技场队伍类型（2, 3, 或 5）
+ * @return uint8 槽位索引（0-2），如果类型无效则返回0xFF
+ */
 uint8 ArenaTeam::GetSlotByType(uint32 type)
 {
     switch (type)
@@ -604,6 +877,15 @@ uint8 ArenaTeam::GetSlotByType(uint32 type)
     return 0xFF;
 }
 
+/**
+ * @brief 检查指定玩家是否为队伍成员
+ *
+ * 遍历成员列表，检查指定GUID的玩家是否存在于队伍中。
+ *
+ * @param guid 要检查的玩家GUID
+ * @return true 是队伍成员
+ * @return false 不是队伍成员
+ */
 bool ArenaTeam::IsMember(ObjectGuid guid) const
 {
     for (MemberList::const_iterator itr = Members.begin(); itr != Members.end(); ++itr)
@@ -613,6 +895,26 @@ bool ArenaTeam::IsMember(ObjectGuid guid) const
     return false;
 }
 
+/**
+ * @brief 计算竞技场点数奖励
+ *
+ * 根据队伍类型和积分计算每周可获得的竞技场点数。
+ * 计算公式基于暴雪的官方算法：
+ *
+ * - 积分 <= 1500:
+ *   - 第6赛季之前: points = rating * 0.22 + 14
+ *   - 第6赛季及之后: points = 344（固定值）
+ * - 积分 > 1500:
+ *   - points = 1511.26 / (1 + 1639.28 * exp(-0.00412 * rating))
+ *
+ * 同时应用队伍类型惩罚系数：
+ * - 2v2: 乘以 0.76
+ * - 3v3: 乘以 0.88
+ * - 5v5: 无惩罚
+ *
+ * @param memberRating 成员的个人积分（如果成员积分+150 < 队伍积分，使用成员积分；否则使用队伍积分）
+ * @return uint32 计算得出的竞技场点数
+ */
 uint32 ArenaTeam::GetPoints(uint32 memberRating)
 {
     // Returns how many points would be awarded with this team type with this rating
@@ -641,6 +943,20 @@ uint32 ArenaTeam::GetPoints(uint32 memberRating)
     return (uint32) points;
 }
 
+/**
+ * @brief 计算队伍的平均匹配积分（MMR）
+ *
+ * 遍历队伍成员，计算在线且在指定队伍中的成员的平均MMR。
+ * 用于匹配系统确定对手的强弱。
+ *
+ * 计算规则：
+ * - 只统计在线玩家
+ * - 只统计属于指定队伍的成员
+ * - 平均值 = 所有符合条件成员的MMR总和 / 成员数量
+ *
+ * @param group 当前队伍对象
+ * @return uint32 平均MMR，如果没有符合条件的成员返回0
+ */
 uint32 ArenaTeam::GetAverageMMR(Group* group) const
 {
     if (!group)
@@ -671,6 +987,18 @@ uint32 ArenaTeam::GetAverageMMR(Group* group) const
     return matchMakerRating;
 }
 
+/**
+ * @brief 计算获胜概率（基于ELO系统）
+ *
+ * 根据己方积分和对手积分，计算己方的获胜概率。
+ * 公式：P = 1 / (1 + exp(ln(10) * (opponentRating - ownRating) / 650))
+ *
+ * 这是标准ELO系统的一个变种，用于计算积分变化的基础。
+ *
+ * @param ownRating 己方积分
+ * @param opponentRating 对手积分
+ * @return float 获胜概率（0.0 - 1.0）
+ */
 float ArenaTeam::GetChanceAgainst(uint32 ownRating, uint32 opponentRating)
 {
     // Returns the chance to win against a team with the given rating, used in the rating adjustment calculation
@@ -678,6 +1006,21 @@ float ArenaTeam::GetChanceAgainst(uint32 ownRating, uint32 opponentRating)
     return 1.0f / (1.0f + std::exp(std::log(10.0f) * (float(opponentRating) - float(ownRating)) / 650.0f));
 }
 
+/**
+ * @brief 计算匹配积分（MMR）变化量
+ *
+ * 基于ELO系统计算匹配积分的变化量。
+ * 积分变化 = (实际结果 - 预期胜率) * 配置修正系数
+ *
+ * 实际结果：
+ * - 胜利: 1.0
+ * - 失败: 0.0
+ *
+ * @param ownRating 己方MMR
+ * @param opponentRating 对手MMR
+ * @param won 是否获胜
+ * @return int32 MMR变化量（向上取整）
+ */
 int32 ArenaTeam::GetMatchmakerRatingMod(uint32 ownRating, uint32 opponentRating, bool won /*, float& confidence_factor*/)
 {
     // 'Chance' calculation - to beat the opponent
@@ -704,6 +1047,25 @@ int32 ArenaTeam::GetMatchmakerRatingMod(uint32 ownRating, uint32 opponentRating,
     return (int32)ceil(mod);
 }
 
+/**
+ * @brief 计算队伍积分（Rating）变化量
+ *
+ * 基于ELO系统计算队伍积分的变化量。
+ * 根据当前积分区间使用不同的修正系数：
+ *
+ * 胜利时：
+ * - 积分 < 1000: 使用 ARENA_WIN_RATING_MODIFIER_1
+ * - 1000 <= 积分 < 1300: 渐变修正系数
+ * - 积分 >= 1300: 使用 ARENA_WIN_RATING_MODIFIER_2
+ *
+ * 失败时：
+ * - 使用 ARENA_LOSE_RATING_MODIFIER
+ *
+ * @param ownRating 己方积分
+ * @param opponentRating 对手积分
+ * @param won 是否获胜
+ * @return int32 积分变化量（向上取整）
+ */
 int32 ArenaTeam::GetRatingMod(uint32 ownRating, uint32 opponentRating, bool won /*, float confidence_factor*/)
 {
     // 'Chance' calculation - to beat the opponent
@@ -734,6 +1096,17 @@ int32 ArenaTeam::GetRatingMod(uint32 ownRating, uint32 opponentRating, bool won 
     return (int32)ceil(mod);
 }
 
+/**
+ * @brief 结束一场比赛，更新队伍统计数据
+ *
+ * 在每场比赛（无论胜负）后调用，执行以下操作：
+ * 1. 更新队伍等级积分（确保不低于0）
+ * 2. 检查并更新在线成员的成就进度（最高队伍积分）
+ * 3. 增加本周和本赛季的比赛场次
+ * 4. 重新计算队伍排名（遍历所有同类型队伍，统计积分高于本队的数量）
+ *
+ * @param mod 积分变化量（可为负数）
+ */
 void ArenaTeam::FinishGame(int32 mod)
 {
     // Rating can only drop to 0
@@ -760,6 +1133,20 @@ void ArenaTeam::FinishGame(int32 mod)
             ++Stats.Rank;
 }
 
+/**
+ * @brief 处理比赛胜利
+ *
+ * 在队伍获胜后调用，执行以下操作：
+ * 1. 计算并返回MMR变化量
+ * 2. 计算队伍积分变化量（通过引用参数返回）
+ * 3. 调用FinishGame更新队伍统计数据
+ * 4. 增加本周和本赛季的胜场
+ *
+ * @param Own_MMRating 己方MMR
+ * @param Opponent_MMRating 对手MMR
+ * @param rating_change 输出参数：队伍积分变化量
+ * @return int32 MMR变化量
+ */
 int32 ArenaTeam::WonAgainst(uint32 Own_MMRating, uint32 Opponent_MMRating, int32& rating_change)
 {
     // Called when the team has won
@@ -780,6 +1167,19 @@ int32 ArenaTeam::WonAgainst(uint32 Own_MMRating, uint32 Opponent_MMRating, int32
     return mod;
 }
 
+/**
+ * @brief 处理比赛失败
+ *
+ * 在队伍失败后调用，执行以下操作：
+ * 1. 计算并返回MMR变化量
+ * 2. 计算队伍积分变化量（通过引用参数返回）
+ * 3. 调用FinishGame更新队伍统计数据
+ *
+ * @param Own_MMRating 己方MMR
+ * @param Opponent_MMRating 对手MMR
+ * @param rating_change 输出参数：队伍积分变化量
+ * @return int32 MMR变化量
+ */
 int32 ArenaTeam::LostAgainst(uint32 Own_MMRating, uint32 Opponent_MMRating, int32& rating_change)
 {
     // Called when the team has lost
@@ -796,6 +1196,19 @@ int32 ArenaTeam::LostAgainst(uint32 Own_MMRating, uint32 Opponent_MMRating, int3
     return mod;
 }
 
+/**
+ * @brief 处理在线成员比赛失败
+ *
+ * 在比赛失败后，为指定的在线成员更新个人数据：
+ * 1. 更新个人积分（基于对手MMR计算）
+ * 2. 更新MMR
+ * 3. 增加本周和本赛季的比赛场次
+ * 4. 更新客户端显示字段
+ *
+ * @param player 参赛玩家对象
+ * @param againstMatchmakerRating 对手的MMR
+ * @param MatchmakerRatingChange MMR变化量
+ */
 void ArenaTeam::MemberLost(Player* player, uint32 againstMatchmakerRating, int32 MatchmakerRatingChange)
 {
     // Called for each participant of a match after losing
@@ -822,6 +1235,16 @@ void ArenaTeam::MemberLost(Player* player, uint32 againstMatchmakerRating, int32
     }
 }
 
+/**
+ * @brief 处理离线成员比赛失败
+ *
+ * 在比赛失败后，为指定的离线成员更新个人数据。
+ * 与MemberLost类似，但不更新客户端字段。
+ *
+ * @param guid 离线玩家的GUID
+ * @param againstMatchmakerRating 对手的MMR
+ * @param MatchmakerRatingChange MMR变化量
+ */
 void ArenaTeam::OfflineMemberLost(ObjectGuid guid, uint32 againstMatchmakerRating, int32 MatchmakerRatingChange)
 {
     // Called for offline player after ending rated arena match!
@@ -844,6 +1267,19 @@ void ArenaTeam::OfflineMemberLost(ObjectGuid guid, uint32 againstMatchmakerRatin
     }
 }
 
+/**
+ * @brief 处理在线成员比赛胜利
+ *
+ * 在比赛胜利后，为指定的在线成员更新个人数据：
+ * 1. 更新个人积分（基于对手MMR计算）
+ * 2. 更新MMR
+ * 3. 增加本周和本赛季的比赛场次和胜场
+ * 4. 更新客户端显示字段
+ *
+ * @param player 参赛玩家对象
+ * @param againstMatchmakerRating 对手的MMR
+ * @param MatchmakerRatingChange MMR变化量
+ */
 void ArenaTeam::MemberWon(Player* player, uint32 againstMatchmakerRating, int32 MatchmakerRatingChange)
 {
     // called for each participant after winning a match
@@ -871,6 +1307,20 @@ void ArenaTeam::MemberWon(Player* player, uint32 againstMatchmakerRating, int32 
     }
 }
 
+/**
+ * @brief 辅助函数：计算并更新成员的竞技场点数
+ *
+ * 在每周竞技场点数结算时调用，为符合条件的成员计算竞技场点数。
+ * 计算规则：
+ * 1. 队伍本周至少需要打10场比赛
+ * 2. 成员至少参与30%的队伍比赛
+ * 3. 成员可获得的最大点数取决于其个人积分或队伍积分
+ *
+ * 该函数将结果存入playerPoints映射表，每个玩家只保留最高点数
+ * （因为一个玩家可能同时拥有多支同类型队伍）。
+ *
+ * @param playerPoints 输出参数：玩家GUID到竞技场点数的映射表
+ */
 void ArenaTeam::UpdateArenaPointsHelper(std::map<uint32, uint32>& playerPoints)
 {
     // Called after a match has ended and the stats are already modified
@@ -901,6 +1351,19 @@ void ArenaTeam::UpdateArenaPointsHelper(std::map<uint32, uint32>& playerPoints)
     }
 }
 
+/**
+ * @brief 将队伍和成员数据保存到数据库
+ *
+ * 在比赛结束后或竞技场点数结算时调用，执行以下保存操作：
+ * 1. 更新队伍统计数据（等级积分、周场次/胜场、赛季场次/胜场、排名）
+ * 2. 更新每个成员的个人数据（如果本周有比赛或强制保存）：
+ *    - 个人积分、周场次/胜场、赛季场次/胜场
+ *    - 匹配积分（MMR）
+ *
+ * 使用事务确保数据一致性。
+ *
+ * @param forceMemberSave 是否强制保存所有成员数据（即使本周未参赛）
+ */
 void ArenaTeam::SaveToDB(bool forceMemberSave)
 {
     // Save team and member stats to db
@@ -944,6 +1407,16 @@ void ArenaTeam::SaveToDB(bool forceMemberSave)
     CharacterDatabase.CommitTransaction(trans);
 }
 
+/**
+ * @brief 结算并重置本周数据
+ *
+ * 在每周竞技场点数结算后调用，重置本周统计数据：
+ * - 队伍的本周场次和胜场
+ * - 所有成员的本周场次和胜场
+ *
+ * @return true 成功重置（本周有比赛）
+ * @return false 无需重置（本周无比赛）
+ */
 bool ArenaTeam::FinishWeek()
 {
     // No need to go further than this
@@ -964,6 +1437,15 @@ bool ArenaTeam::FinishWeek()
     return true;
 }
 
+/**
+ * @brief 检查队伍是否有成员正在比赛中
+ *
+ * 遍历成员列表，检查是否有在线成员当前处于竞技场比赛中。
+ * 用于判断队伍是否可以加入新的比赛队列。
+ *
+ * @return true 有成员正在比赛中
+ * @return false 没有成员在比赛中
+ */
 bool ArenaTeam::IsFighting() const
 {
     for (MemberList::const_iterator itr = Members.begin(); itr != Members.end(); ++itr)
@@ -974,6 +1456,14 @@ bool ArenaTeam::IsFighting() const
     return false;
 }
 
+/**
+ * @brief 根据名称获取成员信息
+ *
+ * 遍历成员列表，查找指定名称的成员。
+ *
+ * @param name 成员名称
+ * @return ArenaTeamMember* 成员指针，如果未找到返回nullptr
+ */
 ArenaTeamMember* ArenaTeam::GetMember(const std::string& name)
 {
     for (MemberList::iterator itr = Members.begin(); itr != Members.end(); ++itr)
@@ -983,6 +1473,14 @@ ArenaTeamMember* ArenaTeam::GetMember(const std::string& name)
     return nullptr;
 }
 
+/**
+ * @brief 根据GUID获取成员信息
+ *
+ * 遍历成员列表，查找指定GUID的成员。
+ *
+ * @param guid 成员GUID
+ * @return ArenaTeamMember* 成员指针，如果未找到返回nullptr
+ */
 ArenaTeamMember* ArenaTeam::GetMember(ObjectGuid guid)
 {
     for (MemberList::iterator itr = Members.begin(); itr != Members.end(); ++itr)

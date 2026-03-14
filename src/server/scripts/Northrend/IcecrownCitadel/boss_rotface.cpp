@@ -15,6 +15,26 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file boss_rotface.cpp
+ * @brief 冰冠堡垒瘟疫区第一个首领 - 腐脸的战斗脚本
+ *
+ * 本模块实现了冰冠堡垒瘟疫区第一个首领腐脸的完整战斗逻辑。
+ *
+ * 战斗机制概述：
+ * 1. 泥浆喷射：周期性对随机方向喷射泥浆，生成小软泥怪
+ * 2. 变异感染：随机感染玩家，结束后生成小软泥怪
+ * 3. 软泥怪合并：小软泥怪合并成大软泥怪，叠加不稳定软泥
+ * 4. 不稳定软泥爆炸：大软泥怪叠加5层后爆炸，造成大量伤害
+ *
+ * 英雄模式差异：
+ * - 增加恶性气体技能
+ * - 更频繁的感染
+ *
+ * 已知问题：
+ * - 泥浆喷射没有直接在目标点的动画
+ */
+
 #include "icecrown_citadel.h"
 #include "Containers.h"
 #include "GridNotifiers.h"
@@ -27,78 +47,90 @@
 #include "SpellScript.h"
 #include "TemporarySummon.h"
 
-// KNOWN BUGS:
-// ~ No Slime Spray animation directly at target spot
-
+/**
+ * @brief 文本ID枚举
+ *
+ * 定义腐脸和软泥怪战斗中的各种台词和表情文本
+ */
 enum Texts
 {
-    SAY_PRECIOUS_DIES           = 0,
-    SAY_AGGRO                   = 1,
-    EMOTE_SLIME_SPRAY           = 2,
-    SAY_SLIME_SPRAY             = 3,
-    SAY_UNSTABLE_EXPLOSION      = 5,
-    SAY_KILL                    = 6,
-    SAY_BERSERK                 = 7,
-    SAY_DEATH                   = 8,
-    EMOTE_MUTATED_INFECTION     = 9,
+    SAY_PRECIOUS_DIES           = 0,  ///< 宝贝死亡时的台词
+    SAY_AGGRO                   = 1,  ///< 开怪台词
+    EMOTE_SLIME_SPRAY           = 2,  ///< 泥浆喷射表情
+    SAY_SLIME_SPRAY             = 3,  ///< 泥浆喷射台词
+    SAY_UNSTABLE_EXPLOSION      = 5,  ///< 不稳定软泥爆炸台词
+    SAY_KILL                    = 6,  ///< 击杀玩家台词
+    SAY_BERSERK                 = 7,  ///< 狂暴台词
+    SAY_DEATH                   = 8,  ///< 死亡台词
+    EMOTE_MUTATED_INFECTION     = 9,  ///< 变异感染表情
 
-    EMOTE_UNSTABLE_2            = 0,
-    EMOTE_UNSTABLE_3            = 1,
-    EMOTE_UNSTABLE_4            = 2,
-    EMOTE_UNSTABLE_EXPLOSION    = 3,
+    EMOTE_UNSTABLE_2            = 0,  ///< 不稳定软泥2层表情
+    EMOTE_UNSTABLE_3            = 1,  ///< 不稳定软泥3层表情
+    EMOTE_UNSTABLE_4            = 2,  ///< 不稳定软泥4层表情
+    EMOTE_UNSTABLE_EXPLOSION    = 3,  ///< 不稳定软泥爆炸表情
 
-    EMOTE_PRECIOUS_ZOMBIES      = 0,
+    EMOTE_PRECIOUS_ZOMBIES      = 0,  ///< 宝贝召唤僵尸表情
 };
 
+/**
+ * @brief 法术ID枚举
+ *
+ * 定义战斗中使用的所有法术ID
+ */
 enum Spells
 {
-    // Rotface
-    SPELL_SLIME_SPRAY                       = 69508,    // every 20 seconds
-    SPELL_MUTATED_INFECTION                 = 69674,    // hastens every 1:30
-    SPELL_VILE_GAS_TRIGGER_SUMMON           = 72287,
+    // Rotface - 腐脸
+    SPELL_SLIME_SPRAY                       = 69508,    ///< 泥浆喷射 - 每20秒施放
+    SPELL_MUTATED_INFECTION                 = 69674,    ///< 变异感染 - 每1:30加速
+    SPELL_VILE_GAS_TRIGGER_SUMMON           = 72287,    ///< 恶性气体触发召唤
 
-    // Oozes
-    SPELL_LITTLE_OOZE_COMBINE               = 69537,    // combine 2 Small Oozes
-    SPELL_LARGE_OOZE_COMBINE                = 69552,    // combine 2 Large Oozes
-    SPELL_LARGE_OOZE_BUFF_COMBINE           = 69611,    // combine Large and Small Ooze
-    SPELL_OOZE_MERGE                        = 69889,    // 2 Small Oozes summon a Large Ooze
-    SPELL_WEAK_RADIATING_OOZE               = 69750,    // passive damage aura - small
-    SPELL_RADIATING_OOZE                    = 69760,    // passive damage aura - large
-    SPELL_UNSTABLE_OOZE                     = 69558,    // damage boost and counter for explosion
-    SPELL_GREEN_ABOMINATION_HITTIN__YA_PROC = 70001,    // prevents getting hit by infection
-    SPELL_UNSTABLE_OOZE_EXPLOSION           = 69839,
-    SPELL_STICKY_OOZE                       = 69774,
-    SPELL_UNSTABLE_OOZE_EXPLOSION_TRIGGER   = 69832,
-    SPELL_VERTEX_COLOR_PINK                 = 53213,
-    SPELL_VERTEX_COLOR_BRIGHT_RED           = 69844,
-    SPELL_VERTEX_COLOR_DARK_RED             = 44773,
+    // Oozes - 软泥怪
+    SPELL_LITTLE_OOZE_COMBINE               = 69537,    ///< 小软泥合并 - 合并2个小软泥
+    SPELL_LARGE_OOZE_COMBINE                = 69552,    ///< 大软泥合并 - 合并2个大软泥
+    SPELL_LARGE_OOZE_BUFF_COMBINE           = 69611,    ///< 大软泥增益合并 - 合并大软泥和小软泥
+    SPELL_OOZE_MERGE                        = 69889,    ///< 软泥合并 - 2个小软泥召唤大软泥
+    SPELL_WEAK_RADIATING_OOZE               = 69750,    ///< 弱辐射软泥 - 被动伤害光环（小）
+    SPELL_RADIATING_OOZE                    = 69760,    ///< 辐射软泥 - 被动伤害光环（大）
+    SPELL_UNSTABLE_OOZE                     = 69558,    ///< 不稳定软泥 - 伤害加成和爆炸计数器
+    SPELL_GREEN_ABOMINATION_HITTIN__YA_PROC = 70001,    ///< 绿色憎恶击中你触发 - 防止被感染击中
+    SPELL_UNSTABLE_OOZE_EXPLOSION           = 69839,    ///< 不稳定软泥爆炸
+    SPELL_STICKY_OOZE                       = 69774,    ///< 粘稠软泥
+    SPELL_UNSTABLE_OOZE_EXPLOSION_TRIGGER   = 69832,    ///< 不稳定软泥爆炸触发
+    SPELL_VERTEX_COLOR_PINK                 = 53213,    ///< 粉色顶点着色
+    SPELL_VERTEX_COLOR_BRIGHT_RED           = 69844,    ///< 亮红色顶点着色
+    SPELL_VERTEX_COLOR_DARK_RED             = 44773,    ///< 暗红色顶点着色
 
-    // Precious
-    SPELL_MORTAL_WOUND                      = 71127,
-    SPELL_DECIMATE                          = 71123,
-    SPELL_AWAKEN_PLAGUED_ZOMBIES            = 71159,
+    // Precious - 宝贝（房间内的小怪）
+    SPELL_MORTAL_WOUND                      = 71127,    ///< 致命伤口 - 治疗减益
+    SPELL_DECIMATE                          = 71123,    ///< 毁灭 - 降低生命值
+    SPELL_AWAKEN_PLAGUED_ZOMBIES            = 71159,    ///< 唤醒瘟疫僵尸
 
-    // Professor Putricide
-    SPELL_VILE_GAS_H                        = 72272,
-    SPELL_VILE_GAS_TRIGGER                  = 72285,
+    // Professor Putricide - 普崔塞德教授
+    SPELL_VILE_GAS_H                        = 72272,    ///< 恶性气体（英雄）
+    SPELL_VILE_GAS_TRIGGER                  = 72285,    ///< 恶性气体触发
 };
 
 #define MUTATED_INFECTION RAID_MODE<int32>(69674, 71224, 73022, 73023)
 
+/**
+ * @brief 事件ID枚举
+ *
+ * 定义战斗中的各种计时器事件
+ */
 enum Events
 {
-    // Rotface
-    EVENT_SLIME_SPRAY       = 1,
-    EVENT_HASTEN_INFECTIONS = 2,
-    EVENT_MUTATED_INFECTION = 3,
-    EVENT_VILE_GAS          = 4,
+    // Rotface - 腐脸
+    EVENT_SLIME_SPRAY       = 1,  ///< 泥浆喷射事件
+    EVENT_HASTEN_INFECTIONS = 2,  ///< 加速感染事件
+    EVENT_MUTATED_INFECTION = 3,  ///< 变异感染事件
+    EVENT_VILE_GAS          = 4,  ///< 恶性气体事件
 
-    // Precious
-    EVENT_DECIMATE          = 5,
-    EVENT_MORTAL_WOUND      = 6,
-    EVENT_SUMMON_ZOMBIES    = 7,
+    // Precious - 宝贝
+    EVENT_DECIMATE          = 5,  ///< 毁灭事件
+    EVENT_MORTAL_WOUND      = 6,  ///< 致命伤口事件
+    EVENT_SUMMON_ZOMBIES    = 7,  ///< 召唤僵尸事件
 
-    EVENT_STICKY_OOZE       = 8,
+    EVENT_STICKY_OOZE       = 8,  ///< 粘稠软泥事件
 };
 
 struct boss_rotface : public BossAI

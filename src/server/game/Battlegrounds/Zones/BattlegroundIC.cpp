@@ -15,6 +15,21 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file BattlegroundIC.cpp
+ * @brief 冬拥湖之岛（Isle of Conquest）战场模块实现文件
+ *
+ * 本文件实现了冬拥湖之岛战场的具体功能，包括：
+ * - 码头、机库、车间、采石场、炼油厂等战略要点的占领机制
+ * - 攻城器械的生成和管理
+ * - 飞艇的使用和传送
+ * - 大门的破坏和防御
+ * - 将军的击杀和增援点数管理
+ * - 玩家复活点管理
+ *
+ * 冬拥湖之岛是40v40大型战场，目标是通过摧毁敌方将军或消耗敌方增援点数来获胜。
+ */
+
 #include "BattlegroundIC.h"
 #include "GameObject.h"
 #include "Log.h"
@@ -26,18 +41,36 @@
 #include "WorldPacket.h"
 #include "WorldStatePackets.h"
 
+/**
+ * @brief 构建目标数据块
+ * @param data 数据包引用
+ *
+ * 将玩家目标数据（进攻和防守基地次数）写入数据包
+ */
 void BattlegroundICScore::BuildObjectivesBlock(WorldPacket& data)
 {
-    data << uint32(2); // Objectives Count
-    data << uint32(BasesAssaulted);
-    data << uint32(BasesDefended);
+    data << uint32(2); // 目标数量
+    data << uint32(BasesAssaulted);  // 进攻基地次数
+    data << uint32(BasesDefended);   // 防守基地次数
 }
 
+/**
+ * @brief 构造函数
+ *
+ * 初始化战场成员变量：
+ * - 初始化游戏对象和生物容器大小
+ * - 初始化增援点数
+ * - 重置所有状态
+ */
 BattlegroundIC::BattlegroundIC()
 {
+    // 初始化游戏对象容器（普通对象 + 飞艇 + 机库传送器 + 堡垒传送器 + 传送器效果）
     BgObjects.resize(MAX_NORMAL_GAMEOBJECTS_SPAWNS + MAX_AIRSHIPS_SPAWNS + MAX_HANGAR_TELEPORTERS_SPAWNS + MAX_FORTRESS_TELEPORTERS_SPAWNS + MAX_HANGAR_TELEPORTER_EFFECTS_SPAWNS + MAX_FORTRESS_TELEPORTER_EFFECTS_SPAWNS);
+
+    // 初始化生物容器（普通NPC + 车间 + 码头 + 灵魂医者 + 机库NPC）
     BgCreatures.resize(MAX_NORMAL_NPCS_SPAWNS + MAX_WORKSHOP_SPAWNS + MAX_DOCKS_SPAWNS + MAX_SPIRIT_GUIDES_SPAWNS + MAX_HANGAR_NPCS_SPAWNS);
 
+    // 初始化增援点数
     for (uint8 i = 0; i < 2; ++i)
         factionReinforcements[i] = MAX_REINFORCEMENTS;
 

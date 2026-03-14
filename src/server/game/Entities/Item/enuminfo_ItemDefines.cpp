@@ -15,6 +15,23 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file enuminfo_ItemDefines.cpp
+ * @brief 物品相关枚举类型的工具函数实现
+ *
+ * 本文件为 ItemDefines.h 中定义的枚举类型提供自动化工具支持，包括：
+ * - InventoryResult: 物品装备和背包操作结果枚举
+ * - BuyResult: 商店购买操作结果枚举
+ * - SellResult: 商店出售操作结果枚举
+ *
+ * 通过模板特化为 EnumUtils 提供枚举值与字符串、索引之间的转换功能，
+ * 支持日志记录、配置文件读取、调试输出等场景。
+ *
+ * @note 本文件由代码生成工具自动生成，请勿手动修改
+ * @see ItemDefines.h 枚举定义
+ * @see SmartEnum.h EnumUtils 模板定义
+ */
+
 #include "ItemDefines.h"
 #include "Define.h"
 #include "SmartEnum.h"
@@ -26,9 +43,29 @@ namespace Trinity::Impl::EnumUtilsImpl
 /*********************************************************************\
 |* data for enum 'InventoryResult' in 'ItemDefines.h' auto-generated *|
 \*********************************************************************/
+/**
+ * @brief 将 InventoryResult 枚举值转换为可读文本
+ *
+ * 为每个物品装备错误码提供枚举名称、标签和描述信息的文本表示。
+ * 主要用于日志输出、调试信息和错误提示。
+ *
+ * @tparam InventoryResult 物品装备结果枚举类型
+ * @param value 需要转换的枚举值
+ * @return EnumText 包含枚举名称、标签和描述的结构体
+ * @throws std::out_of_range 当传入无效枚举值时抛出异常
+ *
+ * @note 返回的 EnumText 中，目前描述字段为空字符串，由客户端根据枚举名称本地化
+ * @note 性能：O(1) 时间复杂度，使用 switch-case 快速查找
+ * @note 本函数由模板特化实现，被 EnumUtils<> 基础模板调用
+ *
+ * @see InventoryResult 定义于 ItemDefines.h
+ * @see EnumText 定义于 SmartEnum.h
+ */
 template <>
 TC_API_EXPORT EnumText EnumUtils<InventoryResult>::ToString(InventoryResult value)
 {
+    // 使用 switch-case 实现枚举值到文本的映射
+    // 每个返回值包含三个字段：{枚举常量名, 标签名, 描述文本}
     switch (value)
     {
         case EQUIP_ERR_OK: return { "EQUIP_ERR_OK", "EQUIP_ERR_OK", "" };
@@ -123,12 +160,42 @@ TC_API_EXPORT EnumText EnumUtils<InventoryResult>::ToString(InventoryResult valu
     }
 }
 
+/**
+ * @brief 获取 InventoryResult 枚举值的总数
+ *
+ * 返回 InventoryResult 枚举中定义的有效枚举项数量。
+ * 用于数组分配、迭代遍历等场景。
+ *
+ * @tparam InventoryResult 物品装备结果枚举类型
+ * @return size_t 枚举项总数（88个）
+ *
+ * @note 返回值为编译时常量，性能开销极小
+ * @note 该值必须与 FromIndex/ToIndex 支持的最大索引值一致
+ */
 template <>
 TC_API_EXPORT size_t EnumUtils<InventoryResult>::Count() { return 88; }
 
+/**
+ * @brief 将索引转换为 InventoryResult 枚举值
+ *
+ * 根据索引值（0 到 Count()-1）返回对应的枚举值。
+ * 主要用于从配置文件、数据库或网络数据包中反序列化枚举值。
+ *
+ * @tparam InventoryResult 物品装备结果枚举类型
+ * @param index 索引值，范围 [0, Count()-1]
+ * @return InventoryResult 对应的枚举值
+ * @throws std::out_of_range 当索引超出有效范围时抛出异常
+ *
+ * @note 索引顺序与 ToIndex() 函数互为逆操作
+ * @note 性能：O(1) 时间复杂度，使用 switch-case 实现快速查找
+ * @warning 索引与枚举值的数值可能不一致，必须通过此函数进行转换
+ *
+ * @see ToIndex() 逆向转换函数
+ */
 template <>
 TC_API_EXPORT InventoryResult EnumUtils<InventoryResult>::FromIndex(size_t index)
 {
+    // 索引从 0 开始，按定义顺序映射到对应的枚举值
     switch (index)
     {
         case 0: return EQUIP_ERR_OK;
@@ -223,9 +290,28 @@ TC_API_EXPORT InventoryResult EnumUtils<InventoryResult>::FromIndex(size_t index
     }
 }
 
+/**
+ * @brief 将 InventoryResult 枚举值转换为索引
+ *
+ * 为枚举值分配一个连续的索引编号（0 到 Count()-1）。
+ * 主要用于序列化枚举值到配置文件、数据库或网络数据包。
+ *
+ * @tparam InventoryResult 物品装备结果枚举类型
+ * @param value 需要转换的枚举值
+ * @return size_t 对应的索引值，范围 [0, Count()-1]
+ * @throws std::out_of_range 当传入无效枚举值时抛出异常
+ *
+ * @note 与 FromIndex() 互为逆操作：FromIndex(ToIndex(x)) == x
+ * @note 性能：O(1) 时间复杂度，使用 switch-case 实现快速查找
+ * @warning 返回的索引可能与枚举值的数值不一致，不可直接强转
+ *
+ * @see FromIndex() 逆向转换函数
+ */
 template <>
 TC_API_EXPORT size_t EnumUtils<InventoryResult>::ToIndex(InventoryResult value)
 {
+    // 将枚举值映射到连续的索引编号
+    // 注意：索引不一定等于枚举值的数值
     switch (value)
     {
         case EQUIP_ERR_OK: return 0;
@@ -323,9 +409,29 @@ TC_API_EXPORT size_t EnumUtils<InventoryResult>::ToIndex(InventoryResult value)
 /***************************************************************\
 |* data for enum 'BuyResult' in 'ItemDefines.h' auto-generated *|
 \***************************************************************/
+/**
+ * @brief 将 BuyResult 枚举值转换为可读文本
+ *
+ * 为每个商店购买错误码提供枚举名称、标签和描述信息的文本表示。
+ * 主要用于日志输出、调试信息和错误提示。
+ *
+ * @tparam BuyResult 商店购买结果枚举类型
+ * @param value 需要转换的枚举值
+ * @return EnumText 包含枚举名称、标签和描述的结构体
+ * @throws std::out_of_range 当传入无效枚举值时抛出异常
+ *
+ * @note 返回的 EnumText 中，目前描述字段为空字符串，由客户端根据枚举名称本地化
+ * @note 性能：O(1) 时间复杂度，使用 switch-case 快速查找
+ * @note 本函数由模板特化实现，被 EnumUtils<> 基础模板调用
+ *
+ * @see BuyResult 定义于 ItemDefines.h
+ * @see EnumText 定义于 SmartEnum.h
+ */
 template <>
 TC_API_EXPORT EnumText EnumUtils<BuyResult>::ToString(BuyResult value)
 {
+    // 使用 switch-case 实现枚举值到文本的映射
+    // 每个返回值包含三个字段：{枚举常量名, 标签名, 描述文本}
     switch (value)
     {
         case BUY_ERR_CANT_FIND_ITEM: return { "BUY_ERR_CANT_FIND_ITEM", "BUY_ERR_CANT_FIND_ITEM", "" };
@@ -341,12 +447,42 @@ TC_API_EXPORT EnumText EnumUtils<BuyResult>::ToString(BuyResult value)
     }
 }
 
+/**
+ * @brief 获取 BuyResult 枚举值的总数
+ *
+ * 返回 BuyResult 枚举中定义的有效枚举项数量。
+ * 用于数组分配、迭代遍历等场景。
+ *
+ * @tparam BuyResult 商店购买结果枚举类型
+ * @return size_t 枚举项总数（9个）
+ *
+ * @note 返回值为编译时常量，性能开销极小
+ * @note 该值必须与 FromIndex/ToIndex 支持的最大索引值一致
+ */
 template <>
 TC_API_EXPORT size_t EnumUtils<BuyResult>::Count() { return 9; }
 
+/**
+ * @brief 将索引转换为 BuyResult 枚举值
+ *
+ * 根据索引值（0 到 Count()-1）返回对应的枚举值。
+ * 主要用于从配置文件、数据库或网络数据包中反序列化枚举值。
+ *
+ * @tparam BuyResult 商店购买结果枚举类型
+ * @param index 索引值，范围 [0, Count()-1]
+ * @return BuyResult 对应的枚举值
+ * @throws std::out_of_range 当索引超出有效范围时抛出异常
+ *
+ * @note 索引顺序与 ToIndex() 函数互为逆操作
+ * @note 性能：O(1) 时间复杂度，使用 switch-case 实现快速查找
+ * @warning 索引与枚举值的数值可能不一致，必须通过此函数进行转换
+ *
+ * @see ToIndex() 逆向转换函数
+ */
 template <>
 TC_API_EXPORT BuyResult EnumUtils<BuyResult>::FromIndex(size_t index)
 {
+    // 索引从 0 开始，按定义顺序映射到对应的枚举值
     switch (index)
     {
         case 0: return BUY_ERR_CANT_FIND_ITEM;
@@ -362,9 +498,28 @@ TC_API_EXPORT BuyResult EnumUtils<BuyResult>::FromIndex(size_t index)
     }
 }
 
+/**
+ * @brief 将 BuyResult 枚举值转换为索引
+ *
+ * 为枚举值分配一个连续的索引编号（0 到 Count()-1）。
+ * 主要用于序列化枚举值到配置文件、数据库或网络数据包。
+ *
+ * @tparam BuyResult 商店购买结果枚举类型
+ * @param value 需要转换的枚举值
+ * @return size_t 对应的索引值，范围 [0, Count()-1]
+ * @throws std::out_of_range 当传入无效枚举值时抛出异常
+ *
+ * @note 与 FromIndex() 互为逆操作：FromIndex(ToIndex(x)) == x
+ * @note 性能：O(1) 时间复杂度，使用 switch-case 实现快速查找
+ * @warning 返回的索引可能与枚举值的数值不一致，不可直接强转
+ *
+ * @see FromIndex() 逆向转换函数
+ */
 template <>
 TC_API_EXPORT size_t EnumUtils<BuyResult>::ToIndex(BuyResult value)
 {
+    // 将枚举值映射到连续的索引编号
+    // 注意：索引不一定等于枚举值的数值
     switch (value)
     {
         case BUY_ERR_CANT_FIND_ITEM: return 0;
@@ -383,9 +538,31 @@ TC_API_EXPORT size_t EnumUtils<BuyResult>::ToIndex(BuyResult value)
 /****************************************************************\
 |* data for enum 'SellResult' in 'ItemDefines.h' auto-generated *|
 \****************************************************************/
+/**
+ * @brief 将 SellResult 枚举值转换为可读文本
+ *
+ * 为每个商店出售错误码提供枚举名称、标签和描述信息的文本表示。
+ * 主要用于日志输出、调试信息和错误提示。
+ * 与其他枚举不同，SellResult 包含英文描述文本。
+ *
+ * @tparam SellResult 商店出售结果枚举类型
+ * @param value 需要转换的枚举值
+ * @return EnumText 包含枚举名称、标签和描述的结构体
+ * @throws std::out_of_range 当传入无效枚举值时抛出异常
+ *
+ * @note 返回的 EnumText 中包含英文描述文本，可直接用于客户端提示
+ * @note 性能：O(1) 时间复杂度，使用 switch-case 快速查找
+ * @note 本函数由模板特化实现，被 EnumUtils<> 基础模板调用
+ *
+ * @see SellResult 定义于 ItemDefines.h
+ * @see EnumText 定义于 SmartEnum.h
+ */
 template <>
 TC_API_EXPORT EnumText EnumUtils<SellResult>::ToString(SellResult value)
 {
+    // 使用 switch-case 实现枚举值到文本的映射
+    // 每个返回值包含三个字段：{枚举常量名, 标签名, 描述文本}
+    // SellResult 的描述字段包含英文错误提示信息
     switch (value)
     {
         case SELL_ERR_CANT_FIND_ITEM: return { "SELL_ERR_CANT_FIND_ITEM", "SELL_ERR_CANT_FIND_ITEM", "The item was not found." };
@@ -399,12 +576,42 @@ TC_API_EXPORT EnumText EnumUtils<SellResult>::ToString(SellResult value)
     }
 }
 
+/**
+ * @brief 获取 SellResult 枚举值的总数
+ *
+ * 返回 SellResult 枚举中定义的有效枚举项数量。
+ * 用于数组分配、迭代遍历等场景。
+ *
+ * @tparam SellResult 商店出售结果枚举类型
+ * @return size_t 枚举项总数（7个）
+ *
+ * @note 返回值为编译时常量，性能开销极小
+ * @note 该值必须与 FromIndex/ToIndex 支持的最大索引值一致
+ */
 template <>
 TC_API_EXPORT size_t EnumUtils<SellResult>::Count() { return 7; }
 
+/**
+ * @brief 将索引转换为 SellResult 枚举值
+ *
+ * 根据索引值（0 到 Count()-1）返回对应的枚举值。
+ * 主要用于从配置文件、数据库或网络数据包中反序列化枚举值。
+ *
+ * @tparam SellResult 商店出售结果枚举类型
+ * @param index 索引值，范围 [0, Count()-1]
+ * @return SellResult 对应的枚举值
+ * @throws std::out_of_range 当索引超出有效范围时抛出异常
+ *
+ * @note 索引顺序与 ToIndex() 函数互为逆操作
+ * @note 性能：O(1) 时间复杂度，使用 switch-case 实现快速查找
+ * @warning 索引与枚举值的数值可能不一致，必须通过此函数进行转换
+ *
+ * @see ToIndex() 逆向转换函数
+ */
 template <>
 TC_API_EXPORT SellResult EnumUtils<SellResult>::FromIndex(size_t index)
 {
+    // 索引从 0 开始，按定义顺序映射到对应的枚举值
     switch (index)
     {
         case 0: return SELL_ERR_CANT_FIND_ITEM;
@@ -418,9 +625,28 @@ TC_API_EXPORT SellResult EnumUtils<SellResult>::FromIndex(size_t index)
     }
 }
 
+/**
+ * @brief 将 SellResult 枚举值转换为索引
+ *
+ * 为枚举值分配一个连续的索引编号（0 到 Count()-1）。
+ * 主要用于序列化枚举值到配置文件、数据库或网络数据包。
+ *
+ * @tparam SellResult 商店出售结果枚举类型
+ * @param value 需要转换的枚举值
+ * @return size_t 对应的索引值，范围 [0, Count()-1]
+ * @throws std::out_of_range 当传入无效枚举值时抛出异常
+ *
+ * @note 与 FromIndex() 互为逆操作：FromIndex(ToIndex(x)) == x
+ * @note 性能：O(1) 时间复杂度，使用 switch-case 实现快速查找
+ * @warning 返回的索引可能与枚举值的数值不一致，不可直接强转
+ *
+ * @see FromIndex() 逆向转换函数
+ */
 template <>
 TC_API_EXPORT size_t EnumUtils<SellResult>::ToIndex(SellResult value)
 {
+    // 将枚举值映射到连续的索引编号
+    // 注意：索引不一定等于枚举值的数值
     switch (value)
     {
         case SELL_ERR_CANT_FIND_ITEM: return 0;

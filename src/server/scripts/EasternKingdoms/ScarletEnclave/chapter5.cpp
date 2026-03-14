@@ -15,6 +15,31 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file chapter5.cpp
+ * @brief 血色飞地第五章：黎明之光任务脚本
+ *
+ * 本模块实现了死亡骑士新手区域的最终任务 - 黎明之光（任务ID: 12801）。
+ * 这是死亡骑士新手区的史诗级结局，涉及大规模战斗和剧情动画。
+ *
+ * 任务背景：
+ * 大领主达里安·莫格莱尼率领死亡骑士攻击圣光之愿礼拜堂，
+ * 与银色黎明和白银之手骑士团展开决战。
+ * 在关键时刻，提里奥·弗丁出现，净化灰烬使者，
+ * 巫妖王现身，最终死亡骑士摆脱巫妖王的控制。
+ *
+ * 主要NPC：
+ * - 大领主达里安·莫格莱尼（NPC 29173）：死亡骑士指挥官
+ * - 巫妖王（NPC 29183）：最终BOSS
+ * - 提里奥·弗丁（NPC 29175）：白银之手大领主
+ * - 银色黎明士兵和死亡骑士士兵：大规模战斗单位
+ *
+ * 战斗规模配置（可通过LESS_MOB宏调整）：
+ * - 死亡骑士数量
+ * - 防御者数量
+ * - 各种天灾军团单位数量
+ */
+
 #include "ScriptMgr.h"
 #include "GameObject.h"
 #include "Map.h"
@@ -27,111 +52,133 @@
 #include "SpellScript.h"
 #include "TemporarySummon.h"
 
-#define LESS_MOB // if you do not have a good server and do not want it to be laggy as hell
-//Light of Dawn
+/**
+ * @brief 减少怪物数量宏定义
+ *
+ * 如果服务器性能不佳，可以定义此宏以减少战斗中的怪物数量，
+ * 避免服务器卡顿。注释掉此行以使用完整规模的战斗。
+ */
+#define LESS_MOB // 如果服务器性能不佳，取消注释以减少怪物数量
+
+/**
+ * @brief 黎明之光任务相关枚举定义
+ *
+ * 定义了黎明之光事件中的所有常量，包括：
+ * - 战斗规模配置（怪物数量）
+ * - 世界状态ID
+ * - NPC和法术ID
+ * - 台词和表情ID
+ */
 enum mograine
 {
 #ifdef LESS_MOB
-    ENCOUNTER_DK_NUMBER               = 5,  // how many player queue to start the quest, or -
-    ENCOUNTER_DK_TIMER                = 10, // *every 5 minutes. These have to be done in instance data
-    ENCOUNTER_DEFENDER_NUMBER         = 10, // how many of defender
-    ENCOUNTER_EARTHSHATTER_NUMBER     = 1, // how many of earthshatter
-    ENCOUNTER_ABOMINATION_NUMBER      = 2,  // how many of abomination
-    ENCOUNTER_BEHEMOTH_NUMBER         = 1,  // how many of behemoth
-    ENCOUNTER_GHOUL_NUMBER            = 5, // how many of ghoul
-    ENCOUNTER_WARRIOR_NUMBER          = 1,  // how many of warrior
+    // 低配置模式下的战斗规模
+    ENCOUNTER_DK_NUMBER               = 5,   ///< 启动任务所需的玩家队列数量
+    ENCOUNTER_DK_TIMER                = 10,  ///< 每5分钟的时间倍数
+    ENCOUNTER_DEFENDER_NUMBER         = 10,  ///< 光明防御者数量
+    ENCOUNTER_EARTHSHATTER_NUMBER     = 1,   ///< 大地破碎者数量
+    ENCOUNTER_ABOMINATION_NUMBER      = 2,   ///< 憎恶数量
+    ENCOUNTER_BEHEMOTH_NUMBER         = 1,   ///< 巨兽数量
+    ENCOUNTER_GHOUL_NUMBER            = 5,   ///< 食尸鬼数量
+    ENCOUNTER_WARRIOR_NUMBER          = 1,   ///< 冰冻废土战士数量
 #else
-    ENCOUNTER_DK_NUMBER               = 5,  // how many player queue to start the quest, or -
-    ENCOUNTER_DK_TIMER                = 10, // *every 5 minutes. These have to be done in instance data
-    ENCOUNTER_DEFENDER_NUMBER         = 20, // how many of defender
-    ENCOUNTER_EARTHSHATTER_NUMBER     = 20, // how many of earthshatter
-    ENCOUNTER_ABOMINATION_NUMBER      = 3,  // how many of abomination
-    ENCOUNTER_BEHEMOTH_NUMBER         = 2,  // how many of behemoth
-    ENCOUNTER_GHOUL_NUMBER            = 10, // how many of ghoul
-    ENCOUNTER_WARRIOR_NUMBER          = 2,  // how many of warrior
+    // 完整规模的战斗配置
+    ENCOUNTER_DK_NUMBER               = 5,   ///< 启动任务所需的玩家队列数量
+    ENCOUNTER_DK_TIMER                = 10,  ///< 每5分钟的时间倍数
+    ENCOUNTER_DEFENDER_NUMBER         = 20,  ///< 光明防御者数量
+    ENCOUNTER_EARTHSHATTER_NUMBER     = 20,  ///< 大地破碎者数量
+    ENCOUNTER_ABOMINATION_NUMBER      = 3,   ///< 憎恶数量
+    ENCOUNTER_BEHEMOTH_NUMBER         = 2,   ///< 巨兽数量
+    ENCOUNTER_GHOUL_NUMBER            = 10,  ///< 食尸鬼数量
+    ENCOUNTER_WARRIOR_NUMBER          = 2,   ///< 冰冻废土战士数量
 #endif
-    ENCOUNTER_TOTAL_DAWN              = 300,  // Total number
-    ENCOUNTER_TOTAL_SCOURGE           = 10000,
 
-    WORLD_STATE_REMAINS               = 3592,
-    WORLD_STATE_COUNTDOWN             = 3603,
-    WORLD_STATE_EVENT_BEGIN           = 3605,
+    ENCOUNTER_TOTAL_DAWN              = 300,   ///< 银色黎明总兵力（剧情数字）
+    ENCOUNTER_TOTAL_SCOURGE           = 10000, ///< 天灾军团总兵力（剧情数字）
 
-    SAY_LIGHT_OF_DAWN01               = 0, // pre text
-    SAY_LIGHT_OF_DAWN02               = 1,
-    SAY_LIGHT_OF_DAWN03               = 2,
-    SAY_LIGHT_OF_DAWN04               = 3, // intro
-    SAY_LIGHT_OF_DAWN05               = 4,
-    SAY_LIGHT_OF_DAWN06               = 5,
-    SAY_LIGHT_OF_DAWN07               = 6, // During the fight - Korfax, Champion of the Light
-    SAY_LIGHT_OF_DAWN08               = 7, // Lord Maxwell Tyrosus
-    SAY_LIGHT_OF_DAWN09               = 8, // Highlord Darion Mograine
-    SAY_LIGHT_OF_DAWN25               = 24, // After the fight
-    SAY_LIGHT_OF_DAWN26               = 25, // Highlord Tirion Fordring
-    SAY_LIGHT_OF_DAWN27               = 26, // Highlord Darion Mograine
-    SAY_LIGHT_OF_DAWN28               = 27, // Highlord Tirion Fordring
-    SAY_LIGHT_OF_DAWN29               = 28, // Highlord Tirion Fordring
-    SAY_LIGHT_OF_DAWN30               = 29, // Highlord Tirion Fordring
-    SAY_LIGHT_OF_DAWN31               = 30, // Highlord Tirion Fordring
-    SAY_LIGHT_OF_DAWN32               = 31, // Highlord Alexandros Mograine
-    SAY_LIGHT_OF_DAWN33               = 32, // Highlord Darion Mograine
-    SAY_LIGHT_OF_DAWN34               = 33, // Highlord Darion Mograine
-    SAY_LIGHT_OF_DAWN35               = 34, // Darion Mograine
-    SAY_LIGHT_OF_DAWN36               = 35, // Darion Mograine
-    SAY_LIGHT_OF_DAWN37               = 36, // Highlord Alexandros Mograine
-    SAY_LIGHT_OF_DAWN38               = 37, // Darion Mograine
-    SAY_LIGHT_OF_DAWN39               = 38, // Highlord Alexandros Mograine
-    SAY_LIGHT_OF_DAWN40               = 39, // Darion Mograine
-    SAY_LIGHT_OF_DAWN41               = 40, // Highlord Alexandros Mograine
-    SAY_LIGHT_OF_DAWN42               = 41, // Highlord Alexandros Mograine
-    SAY_LIGHT_OF_DAWN43               = 42, // The Lich King
-    SAY_LIGHT_OF_DAWN44               = 43, // Highlord Darion Mograine
-    SAY_LIGHT_OF_DAWN45               = 44, // The Lich King
-    SAY_LIGHT_OF_DAWN46               = 45, // The Lich King
-    SAY_LIGHT_OF_DAWN47               = 46, // Highlord Tirion Fordring
-    SAY_LIGHT_OF_DAWN48               = 47, // The Lich King
-    SAY_LIGHT_OF_DAWN49               = 48, // The Lich King
-    SAY_LIGHT_OF_DAWN50               = 49, // Lord Maxwell Tyrosus
-    SAY_LIGHT_OF_DAWN51               = 50, // The Lich King
-    SAY_LIGHT_OF_DAWN52               = 51, // Highlord Darion Mograine
-    SAY_LIGHT_OF_DAWN53               = 52, // Highlord Darion Mograine
-    SAY_LIGHT_OF_DAWN54               = 53, // Highlord Tirion Fordring
-    SAY_LIGHT_OF_DAWN55               = 54, // The Lich King
-    SAY_LIGHT_OF_DAWN56               = 55, // Highlord Tirion Fordring
-    SAY_LIGHT_OF_DAWN57               = 56, // The Lich King
-    SAY_LIGHT_OF_DAWN58               = 57, // The Lich King
-    SAY_LIGHT_OF_DAWN59               = 58, // The Lich King
-    SAY_LIGHT_OF_DAWN60               = 59, // Highlord Tirion Fordring
-    SAY_LIGHT_OF_DAWN61               = 60, // Highlord Tirion Fordring
-    SAY_LIGHT_OF_DAWN62               = 61, // Highlord Tirion Fordring
-    SAY_LIGHT_OF_DAWN63               = 62, // Highlord Tirion Fordring
-    SAY_LIGHT_OF_DAWN64               = 63, // Highlord Tirion Fordring
-    SAY_LIGHT_OF_DAWN65               = 64, // Highlord Tirion Fordring
-    SAY_LIGHT_OF_DAWN66               = 65, // Highlord Tirion Fordring
-    SAY_LIGHT_OF_DAWN67               = 66, // Highlord Tirion Fordring
-    SAY_LIGHT_OF_DAWN68               = 67, // Highlord Darion Mograine
+    // 世界状态ID（用于UI显示）
+    WORLD_STATE_REMAINS               = 3592,   ///< 剩余兵力世界状态
+    WORLD_STATE_COUNTDOWN             = 3603,   ///< 倒计时世界状态
+    WORLD_STATE_EVENT_BEGIN           = 3605,   ///< 事件开始世界状态
 
-    EMOTE_LIGHT_OF_DAWN01             = 68,  // Emotes
-    EMOTE_LIGHT_OF_DAWN02             = 69,
-    EMOTE_LIGHT_OF_DAWN03             = 70,
-    EMOTE_LIGHT_OF_DAWN04             = 71,
-    EMOTE_LIGHT_OF_DAWN05             = 72,
-    EMOTE_LIGHT_OF_DAWN06             = 73,
-    EMOTE_LIGHT_OF_DAWN07             = 74,
-    EMOTE_LIGHT_OF_DAWN08             = 75,
-    EMOTE_LIGHT_OF_DAWN09             = 76,
-    EMOTE_LIGHT_OF_DAWN10             = 77,
-    EMOTE_LIGHT_OF_DAWN11             = 78,
-    EMOTE_LIGHT_OF_DAWN12             = 79,
-    EMOTE_LIGHT_OF_DAWN13             = 80,
-    EMOTE_LIGHT_OF_DAWN14             = 81,
-    EMOTE_LIGHT_OF_DAWN15             = 82,
-    EMOTE_LIGHT_OF_DAWN16             = 83,
-    EMOTE_LIGHT_OF_DAWN17             = 84,
-    EMOTE_LIGHT_OF_DAWN18             = 85,
+    // 莫格莱尼台词ID
+    SAY_LIGHT_OF_DAWN01               = 0,   ///< 预备台词
+    SAY_LIGHT_OF_DAWN02               = 1,   ///< 预备台词
+    SAY_LIGHT_OF_DAWN03               = 2,   ///< 预备台词
+    SAY_LIGHT_OF_DAWN04               = 3,   ///< 介绍台词
+    SAY_LIGHT_OF_DAWN05               = 4,   ///< 介绍台词
+    SAY_LIGHT_OF_DAWN06               = 5,   ///< 介绍台词
+    SAY_LIGHT_OF_DAWN07               = 6,   ///< 战斗中 - 科尔法克斯，光明冠军
+    SAY_LIGHT_OF_DAWN08               = 7,   ///< 麦克斯韦尔·泰罗瑟斯领主
+    SAY_LIGHT_OF_DAWN09               = 8,   ///< 大领主达里安·莫格莱尼
+    SAY_LIGHT_OF_DAWN25               = 24,  ///< 战斗后
+    SAY_LIGHT_OF_DAWN26               = 25,  ///< 大领主提里奥·弗丁
+    SAY_LIGHT_OF_DAWN27               = 26,  ///< 大领主达里安·莫格莱尼
+    SAY_LIGHT_OF_DAWN28               = 27,  ///< 大领主提里奥·弗丁
+    SAY_LIGHT_OF_DAWN29               = 28,  ///< 大领主提里奥·弗丁
+    SAY_LIGHT_OF_DAWN30               = 29,  ///< 大领主提里奥·弗丁
+    SAY_LIGHT_OF_DAWN31               = 30,  ///< 大领主提里奥·弗丁
+    SAY_LIGHT_OF_DAWN32               = 31,  ///< 大领主亚历山德罗斯·莫格莱尼
+    SAY_LIGHT_OF_DAWN33               = 32,  ///< 大领主达里安·莫格莱尼
+    SAY_LIGHT_OF_DAWN34               = 33,  ///< 大领主达里安·莫格莱尼
+    SAY_LIGHT_OF_DAWN35               = 34,  ///< 达里安·莫格莱尼
+    SAY_LIGHT_OF_DAWN36               = 35,  ///< 达里安·莫格莱尼
+    SAY_LIGHT_OF_DAWN37               = 36,  ///< 大领主亚历山德罗斯·莫格莱尼
+    SAY_LIGHT_OF_DAWN38               = 37,  ///< 达里安·莫格莱尼
+    SAY_LIGHT_OF_DAWN39               = 38,  ///< 大领主亚历山德罗斯·莫格莱尼
+    SAY_LIGHT_OF_DAWN40               = 39,  ///< 达里安·莫格莱尼
+    SAY_LIGHT_OF_DAWN41               = 40,  ///< 大领主亚历山德罗斯·莫格莱尼
+    SAY_LIGHT_OF_DAWN42               = 41,  ///< 大领主亚历山德罗斯·莫格莱尼
+    SAY_LIGHT_OF_DAWN43               = 42,  ///< 巫妖王
+    SAY_LIGHT_OF_DAWN44               = 43,  ///< 大领主达里安·莫格莱尼
+    SAY_LIGHT_OF_DAWN45               = 44,  ///< 巫妖王
+    SAY_LIGHT_OF_DAWN46               = 45,  ///< 巫妖王
+    SAY_LIGHT_OF_DAWN47               = 46,  ///< 大领主提里奥·弗丁
+    SAY_LIGHT_OF_DAWN48               = 47,  ///< 巫妖王
+    SAY_LIGHT_OF_DAWN49               = 48,  ///< 巫妖王
+    SAY_LIGHT_OF_DAWN50               = 49,  ///< 麦克斯韦尔·泰罗瑟斯领主
+    SAY_LIGHT_OF_DAWN51               = 50,  ///< 巫妖王
+    SAY_LIGHT_OF_DAWN52               = 51,  ///< 大领主达里安·莫格莱尼
+    SAY_LIGHT_OF_DAWN53               = 52,  ///< 大领主达里安·莫格莱尼
+    SAY_LIGHT_OF_DAWN54               = 53,  ///< 大领主提里奥·弗丁
+    SAY_LIGHT_OF_DAWN55               = 54,  ///< 巫妖王
+    SAY_LIGHT_OF_DAWN56               = 55,  ///< 大领主提里奥·弗丁
+    SAY_LIGHT_OF_DAWN57               = 56,  ///< 巫妖王
+    SAY_LIGHT_OF_DAWN58               = 57,  ///< 巫妖王
+    SAY_LIGHT_OF_DAWN59               = 58,  ///< 巫妖王
+    SAY_LIGHT_OF_DAWN60               = 59,  ///< 大领主提里奥·弗丁
+    SAY_LIGHT_OF_DAWN61               = 60,  ///< 大领主提里奥·弗丁
+    SAY_LIGHT_OF_DAWN62               = 61,  ///< 大领主提里奥·弗丁
+    SAY_LIGHT_OF_DAWN63               = 62,  ///< 大领主提里奥·弗丁
+    SAY_LIGHT_OF_DAWN64               = 63,  ///< 大领主提里奥·弗丁
+    SAY_LIGHT_OF_DAWN65               = 64,  ///< 大领主提里奥·弗丁
+    SAY_LIGHT_OF_DAWN66               = 65,  ///< 大领主提里奥·弗丁
+    SAY_LIGHT_OF_DAWN67               = 66,  ///< 大领主提里奥·弗丁
+    SAY_LIGHT_OF_DAWN68               = 67,  ///< 大领主达里安·莫格莱尼
 
-    GO_LIGHT_OF_DAWN                  = 191330,
-    SPELL_THE_LIGHT_OF_DAWN_Q         = 53606, // quest credit
+    // 表情ID
+    EMOTE_LIGHT_OF_DAWN01             = 68,  ///< 表情1
+    EMOTE_LIGHT_OF_DAWN02             = 69,  ///< 表情2
+    EMOTE_LIGHT_OF_DAWN03             = 70,  ///< 表情3
+    EMOTE_LIGHT_OF_DAWN04             = 71,  ///< 表情4
+    EMOTE_LIGHT_OF_DAWN05             = 72,  ///< 表情5
+    EMOTE_LIGHT_OF_DAWN06             = 73,  ///< 表情6
+    EMOTE_LIGHT_OF_DAWN07             = 74,  ///< 表情7
+    EMOTE_LIGHT_OF_DAWN08             = 75,  ///< 表情8
+    EMOTE_LIGHT_OF_DAWN09             = 76,  ///< 表情9
+    EMOTE_LIGHT_OF_DAWN10             = 77,  ///< 表情10
+    EMOTE_LIGHT_OF_DAWN11             = 78,  ///< 表情11
+    EMOTE_LIGHT_OF_DAWN12             = 79,  ///< 表情12
+    EMOTE_LIGHT_OF_DAWN13             = 80,  ///< 表情13
+    EMOTE_LIGHT_OF_DAWN14             = 81,  ///< 表情14
+    EMOTE_LIGHT_OF_DAWN15             = 82,  ///< 表情15
+    EMOTE_LIGHT_OF_DAWN16             = 83,  ///< 表情16
+    EMOTE_LIGHT_OF_DAWN17             = 84,  ///< 表情17
+    EMOTE_LIGHT_OF_DAWN18             = 85,  ///< 表情18
+
+    // 游戏对象和任务法术
+    GO_LIGHT_OF_DAWN                  = 191330,  ///< 黎明之光游戏对象ID
+    SPELL_THE_LIGHT_OF_DAWN_Q         = 53606,   ///< 黎明之光任务完成法术
 
     // ---- Dark Knight npc --------------------
     // Highlord Darion Mograine

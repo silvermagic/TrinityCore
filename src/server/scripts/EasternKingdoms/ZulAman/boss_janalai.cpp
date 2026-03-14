@@ -15,6 +15,25 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file boss_janalai.cpp
+ * @brief 祖阿曼副本 - 加纳莱Boss脚本模块
+ *
+ * 本模块实现了加纳莱Boss的战斗逻辑，包括：
+ * - 火焰吐息技能
+ * - 火焰炸弹机制（核心技能，全屏AOE）
+ * - 孵化蛋机制（召唤孵化者孵化龙鹰幼崽）
+ * - 狂暴机制
+ *
+ * 加纳莱是祖阿曼的第四个Boss，是一只龙鹰之神化身。
+ * 战斗分为普通阶段和火焰炸弹阶段，Boss会定期召唤孵化者孵化龙鹰蛋。
+ *
+ * 特殊机制：
+ * - 火焰炸弹：Boss传送至中央，在房间内随机放置40个炸弹，随后引爆
+ * - 孵化蛋：Boss定期召唤2个孵化者，孵化者会走向蛋群并孵化龙鹰幼崽
+ * - 35%血量：Boss会一次性孵化所有剩余的蛋
+ */
+
 /* ScriptData
 SDName: Boss_Janalai
 SD%Complete: 100
@@ -33,78 +52,113 @@ EndScriptData */
 #include "TemporarySummon.h"
 #include "zulaman.h"
 
+/**
+ * @brief 对话和喊话枚举
+ *
+ * 定义加纳莱的各种对话ID
+ */
 enum Yells
 {
-    SAY_AGGRO                   = 0,
-    SAY_FIRE_BOMBS              = 1,
-    SAY_SUMMON_HATCHER          = 2,
-    SAY_ALL_EGGS                = 3,
-    SAY_BERSERK                 = 4,
-    SAY_SLAY                    = 5,
-    SAY_DEATH                   = 6,
-    SAY_EVENT_STRANGERS         = 7,
-    SAY_EVENT_FRIENDS           = 8
+    SAY_AGGRO                   = 0,  ///< 开战喊话
+    SAY_FIRE_BOMBS              = 1,  ///< 火焰炸弹喊话
+    SAY_SUMMON_HATCHER          = 2,  ///< 召唤孵化者喊话
+    SAY_ALL_EGGS                = 3,  ///< 孵化所有蛋喊话
+    SAY_BERSERK                 = 4,  ///< 狂暴喊话
+    SAY_SLAY                    = 5,  ///< 击杀玩家
+    SAY_DEATH                   = 6,  ///< 死亡喊话
+    SAY_EVENT_STRANGERS         = 7,  ///< 事件对话-陌生人
+    SAY_EVENT_FRIENDS           = 8   ///< 事件对话-朋友
 };
 
+/**
+ * @brief 技能枚举
+ *
+ * 定义加纳莱使用的所有技能ID
+ */
 enum Spells
 {
-    // Jan'alai
-    SPELL_FLAME_BREATH          = 43140,
-    SPELL_FIRE_WALL             = 43113,
-    SPELL_ENRAGE                = 44779,
-    SPELL_SUMMON_PLAYERS        = 43097,
-    SPELL_TELE_TO_CENTER        = 43098, // coord
-    SPELL_HATCH_ALL             = 43144,
-    SPELL_BERSERK               = 45078,
+    // Jan'alai - 加纳莱技能
+    SPELL_FLAME_BREATH          = 43140,  ///< 火焰吐息 - 前方锥形火焰伤害
+    SPELL_FIRE_WALL             = 43113,  ///< 火焰墙 - 在炸弹阶段制造火焰墙
+    SPELL_ENRAGE                = 44779,  ///< 狂乱 - 5分钟或25%血量时触发
+    SPELL_SUMMON_PLAYERS        = 43097,  ///< 召唤玩家 - 将玩家传送到Boss位置
+    SPELL_TELE_TO_CENTER        = 43098,  ///< 传送到中央 - Boss传送至房间中央
+    SPELL_HATCH_ALL             = 43144,  ///< 孵化所有 - 孵化房间内所有蛋
+    SPELL_BERSERK               = 45078,  ///< 狂暴 - 10分钟后进入狂暴
 
-    // Fire Bob Spells
-    SPELL_FIRE_BOMB_CHANNEL     = 42621, // last forever
-    SPELL_FIRE_BOMB_THROW       = 42628, // throw visual
-    SPELL_FIRE_BOMB_DUMMY       = 42629, // bomb visual
-    SPELL_FIRE_BOMB_DAMAGE      = 42630,
+    // Fire Bob Spells - 火焰炸弹技能
+    SPELL_FIRE_BOMB_CHANNEL     = 42621,  ///< 火焰炸弹引导 - 持续施法
+    SPELL_FIRE_BOMB_THROW       = 42628,  ///< 火焰炸弹投掷 - 投掷视觉效果
+    SPELL_FIRE_BOMB_DUMMY       = 42629,  ///< 火焰炸弹假人 - 炸弹视觉效果
+    SPELL_FIRE_BOMB_DAMAGE      = 42630,  ///< 火焰炸弹伤害 - 爆炸伤害
 
-    // Hatcher Spells
-    SPELL_HATCH_EGG             = 42471,   // 43734
-    SPELL_SUMMON_HATCHLING      = 42493,
+    // Hatcher Spells - 孵化者技能
+    SPELL_HATCH_EGG             = 42471,  ///< 孵化蛋 - 孵化龙鹰蛋
+    SPELL_SUMMON_HATCHLING      = 42493,  ///< 召唤幼崽 - 从蛋中召唤龙鹰幼崽
 
-    // Hatchling Spells
-    SPELL_FLAMEBUFFET           = 43299
+    // Hatchling Spells - 幼崽技能
+    SPELL_FLAMEBUFFET           = 43299   ///< 火焰打击 - 持续火焰伤害
 };
 
+/**
+ * @brief 生物ID枚举
+ *
+ * 定义加纳莱战斗中涉及的NPC ID
+ */
 enum Creatures
 {
-    NPC_AMANI_HATCHER           = 23818,
-    NPC_HATCHLING               = 23598, // 42493
-    NPC_EGG                     = 23817,
-    NPC_FIRE_BOMB               = 23920
+    NPC_AMANI_HATCHER           = 23818,  ///< 阿曼尼孵化者NPC ID
+    NPC_HATCHLING               = 23598,  ///< 龙鹰幼崽NPC ID
+    NPC_EGG                     = 23817,  ///< 龙鹰蛋NPC ID
+    NPC_FIRE_BOMB               = 23920   ///< 火焰炸弹NPC ID
 };
 
-const int area_dx = 44;
-const int area_dy = 51;
+/**
+ * @brief 常量定义
+ *
+ * 定义火焰炸弹区域的尺寸
+ */
+const int area_dx = 44;  ///< 炸弹区域X轴尺寸
+const int area_dy = 51;  ///< 炸弹区域Y轴尺寸
 
+/**
+ * @brief 加纳莱位置坐标
+ *
+ * Boss传送至中央时的位置
+ */
 float JanalainPos[1][3] =
 {
     {-33.93f, 1149.27f, 19}
 };
 
+/**
+ * @brief 火焰墙坐标
+ *
+ * 四个方向的火焰墙生成位置
+ */
 float FireWallCoords[4][4] =
 {
-    {-10.13f, 1149.27f, 19, 3.1415f},
-    {-33.93f, 1123.90f, 19, 0.5f*3.1415f},
-    {-54.80f, 1150.08f, 19, 0},
-    {-33.93f, 1175.68f, 19, 1.5f*3.1415f}
+    {-10.13f, 1149.27f, 19, 3.1415f},        ///< 北面火焰墙
+    {-33.93f, 1123.90f, 19, 0.5f*3.1415f},   ///< 东面火焰墙
+    {-54.80f, 1150.08f, 19, 0},               ///< 南面火焰墙
+    {-33.93f, 1175.68f, 19, 1.5f*3.1415f}    ///< 西面火焰墙
 };
 
+/**
+ * @brief 孵化者路径坐标
+ *
+ * 孵化者在两个蛋群区域的巡逻路径
+ */
 float hatcherway[2][5][3] =
 {
-    {
+    {   // 北侧蛋群路径
         {-87.46f, 1170.09f, 6},
         {-74.41f, 1154.75f, 6},
         {-52.74f, 1153.32f, 19},
         {-33.37f, 1172.46f, 19},
         {-33.09f, 1203.87f, 19}
     },
-    {
+    {   // 南侧蛋群路径
         {-86.57f, 1132.85f, 6},
         {-73.94f, 1146.00f, 6},
         {-52.29f, 1146.51f, 19},

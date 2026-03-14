@@ -15,6 +15,20 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file BattlegroundEY.cpp
+ * @brief 暴风之眼（Eye of the Storm）战场模块实现文件
+ *
+ * 本文件实现了暴风之眼战场的具体功能，包括：
+ * - 四个基地（塔楼）的占领机制
+ * - 虚空风暴旗帜的抢夺和送回
+ * - 分数计算和胜利判定
+ * - 玩家复活点管理
+ * - 增益效果的刷新
+ *
+ * 暴风之眼是15v15战场，第一个达到1600分的阵营获胜。
+ */
+
 #include "BattlegroundEY.h"
 #include "BattlegroundMgr.h"
 #include "Creature.h"
@@ -29,24 +43,41 @@
 #include "WorldPacket.h"
 #include "WorldStatePackets.h"
 
-// these variables aren't used outside of this file, so declare them only here
+/// 荣誉分数tick值（非节日/节日）
 uint32 BG_EY_HonorScoreTicks[BG_HONOR_MODE_NUM] =
 {
-    260, // normal honor
-    160  // holiday
+    260, ///< 普通模式荣誉tick
+    160  ///< 节日模式荣誉tick
 };
 
+/**
+ * @brief 构建目标数据块
+ * @param data 数据包引用
+ *
+ * 将玩家目标数据（夺旗次数）写入数据包
+ */
 void BattlegroundEYScore::BuildObjectivesBlock(WorldPacket& data)
 {
-    data << uint32(1); // Objectives Count
-    data << uint32(FlagCaptures);
+    data << uint32(1); // 目标数量
+    data << uint32(FlagCaptures); // 夺旗次数
 }
 
+/**
+ * @brief 构造函数
+ *
+ * 初始化战场成员变量：
+ * - 允许增益效果变更
+ * - 初始化对象和生物容器大小
+ * - 设置基地触发器ID
+ * - 重置所有状态
+ */
 BattlegroundEY::BattlegroundEY()
 {
-    m_BuffChange = true;
-    BgObjects.resize(BG_EY_OBJECT_MAX);
-    BgCreatures.resize(BG_EY_CREATURES_MAX);
+    m_BuffChange = true;  // 允许增益效果变更
+    BgObjects.resize(BG_EY_OBJECT_MAX);  // 初始化游戏对象容器
+    BgCreatures.resize(BG_EY_CREATURES_MAX);  // 初始化生物容器
+
+    // 设置基地触发器ID
     m_Points_Trigger[FEL_REAVER] = TR_FEL_REAVER_BUFF;
     m_Points_Trigger[BLOOD_ELF] = TR_BLOOD_ELF_BUFF;
     m_Points_Trigger[DRAENEI_RUINS] = TR_DRAENEI_RUINS_BUFF;

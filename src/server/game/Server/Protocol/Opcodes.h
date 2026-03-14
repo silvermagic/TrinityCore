@@ -15,6 +15,26 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file Opcodes.h
+ * @brief 网络操作码定义模块 - 定义客户端与服务器通信的所有消息类型
+ *
+ * 本模块定义了WoW协议中所有操作码(Opcodes)，用于标识网络数据包的类型。
+ * 每个操作码对应一种特定的网络消息，如移动、攻击、聊天、交易等。
+ *
+ * 操作码命名规范：
+ * - CMSG_* : 客户端发送给服务器的消息 (Client Message)
+ * - SMSG_* : 服务器发送给客户端的消息 (Server Message)
+ * - MSG_*  : 双向消息，可由客户端或服务器发送
+ * - UMSG_* : 未使用或废弃的消息
+ *
+ * 主要职责：
+ * 1. 定义所有网络协议操作码
+ * 2. 定义会话状态和处理方式
+ * 3. 提供操作码处理器基类
+ * 4. 提供操作码名称查询功能
+ */
+
 /// \addtogroup u2w
 /// @{
 /// \file
@@ -25,6 +45,26 @@
 #include "Define.h"
 #include <string>
 
+/**
+ * @enum Opcodes
+ * @brief 操作码枚举 - 定义所有网络消息类型标识符
+ *
+ * 每个操作码是一个16位的唯一标识符，用于区分不同类型的网络消息。
+ * 操作码的范围是0x000到0x51F，共覆盖WoW 3.3.5版本的所有协议消息。
+ *
+ * 操作码分类：
+ * 1. 调试/GM指令 (0x001-0x040)
+ * 2. 认证相关 (0x033-0x040)
+ * 3. 角色管理 (0x036-0x05F)
+ * 4. 聊天和频道 (0x062-0x0A8)
+ * 5. 移动相关 (0x0B5-0x1DC)
+ * 6. 物品和背包 (0x0AB-0x166)
+ * 7. 法术和战斗 (0x127-0x1D7)
+ * 8. 任务和NPC (0x17B-0x1D7)
+ * 9. 组队和公会 (0x06E-0x094)
+ * 10. 战场和竞技场 (0x230-0x2C0)
+ * 11. 其他功能模块
+ */
 enum Opcodes : uint16
 {
     CMSG_BOOTME                                     = 0x001,
@@ -1349,84 +1389,213 @@ enum OpcodeMisc : uint16
 typedef Opcodes OpcodeClient;
 typedef Opcodes OpcodeServer;
 
-/// Player state
+/**
+ * @enum SessionStatus
+ * @brief 会话状态枚举 - 定义玩家会话的不同状态
+ *
+ * 会话状态用于控制哪些操作码可以被处理。
+ * 每个操作码处理器都会指定需要的会话状态，
+ * 如果当前会话状态不匹配，操作码将被拒绝处理。
+ */
 enum SessionStatus
 {
-    STATUS_AUTHED = 0,                                      // Player authenticated (_player == NULL, m_playerRecentlyLogout = false or will be reset before handler call, m_GUID have garbage)
-    STATUS_LOGGEDIN,                                        // Player in game (_player != NULL, m_GUID == _player->GetGUID(), inWorld())
-    STATUS_TRANSFER,                                        // Player transferring to another map (_player != NULL, m_GUID == _player->GetGUID(), !inWorld())
-    STATUS_LOGGEDIN_OR_RECENTLY_LOGGOUT,                    // _player != NULL or _player == NULL && m_playerRecentlyLogout && m_playerLogout, m_GUID store last _player guid)
-    STATUS_NEVER,                                           // Opcode not accepted from client (deprecated or server side only)
-    STATUS_UNHANDLED                                        // Opcode not handled yet
+    STATUS_AUTHED = 0,                                      // 已认证状态 - 玩家已通过认证但未进入游戏 (_player == NULL, m_playerRecentlyLogout = false or will be reset before handler call, m_GUID have garbage)
+    STATUS_LOGGEDIN,                                        // 已登录状态 - 玩家在游戏中 (_player != NULL, m_GUID == _player->GetGUID(), inWorld())
+    STATUS_TRANSFER,                                        // 传送状态 - 玩家正在传送到另一个地图 (_player != NULL, m_GUID == _player->GetGUID(), !inWorld())
+    STATUS_LOGGEDIN_OR_RECENTLY_LOGGOUT,                    // 已登录或刚登出状态 - _player != NULL or _player == NULL && m_playerRecentlyLogout && m_playerLogout, m_GUID store last _player guid)
+    STATUS_NEVER,                                           // 永不接受状态 - 操作码不接受客户端发送（已废弃或仅服务器端使用）
+    STATUS_UNHANDLED                                        // 未处理状态 - 操作码尚未实现处理逻辑
 };
 
+/**
+ * @enum PacketProcessing
+ * @brief 数据包处理方式枚举 - 定义数据包的处理位置和线程安全性
+ *
+ * 不同类型的数据包需要不同的处理方式：
+ * - 有些需要在主世界线程中处理（非线程安全）
+ * - 有些可以在地图线程中处理（线程安全）
+ * - 有些可以立即处理（不需要特殊处理）
+ */
 enum PacketProcessing
 {
-    PROCESS_INPLACE = 0,                                    //process packet whenever we receive it - mostly for non-handled or non-implemented packets
-    PROCESS_THREADUNSAFE,                                   //packet is not thread-safe - process it in World::UpdateSessions()
-    PROCESS_THREADSAFE                                      //packet is thread-safe - process it in Map::Update()
+    PROCESS_INPLACE = 0,                                    // 立即处理 - 接收到数据包后立即处理，主要用于未处理或未实现的操作码
+    PROCESS_THREADUNSAFE,                                   // 非线程安全 - 数据包非线程安全，必须在World::UpdateSessions()中处理
+    PROCESS_THREADSAFE                                      // 线程安全 - 数据包线程安全，可以在Map::Update()中处理
 };
 
 class WorldSession;
 class WorldPacket;
 
+/**
+ * @class OpcodeHandler
+ * @brief 操作码处理器基类 - 提供操作码的基本信息和处理接口
+ *
+ * 这是所有操作码处理器的基类，定义了操作码的基本属性。
+ * 每个操作码都需要一个处理器来处理接收到的数据包。
+ */
 class OpcodeHandler
 {
 public:
+    /**
+     * @brief 构造函数 - 初始化操作码处理器
+     * @param name 操作码名称字符串（用于日志和调试）
+     * @param status 处理此操作码所需的会话状态
+     */
     OpcodeHandler(char const* name, SessionStatus status) : Name(name), Status(status) { }
     virtual ~OpcodeHandler() { }
 
-    char const* Name;
-    SessionStatus Status;
+    char const* Name;       // 操作码名称 - 用于日志输出和调试
+    SessionStatus Status;   // 会话状态 - 处理此操作码所需的会话状态
 };
 
+/**
+ * @class ClientOpcodeHandler
+ * @brief 客户端操作码处理器 - 处理客户端发送的操作码
+ *
+ * 继承自OpcodeHandler，专门处理客户端发送的操作码。
+ * 增加了处理方式（ProcessingPlace）属性和调用接口（Call）。
+ */
 class ClientOpcodeHandler : public OpcodeHandler
 {
 public:
+    /**
+     * @brief 构造函数 - 初始化客户端操作码处理器
+     * @param name 操作码名称字符串
+     * @param status 处理此操作码所需的会话状态
+     * @param processing 数据包处理方式
+     */
     ClientOpcodeHandler(char const* name, SessionStatus status, PacketProcessing processing)
         : OpcodeHandler(name, status), ProcessingPlace(processing) { }
 
+    /**
+     * @brief 调用处理函数 - 纯虚函数，由子类实现
+     * @param session 玩家会话对象指针
+     * @param packet 接收到的数据包
+     *
+     * 子类需要实现此函数来处理具体的数据包逻辑。
+     * 通常使用模板类来实现，将数据包转换为特定类型并调用对应的处理函数。
+     */
     virtual void Call(WorldSession* session, WorldPacket& packet) const = 0;
 
-    PacketProcessing ProcessingPlace;
+    PacketProcessing ProcessingPlace;  // 处理位置 - 指定数据包的处理方式和位置
 };
 
+/**
+ * @class ServerOpcodeHandler
+ * @brief 服务器操作码处理器 - 用于服务器发送的操作码
+ *
+ * 继承自OpcodeHandler，用于服务器端发送的操作码。
+ * 服务器操作码不需要处理函数，仅用于验证和日志记录。
+ */
 class ServerOpcodeHandler : public OpcodeHandler
 {
 public:
+    /**
+     * @brief 构造函数 - 初始化服务器操作码处理器
+     * @param name 操作码名称字符串
+     * @param status 操作码状态（通常为STATUS_NEVER）
+     */
     ServerOpcodeHandler(char const* name, SessionStatus status)
         : OpcodeHandler(name, status) { }
 };
 
+/**
+ * @class OpcodeTable
+ * @brief 操作码表类 - 管理所有操作码处理器的注册和查询
+ *
+ * 操作码表是一个单例对象，存储所有操作码到处理器的映射关系。
+ * 在服务器启动时初始化，注册所有操作码处理器。
+ *
+ * 主要职责：
+ * 1. 注册和管理操作码处理器
+ * 2. 根据操作码查找对应的处理器
+ * 3. 验证操作码的有效性
+ */
 class OpcodeTable
 {
     public:
+        /**
+         * @brief 构造函数 - 初始化操作码表
+         *
+         * 将内部处理表初始化为空指针。
+         */
         OpcodeTable();
 
         OpcodeTable(OpcodeTable const&) = delete;
         OpcodeTable& operator=(OpcodeTable const&) = delete;
 
+        /**
+         * @brief 析构函数 - 清理所有操作码处理器
+         *
+         * 遍历并删除所有注册的处理器对象。
+         */
         ~OpcodeTable();
 
+        /**
+         * @brief 初始化操作码表 - 注册所有操作码处理器
+         *
+         * 使用DEFINE_HANDLER和DEFINE_SERVER_OPCODE_HANDLER宏
+         * 注册所有操作码及其对应的处理函数。
+         *
+         * @note 调用时机：服务器启动时调用一次
+         */
         void Initialize();
 
+        /**
+         * @brief 下标运算符 - 根据操作码获取处理器
+         * @param index 操作码
+         * @return 对应的客户端操作码处理器指针
+         *
+         * 用于快速查找操作码对应的处理器。
+         *
+         * @note 性能注意事项：O(1)时间复杂度
+         */
         ClientOpcodeHandler const* operator[](Opcodes index) const
         {
             return _internalTableClient[index];
         }
 
     private:
+        /**
+         * @brief 验证并设置客户端操作码处理器
+         * @tparam Handler 处理函数类型
+         * @tparam HandlerFunction 处理函数指针
+         * @param opcode 操作码
+         * @param name 操作码名称
+         * @param status 所需会话状态
+         * @param processing 处理方式
+         *
+         * 验证操作码的有效性，并注册对应的处理器。
+         * 如果操作码无效或已被注册，会记录错误日志。
+         */
         template<typename Handler, Handler HandlerFunction>
         void ValidateAndSetClientOpcode(OpcodeClient opcode, char const* name, SessionStatus status, PacketProcessing processing);
 
+        /**
+         * @brief 验证并设置服务器操作码处理器
+         * @param opcode 操作码
+         * @param name 操作码名称
+         * @param status 操作码状态
+         *
+         * 验证服务器操作码的有效性并注册。
+         */
         void ValidateAndSetServerOpcode(OpcodeServer opcode, char const* name, SessionStatus status);
 
-        ClientOpcodeHandler* _internalTableClient[NUM_OPCODE_HANDLERS];
+        ClientOpcodeHandler* _internalTableClient[NUM_OPCODE_HANDLERS];  // 客户端操作码处理器数组 - 存储所有操作码处理器的指针
 };
 
-extern OpcodeTable opcodeTable;
+extern OpcodeTable opcodeTable;  // 全局操作码表对象 - 单例模式
 
-/// Lookup opcode name for human understandable logging
+/**
+ * @brief 获取操作码名称用于日志记录
+ * @param opcode 操作码
+ * @return 操作码名称字符串
+ *
+ * 将操作码转换为人可读的名称，用于日志输出和调试。
+ * 如果操作码未知，返回十六进制格式的操作码值。
+ *
+ * @note 调用时机：记录日志或调试输出时
+ */
 std::string GetOpcodeNameForLogging(Opcodes opcode);
 
 #endif

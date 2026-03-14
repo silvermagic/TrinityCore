@@ -15,6 +15,24 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @file enuminfo_Channel.cpp
+ * @brief ChatNotify 枚举工具实现文件
+ *
+ * 本文件为 ChatNotify 枚举类型提供枚举工具函数的实现，包括：
+ * - 枚举值到字符串的转换
+ * - 枚举值计数
+ * - 索引到枚举值的转换
+ * - 枚举值到索引的转换
+ *
+ * 这些工具函数用于：
+ * - 调试和日志输出
+ * - 控制台命令参数解析
+ * - 枚举值的序列化和反序列化
+ *
+ * 注意：此文件由代码生成工具自动生成，不应手动修改。
+ */
+
 #include "Channel.h"
 #include "Define.h"
 #include "SmartEnum.h"
@@ -26,6 +44,18 @@ namespace Trinity::Impl::EnumUtilsImpl
 /************************************************************\
 |* data for enum 'ChatNotify' in 'Channel.h' auto-generated *|
 \************************************************************/
+
+/**
+ * @brief 将 ChatNotify 枚举值转换为可读文本
+ *
+ * @param value 枚举值
+ * @return EnumText 结构，包含：
+ *         - 枚举常量名称（如 "CHAT_JOINED_NOTICE"）
+ *         - 显示标题（与常量名称相同）
+ *         - 描述文本（消息模板）
+ *
+ * @throws std::out_of_range 如果枚举值无效
+ */
 template <>
 TC_API_EXPORT EnumText EnumUtils<ChatNotify>::ToString(ChatNotify value)
 {
@@ -71,9 +101,24 @@ TC_API_EXPORT EnumText EnumUtils<ChatNotify>::ToString(ChatNotify value)
     }
 }
 
+/**
+ * @brief 获取 ChatNotify 枚举值的数量
+ *
+ * @return 枚举值的总数量（36）
+ */
 template <>
 TC_API_EXPORT size_t EnumUtils<ChatNotify>::Count() { return 36; }
 
+/**
+ * @brief 根据索引获取枚举值
+ *
+ * 索引从 0 开始，按枚举定义顺序排列。
+ *
+ * @param index 索引值（0-35）
+ * @return 对应的枚举值
+ *
+ * @throws std::out_of_range 如果索引超出范围
+ */
 template <>
 TC_API_EXPORT ChatNotify EnumUtils<ChatNotify>::FromIndex(size_t index)
 {
@@ -119,6 +164,16 @@ TC_API_EXPORT ChatNotify EnumUtils<ChatNotify>::FromIndex(size_t index)
     }
 }
 
+/**
+ * @brief 将枚举值转换为索引
+ *
+ * 索引从 0 开始，按枚举定义顺序排列。
+ *
+ * @param value 枚举值
+ * @return 对应的索引值（0-35）
+ *
+ * @throws std::out_of_range 如果枚举值无效
+ */
 template <>
 TC_API_EXPORT size_t EnumUtils<ChatNotify>::ToIndex(ChatNotify value)
 {

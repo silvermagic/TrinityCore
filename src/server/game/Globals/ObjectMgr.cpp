@@ -1,4 +1,20 @@
-/*
+/**
+ * @file ObjectMgr.cpp
+ * @brief 游戏对象管理器实现文件
+ *
+ * 本文件实现了 ObjectMgr 类，负责管理游戏世界中所有静态数据的加载、存储和查询。
+ * 核心职责包括：
+ * - 生物模板和生物数据的加载与管理
+ * - 游戏对象模板和数据的加载与管理
+ * - 物品模板的加载与管理
+ * - 任务系统的数据加载与关系管理
+ * - 玩家初始信息的管理
+ * - 法术脚本、事件脚本的加载
+ * - 区域触发器、传送点、墓地等世界配置
+ * - 本地化字符串的管理
+ *
+ * 该管理器采用单例模式，是服务器启动时最核心的数据加载模块之一。
+ *
  * This file is part of the TrinityCore Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -57,10 +73,18 @@
 #include "Vehicle.h"
 #include "World.h"
 
+/// 法术脚本映射表，存储法术ID到脚本数据的映射
 ScriptMapMap sSpellScripts;
+/// 事件脚本映射表，存储事件ID到脚本数据的映射
 ScriptMapMap sEventScripts;
+/// 路径点脚本映射表，存储路径点ID到脚本数据的映射
 ScriptMapMap sWaypointScripts;
 
+/**
+ * @brief 根据脚本类型获取对应的数据库表名
+ * @param type 脚本类型枚举值
+ * @return 对应的数据库表名字符串
+ */
 std::string GetScriptsTableNameByType(ScriptsType type)
 {
     std::string res = "";
@@ -74,6 +98,11 @@ std::string GetScriptsTableNameByType(ScriptsType type)
     return res;
 }
 
+/**
+ * @brief 根据脚本类型获取对应的脚本映射表指针
+ * @param type 脚本类型枚举值
+ * @return 指向对应脚本映射表的指针，无效类型返回 nullptr
+ */
 ScriptMapMap* GetScriptsMapByType(ScriptsType type)
 {
     ScriptMapMap* res = nullptr;
@@ -87,6 +116,11 @@ ScriptMapMap* GetScriptsMapByType(ScriptsType type)
     return res;
 }
 
+/**
+ * @brief 根据脚本命令枚举值获取命令名称字符串
+ * @param command 脚本命令枚举值
+ * @return 命令名称字符串，用于日志输出和调试
+ */
 std::string GetScriptCommandName(ScriptCommands command)
 {
     std::string res = "";
@@ -132,6 +166,10 @@ std::string GetScriptCommandName(ScriptCommands command)
     return res;
 }
 
+/**
+ * @brief 获取脚本信息的调试字符串
+ * @return 格式化的调试信息字符串，包含命令名称、表名和脚本ID
+ */
 std::string ScriptInfo::GetDebugInfo() const
 {
     char sz[256];
@@ -139,6 +177,16 @@ std::string ScriptInfo::GetDebugInfo() const
     return std::string(sz);
 }
 
+/**
+ * @brief 规范化玩家名称格式
+ * @param name 输入/输出的玩家名称引用
+ * @return 如果名称有效且成功规范化返回 true，否则返回 false
+ *
+ * 规范化规则：
+ * - 转换为 UTF-8 宽字符
+ * - 除首字母外全部转为小写
+ * - 首字母转为大写
+ */
 bool normalizePlayerName(std::string& name)
 {
     if (name.empty())
@@ -158,6 +206,8 @@ bool normalizePlayerName(std::string& name)
     return true;
 }
 
+/// 语言描述数组，存储所有游戏语言的相关信息
+/// 数组索引对应语言ID，包含语言枚举值、对应技能ID和技能编号
 LanguageDesc lang_description[LANGUAGES_COUNT] =
 {
     { LANG_ADDON,           0, 0                       },
@@ -181,6 +231,11 @@ LanguageDesc lang_description[LANGUAGES_COUNT] =
     { LANG_GOBLIN_BINARY,   0, 0                       }
 };
 
+/**
+ * @brief 根据语言ID获取语言描述信息
+ * @param lang 语言ID
+ * @return 语言描述结构体指针，未找到则返回 nullptr
+ */
 LanguageDesc const* GetLanguageDescByID(uint32 lang)
 {
     for (uint8 i = 0; i < LANGUAGES_COUNT; ++i)
@@ -192,6 +247,17 @@ LanguageDesc const* GetLanguageDescByID(uint32 lang)
     return nullptr;
 }
 
+/**
+ * @brief 检查法术点击信息是否满足使用要求
+ * @param clicker 点击者单位（通常是玩家）
+ * @param clickee 被点击的单位（通常是生物或载具）
+ * @return 如果满足要求返回 true，否则返回 false
+ *
+ * 检查规则：
+ * - SPELL_CLICK_USER_FRIEND: 点击者必须与召唤者友好
+ * - SPELL_CLICK_USER_RAID: 点击者必须与召唤者在同一团队
+ * - SPELL_CLICK_USER_PARTY: 点击者必须与召唤者在同一小队
+ */
 bool SpellClickInfo::IsFitToRequirements(Unit const* clicker, Unit const* clickee) const
 {
     Player const* playerClicker = clicker->ToPlayer();
@@ -227,6 +293,12 @@ bool SpellClickInfo::IsFitToRequirements(Unit const* clicker, Unit const* clicke
     return true;
 }
 
+/**
+ * @brief ObjectMgr 构造函数
+ *
+ * 初始化所有 GUID 生成器的起始值和 DBC 区域设置索引。
+ * 各 GUID 生成器用于为拍卖、邮件、宠物、生物刷新、游戏对象刷新等生成唯一标识符。
+ */
 ObjectMgr::ObjectMgr():
     _auctionId(1),
     _equipmentSetGuid(1),
@@ -238,16 +310,34 @@ ObjectMgr::ObjectMgr():
 {
 }
 
+/**
+ * @brief 获取 ObjectMgr 单例实例
+ * @return ObjectMgr 单例指针
+ *
+ * 使用静态局部变量实现线程安全的单例模式（C++11 Magic Statics）。
+ */
 ObjectMgr* ObjectMgr::instance()
 {
     static ObjectMgr instance;
     return &instance;
 }
 
+/**
+ * @brief ObjectMgr 析构函数
+ */
 ObjectMgr::~ObjectMgr()
 {
 }
 
+/**
+ * @brief 添加本地化字符串到数据容器
+ * @param value 要添加的字符串（右值引用）
+ * @param localeConstant 目标语言区域常量
+ * @param data 存储本地化字符串的容器引用
+ *
+ * 如果字符串非空，则根据语言索引扩展容器大小并存储字符串。
+ * 用于处理多语言文本数据。
+ */
 void ObjectMgr::AddLocaleString(std::string&& value, LocaleConstant localeConstant, std::vector<std::string>& data)
 {
     if (!value.empty())
@@ -259,6 +349,13 @@ void ObjectMgr::AddLocaleString(std::string&& value, LocaleConstant localeConsta
     }
 }
 
+/**
+ * @brief 加载生物本地化名称和标题
+ *
+ * 从 creature_template_locale 表加载各语言的生物名称和标题本地化数据。
+ * 跳过 enUS 本地化（默认语言已存储在主表中）。
+ * 调用时机：World::SetInitialWorldSettings() 服务器启动时。
+ */
 void ObjectMgr::LoadCreatureLocales()
 {
     uint32 oldMSTime = getMSTime();
@@ -289,6 +386,12 @@ void ObjectMgr::LoadCreatureLocales()
     TC_LOG_INFO("server.loading", ">> Loaded {} creature locale strings in {} ms", uint32(_creatureLocaleStore.size()), GetMSTimeDiffToNow(oldMSTime));
 }
 
+/**
+ * @brief 加载闲聊菜单选项本地化文本
+ *
+ * 从 gossip_menu_option_locale 表加载各语言的闲聊菜单选项文本和确认框文本。
+ * 调用时机：World::SetInitialWorldSettings() 服务器启动时。
+ */
 void ObjectMgr::LoadGossipMenuItemsLocales()
 {
     uint32 oldMSTime = getMSTime();
@@ -321,6 +424,12 @@ void ObjectMgr::LoadGossipMenuItemsLocales()
     TC_LOG_INFO("server.loading", ">> Loaded {} gossip_menu_option locale strings in {} ms", _gossipMenuItemsLocaleStore.size(), GetMSTimeDiffToNow(oldMSTime));
 }
 
+/**
+ * @brief 加载兴趣点本地化名称
+ *
+ * 从 points_of_interest_locale 表加载各语言的兴趣点名称本地化数据。
+ * 调用时机：World::SetInitialWorldSettings() 服务器启动时。
+ */
 void ObjectMgr::LoadPointOfInterestLocales()
 {
     uint32 oldMSTime = getMSTime();
@@ -351,6 +460,16 @@ void ObjectMgr::LoadPointOfInterestLocales()
     TC_LOG_INFO("server.loading", ">> Loaded {} points_of_interest locale strings in {} ms", uint32(_pointOfInterestLocaleStore.size()), GetMSTimeDiffToNow(oldMSTime));
 }
 
+// ============================================================================
+// 加载生物模板
+// ============================================================================
+// 职责：从数据库加载所有生物模板数据，存储到内存供快速查询
+// 参数：无
+// 返回值：无
+// 调用时机：World::SetInitialWorldSettings() 中调用
+// 性能注意：加载大量数据，可能需要数秒时间
+// 数据来源：creature_template 数据库表
+// ============================================================================
 void ObjectMgr::LoadCreatureTemplates()
 {
     uint32 oldMSTime = getMSTime();
@@ -2922,6 +3041,15 @@ void ObjectMgr::LoadItemLocales()
     TC_LOG_INFO("server.loading", ">> Loaded {} Item locale strings in {} ms", uint32(_itemLocaleStore.size()), GetMSTimeDiffToNow(oldMSTime));
 }
 
+// ============================================================================
+// 加载物品模板
+// ============================================================================
+// 职责：从数据库加载所有物品模板数据（装备、消耗品、材料等）
+// 参数：无
+// 返回值：无
+// 调用时机：World::SetInitialWorldSettings() 中调用
+// 数据来源：item_template 数据库表
+// ============================================================================
 void ObjectMgr::LoadItemTemplates()
 {
     uint32 oldMSTime = getMSTime();
@@ -3964,6 +4092,15 @@ void ObjectMgr::PlayerCreateInfoAddItemHelper(uint32 race_, uint32 class_, uint3
     }
 }
 
+// ============================================================================
+// 加载玩家创建数据
+// ============================================================================
+// 职责：加载新角色创建时的初始装备、技能、法术等数据
+// 参数：无
+// 返回值：无
+// 调用时机：World::SetInitialWorldSettings() 中调用
+// 数据来源：playercreateinfo 相关表
+// ============================================================================
 void ObjectMgr::LoadPlayerInfo()
 {
     // Load playercreate
@@ -4707,6 +4844,16 @@ void ObjectMgr::BuildPlayerLevelInfo(uint8 race, uint8 _class, uint8 level, Play
     }
 }
 
+// ============================================================================
+// 加载任务数据
+// ============================================================================
+// 职责：从数据库加载所有任务模板、目标、奖励等数据
+// 参数：无
+// 返回值：无
+// 调用时机：World::SetInitialWorldSettings() 中调用
+// 注意：必须在加载 DBC、creature_template、item_template 之后
+// 数据来源：quest_template 等任务相关表
+// ============================================================================
 void ObjectMgr::LoadQuests()
 {
     uint32 oldMSTime = getMSTime();
@@ -7653,6 +7800,15 @@ inline void CheckGOConsumable(GameObjectTemplate const* goInfo, uint32 dataN, ui
         goInfo->entry, goInfo->type, N, dataN);
 }
 
+// ============================================================================
+// 加载游戏对象模板
+// ============================================================================
+// 职责：从数据库加载所有游戏对象模板（箱子、门、矿点等）
+// 参数：无
+// 返回值：无
+// 调用时机：World::SetInitialWorldSettings() 中调用
+// 数据来源：gameobject_template 数据库表
+// ============================================================================
 void ObjectMgr::LoadGameObjectTemplate()
 {
     uint32 oldMSTime = getMSTime();
